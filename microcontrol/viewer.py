@@ -115,7 +115,7 @@ class _Scene:
 HELP_V2 = "Drag: move  Wheel: zoom  0: whole  R: straight  , / .: sample  H: all keys  Shift+Esc: exit"
 HELP_MODE = {
     'look': "G: mark crosses  F: fit grid  S: select  B: brush (rectangles)  N: number squares  Y: hints  E: export",
-    'cross': "Click: cross (2 in a row = tilt)  Right click: remove  Backspace: undo  C: start again  F: fit grid  Esc: done",
+    'cross': "Click: cross exactly there (2 in a row = tilt)  Shift+click: snap to centre  Drag a mark: move  Right click: remove  C: again  F: fit grid  Esc: done",
     'select': "Click: square  Drag: box  Shift: unselect  Right click: remove green area  A: all  X: none  Esc: done",
     'paint': "Drag a rectangle: select all squares in it  Shift+drag: unselect  Click: one square  A: all  X: none  Esc: done",
     'label': "Click a square, type its number X Y  Enter: set  Esc: done",
@@ -129,6 +129,7 @@ HELP_ALL = [
     ("", "R: straight / as shot   , / .: previous / next sample   H: this help   Esc: leave the mode"),
     ("Exit", "Shift+Esc (or Ctrl+Esc), or close the window"),
     ("Grid", "G: mark crosses: click two neighbouring crosses in one row = tilt; more crosses far apart = more exact"),
+    ("", "The mark goes exactly where you click   Shift+click: snap to the cross centre   Drag a mark: move it"),
     ("", "Right click: remove a cross   Backspace: undo   C: start again   F: fit the grid to all crosses"),
     ("Numbers", "N: click a square, type the number written next to it (X Y), Enter. Two squares fix all numbers"),
     ("Select", "S: click / drag a box (Shift: unselect)   B: brush (drag rectangles)   A / X: all / none"),
@@ -287,16 +288,21 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
         else:
             st['rot'] = 0.0
 
-    def add_cross(v):
-        Mc = from_view(v)
-        r = int(min(150, max(8, 15.0 / px_um)))
-        reg = sc.render(Mc[0], Mc[1], 1.0, 4 * r + 1, 4 * r + 1)
-        d, resp = snap_cross(cv2.cvtColor(reg, cv2.COLOR_BGR2GRAY), r, arm=g.arm)
+    def add_cross(v, snap=False):
+        """Крест — ровно там, где щёлкнули (середина пикселя экрана); snap (Shift+щелчок) — к центру креста
+        на снимке (поиск по шаблону «+»)."""
+        Mc = from_view((v[0] + 0.5, v[1] + 0.5))
+        d = np.zeros(2)
+        if snap:
+            r = int(min(150, max(8, 15.0 / px_um)))
+            reg = sc.render(Mc[0], Mc[1], 1.0, 4 * r + 1, 4 * r + 1)
+            d, resp = snap_cross(cv2.cvtColor(reg, cv2.COLOR_BGR2GRAY), r, arm=g.arm)
         try:
             ij = g.cr.add(Mc + d)
             g.refined = None                                # решётка — по отметкам (квадратная)
             if len(g.cr.marks) == 1:
-                st['msg'] = "Cross 1 marked. Now click its neighbour in the same row"
+                st['msg'] = ("Cross 1 marked. Now click its neighbour in the same row. Drag a mark to move it, "
+                             "Shift+click: snap to the cross centre")
             else:
                 v1, _ = g.cr.vectors()
                 st['msg'] = (f"{len(g.cr.marks)} crosses: tilt {g.cr.angle():+.3f} deg, pitch "
@@ -354,9 +360,21 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
         if ev in (cv2.EVENT_LBUTTONDOWN, cv2.EVENT_RBUTTONDOWN, cv2.EVENT_MBUTTONDOWN):
             st['down'] = (x, y, st['cx'], st['cy'], ev, shift, False)
             st['ctrl'] = bool(flags & cv2.EVENT_FLAG_CTRLKEY)
+            st['mdrag'] = None                                 # левой по отметке креста — тащить её
+            if ev == cv2.EVENT_LBUTTONDOWN and st['mode'] == 'cross' and g.cr.marks:
+                dists = [np.hypot(*(to_view(q) - (x + 0.5, y + 0.5))) for q in g.cr.marks]
+                k = int(np.argmin(dists))
+                if dists[k] <= 10:
+                    st['mdrag'] = k
         elif ev == cv2.EVENT_MOUSEMOVE and st['down']:
             x0, y0, cx, cy, ev0, sh0, moved = st['down']
-            if abs(x - x0) + abs(y - y0) > 4:
+            if st.get('mdrag') is not None:                    # отметка едет за мышью точно
+                if abs(x - x0) + abs(y - y0) > 2 or moved:
+                    st['down'] = (x0, y0, cx, cy, ev0, sh0, True)
+                    g.cr.marks[st['mdrag']] = from_view((x + 0.5, y + 0.5))
+                    g.cr._fit()
+                    st['dirty'] = True
+            elif abs(x - x0) + abs(y - y0) > 4:
                 st['down'] = (x0, y0, cx, cy, ev0, sh0, True)
                 # сдвиг: правой / средней кнопкой — в любом режиме; левой — везде, кроме рамки (S) и кисти (B),
                 # а там — с Ctrl
@@ -370,7 +388,16 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
         elif ev in (cv2.EVENT_LBUTTONUP, cv2.EVENT_RBUTTONUP, cv2.EVENT_MBUTTONUP) and st['down']:
             x0, y0, cx, cy, ev0, sh0, moved = st['down']
             st['down'] = None
-            if st['box'] is not None:
+            mk, st['mdrag'] = st.get('mdrag'), None
+            if mk is not None:
+                if moved:
+                    g.refined = None
+                    g.save(px_um)
+                    st['msg'] = f"Cross mark moved; tilt {g.cr.angle():+.3f} deg" if len(g.cr.marks) > 1 else "Cross mark moved"
+                else:
+                    st['msg'] = "Drag the mark to move it; right click removes it"
+                st['dirty'] = True
+            elif st['box'] is not None:
                 bx0, by0, bx1, by1, shb = st['box']
                 st['box'] = None
                 if g.ready():                               # рамка берёт всё, чего касается
@@ -383,7 +410,7 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
                 st['msg'] = f"Selected {len(g.selected)} squares"
             elif not moved and ev0 == cv2.EVENT_LBUTTONDOWN:
                 if st['mode'] == 'cross':
-                    add_cross((x, y))
+                    add_cross((x, y), snap=sh0)
                 elif st['mode'] == 'select' and g.ready():
                     c = g.cell_at(from_view((x, y)))
                     g.selected.symmetric_difference_update({c})
@@ -491,8 +518,9 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
             elif g.selected:
                 st['msg'] = st['msg'] if 'zoom in' in st['msg'] else st['msg']
         img[void_] = base_[void_]
-        for q in g.cr.marks:
-            cv2.circle(img, tuple(np.int32(to_view(q))), 6, red, 1, cv2.LINE_AA)
+        for k_, q in enumerate(g.cr.marks):
+            u_, v_ = to_view(q)
+            UI.plus(img, u_, v_, yellow if k_ == st.get("mdrag") else red)
         if st['box']:
             bx0, by0, bx1, by1, shb = st['box']
             cv2.rectangle(img, (bx0, by0), (bx1, by1), (0, 140, 255) if shb else yellow, 1)

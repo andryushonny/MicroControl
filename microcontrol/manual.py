@@ -126,7 +126,7 @@ def draw_lattice(img, cr, to, rect=None, solid=False):
     for q in cr.marks:
         u, v = to(q + cr.drift)
         if rect is None or (rect[0] <= u <= rect[0] + rect[2] and rect[1] <= v <= rect[1] + rect[3]):
-            cv2.circle(img, (int(u), int(v)), 4, RED, 1, cv2.LINE_AA)
+            UI.plus(img, u + 0.5, v + 0.5, RED, r=8, gap=3)
 
 
 def zoom_view(shape, W, H, zoom=1.0, zc=None, rot=0.0):

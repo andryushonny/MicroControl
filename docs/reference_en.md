@@ -550,7 +550,7 @@ Result: `join/positions_all.csv`, `join/stitch.json`, `join/preview_all.jpg` (re
 |---|---|
 | drag with the right or middle button — in any mode; with the left one — in the look mode, `G`, `P`; `Ctrl`+left — in `S` and `B` | move |
 | wheel, `+` / `-`, `0` — whole scan | zoom |
-| `G` | crosses: click a cross, then its neighbour in the same row — the line through them gives the tilt, and the whole picture turns at once so that the rows are level; far crosses (anywhere) refine the tilt and the pitch; the cross centre is found by itself; right button — remove a mark, `C` — start again |
+| `G` | crosses: click a cross, then its neighbour in the same row — the line through them gives the tilt, and the whole picture turns at once so that the rows are level; far crosses (anywhere) refine the tilt and the pitch; the mark is placed exactly where you click (shown as a «+» with an open centre), `Shift`+click — snapped to the cross centre found on the picture; drag a mark to move it; right button — remove a mark, `C` — start again |
 | `R` | level view on / off: the picture is turned by $-\theta$, the squares stand level |
 | `S` | select squares: click — a square; box (drag) — all squares it **touches** (no need to reach the centres); with `Shift` — unselect |
 | right click on green | remove this whole green area (connected squares); in the look mode, `S`, `B`, `P` |

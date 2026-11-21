@@ -113,3 +113,16 @@ def round_rect(img, x0, y0, x1, y1, r, color, th=-1):
             cv2.line(img, a, b, color, th, cv2.LINE_AA)
         for (cx, cy), a0 in (((x0 + r, y0 + r), 180), ((x1 - r, y0 + r), 270), ((x0 + r, y1 - r), 90), ((x1 - r, y1 - r), 0)):
             cv2.ellipse(img, (cx, cy), (r, r), 0, a0, a0 + 90, color, th, cv2.LINE_AA)
+
+
+def plus(img, x, y, color, r=10, gap=4, th=1, halo=True):
+    """Отметка креста «+» с точностью до доли пикселя: (x, y) — точка в координатах окна, где пиксель u
+    занимает [u, u + 1). В центре — просвет gap, чтобы было видно, что лежит ровно под отметкой."""
+    sh = 4                                                   # 1/16 пикселя
+    cx, cy = (x - 0.5) * 16, (y - 0.5) * 16
+    segs = [((cx - r * 16, cy), (cx - gap * 16, cy)), ((cx + gap * 16, cy), (cx + r * 16, cy)),
+            ((cx, cy - r * 16), (cx, cy - gap * 16)), ((cx, cy + gap * 16), (cx, cy + r * 16))]
+    for col, t in (((0, 0, 0), th + 1), (color, th)) if halo else ((color, th),):
+        for a, b in segs:
+            cv2.line(img, (int(round(a[0])), int(round(a[1]))), (int(round(b[0])), int(round(b[1]))), col, t,
+                     cv2.LINE_AA, sh)

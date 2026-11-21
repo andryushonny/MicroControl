@@ -59,7 +59,7 @@ Both windows close with **Shift+Esc** or the window's ×. A single `Esc` only ca
 
 `mc.view(folder)` opens the stitched picture (drag — move, wheel — zoom).
 
-- Press `G` and click **two neighbouring crosses in one row**. From them the program knows the tilt and the size of the squares, turns the picture level and draws the red grid over everything. `F` refines the grid using all crosses.
+- Press `G` and click **two neighbouring crosses in one row**. From them the program knows the tilt and the size of the squares, turns the picture level and draws the red grid over everything. The mark lands exactly where you click; `Shift`+click snaps it to the cross centre, a mark can be dragged. `F` refines the grid using all crosses.
 - **Numbers:** press `N`, click a square and type the number written next to it (`12 7`). Do this for two squares in different rows and columns — then every square has its real number.
 
 ### 4. Choose squares — the mask

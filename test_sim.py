@@ -222,7 +222,7 @@ def view_xy(S):
 sq = {n: mos_xy(world(*ij)) for n, ij in (('a', (2.5, 2.5)), ('b', (4.5, 3.5)), ('c', (3.5, 2.5)), ('e', (2.5, 4.5)))}
 fr.close()
 typed = lambda t: [ord(ch) for ch in t] + [13, -1]
-clk = lambda ij: [('click', *view_xy(world(*ij))), -1]
+clk = lambda ij: [('click', *view_xy(world(*ij)), 'shift'), -1]     # Shift+щелчок рядом — к центру креста
 # два креста в ряду -> наклон, полотно само докручивается (R — вернуть как снято, чтобы щёлкать по расчёту)
 keys = [ord('g')] + clk((2, 2)) + clk((3, 2)) + [ord('r'), -1] + clk((9, 2)) + clk((8, 6))   # дальние уточняют
 keys += [ord('r'), -1, ord('r'), -1, ord('s'), -1, ('drag', 560, 380, 720, 520), -1]
@@ -248,6 +248,18 @@ hint_ok = {gg.cell_at(mos_xy(world(3.5, 2.5))), gg.cell_at(mos_xy(world(5.5, 3.5
 assert hint_ok <= set(gg.useful), (hint_ok, gg.useful)
 med = sorted(gg.useful.values())[len(gg.useful) // 2]
 assert len(gg.useful) <= 0.6 * gg.hint_squares and all(gg.useful[c] >= med for c in hint_ok), (hint_ok, gg.useful)
+# простой щелчок ставит крест ровно в точку щелчка (без притяжения), отметку можно перетащить мышью
+Wsc_ = 1280 - mc.samples.CAR_W
+n0 = len(gg.cr.marks)
+u0, v0 = view_xy(world(5, 5)); u0, v0 = u0 - 3, v0 + 2
+mc.view(f, _keys=[ord('g'), -1, ('click', u0, v0), -1, ('drag', u0, v0, u0 + 10, v0 + 4), -1, 27, 27])
+g2 = Grid(f)
+assert len(g2.cr.marks) == n0 + 1, (n0, len(g2.cr.marks))
+fr = Frames(f); size_ = np.array(fr.size, float); fr.close()
+sv = min(Wsc_ / size_[0], 900 / size_[1]) * 0.95
+exp_ = size_ / 2 + (np.array([u0 + 10.5, v0 + 4.5]) - (Wsc_ / 2, 450)) / sv
+assert np.hypot(*(g2.cr.marks[-1] - exp_)) < 0.6 / sv + 0.5, (g2.cr.marks[-1], exp_)
+print("Cross marks: exactly at the click, draggable: OK")
 n0 = len(json.load(open(os.path.join(f, 'grid.json')))['selected'])
 mc.view(f, _keys=[ord('s'), -1, ('rclick', 640, 450), -1, 27, 27])      # правый щелчок по зелёному — убрать область
 n1 = len(json.load(open(os.path.join(f, 'grid.json')))['selected'])

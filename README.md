@@ -41,7 +41,7 @@
 
 ## 1. Purpose and components
 
-MicroControl is a Python library for controlling the microscope from a Jupyter notebook on the computer attached to the instrument (Windows 10). It replaces the stock Optosky program for optical microscopy: moving the stage in three axes, illumination, laser, imaging, autofocus and automatic scanning of a sample area followed by stitching of the frames.
+MicroControl is a Python library for controlling the microscope from a Jupyter notebook on the computer attached to the instrument. It replaces the stock Optosky program for optical microscopy: moving the stage in three axes, illumination, laser, imaging, autofocus and automatic scanning of a sample area followed by stitching of the frames.
 
 The library reproduces the exchange of the stock program with the controller: the same commands, the same order, the same port settings (section 5). The protocol was recovered from the executable code of the stock program and from recordings of the exchange with the instrument.
 
@@ -148,6 +148,8 @@ If $|N\delta - \Delta| > 0.05$ µm, the reply reports the actual move. A move $|
 ---
 
 ## 5. Controller protocol
+
+> The protocol below was obtained by reverse engineering only (see the [Disclaimer](#disclaimer)).
 
 ### 5.1. Physical layer
 
@@ -1084,7 +1086,7 @@ On the instrument, do not raise the stage "blindly" with commands like `m.move(d
 
 ## Disclaimer
 
-**No affiliation.** MicroControl is an independent project. It is not made, endorsed, supported or certified by Optosky Photonics or by MindVision. Optosky, ATR8300, MindVision and other names are trademarks of their owners and are used here only to say which equipment the software works with. The controller protocol was determined independently, by observing the exchange between the stock software and the instrument, solely to make this program work with the instrument; no Optosky source code is included.
+**No affiliation.** MicroControl is an independent project. It is not made, endorsed, supported or certified by Optosky Photonics or by MindVision. Optosky, ATR8300, MindVision and other names are trademarks of their owners and are used here only to say which equipment the software works with. The controller protocol was obtained by reverse engineering and only by reverse engineering: by observing the exchange between the stock software and the instrument over the serial port and the names exported by the stock library (OptoSky.dll), solely to make this program work with the instrument. No documentation, source code or other materials of Optosky were used; no Optosky source code is included.
 
 **No warranty.** The software is provided "as is", without any warranty, express or implied, including warranties of merchantability, fitness for a particular purpose, accuracy of results and non-infringement (see [LICENSE](LICENSE)).
 

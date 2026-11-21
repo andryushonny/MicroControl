@@ -22,7 +22,7 @@ import cv2
 import numpy as np
 from . import log as L
 from .errors import MicroControlError
-from .util import wheel_delta, open_window, window_size
+from .util import wheel_delta, open_window, window_size, exit_key, EXIT
 from . import focus as F_
 import threading
 from .scan import Area, focus_z
@@ -31,7 +31,7 @@ from . import samples as SM
 from . import ui as UI
 
 WIN = "MicroControl"
-HELP = ["Esc: Exit", "Arrows / WASD: Move by Step X / Step Y", "E / Q: Stage up / down by Step Z (Shift: x5)",
+HELP = ["Shift+Esc: Exit (or close the window)", "P: Hide / show the left panel", "Arrows / WASD: Move by Step X / Step Y", "E / Q: Stage up / down by Step Z (Shift: x5)",
         "Tab or click a field: steps (multiple of 5 um), exposure (ms), objective; Enter",
         "G: Steps X, Y = one frame", "M: Next objective (4x, 10x, 20x, 100x)",
         "1 / 2: Corners of a sample area, one area after another (their Z is kept as focus points)",
@@ -73,7 +73,7 @@ def fit(img, W, H):
     small = cv2.resize(img, (w, h), interpolation=cv2.INTER_AREA)
     if small.ndim == 2:
         small = cv2.cvtColor(small, cv2.COLOR_GRAY2BGR)
-    out = np.zeros((H, W, 3), np.uint8)
+    out = np.full((H, W, 3), 24, np.uint8)                 # поля — тёмно-серые, как фон окна
     out[(H - h) // 2:(H - h) // 2 + h, (W - w) // 2:(W - w) // 2 + w] = small
     return out
 
@@ -191,11 +191,12 @@ def render(img, W, H, k, zc, rot=0.0):
         x0, y0 = c[0] - W / 2 / k, c[1] - H / 2 / k
         a0, b0 = max(0, int(np.floor(x0))), max(0, int(np.floor(y0)))
         a1, b1 = min(iw, int(np.ceil(x0 + W / k)) + 1), min(ih, int(np.ceil(y0 + H / k)) + 1)
-        out = np.zeros((H, W, 3), np.uint8)
+        out = np.full((H, W, 3), 24, np.uint8)
         if a1 <= a0 or b1 <= b0:
             return out
         M = np.float32([[k, 0, (a0 - x0) * k], [0, k, (b0 - y0) * k]])
-        part = cv2.warpAffine(img[b0:b1, a0:a1], M, (W, H), flags=cv2.INTER_AREA if k < 1 else cv2.INTER_LINEAR)
+        part = cv2.warpAffine(img[b0:b1, a0:a1], M, (W, H), flags=cv2.INTER_AREA if k < 1 else cv2.INTER_LINEAR,
+                              borderMode=cv2.BORDER_CONSTANT, borderValue=(24, 24, 24))
         return part if part.ndim == 3 else cv2.cvtColor(part, cv2.COLOR_GRAY2BGR)
     src, kk, c = img, k, np.asarray(zc, float)
     if k < 1:                                           # сначала уменьшить без ряби, потом сдвинуть и повернуть
@@ -204,7 +205,8 @@ def render(img, W, H, k, zc, rot=0.0):
     t = np.radians(rot)
     R = kk * np.array([[np.cos(t), -np.sin(t)], [np.sin(t), np.cos(t)]])
     M = np.float32(np.c_[R, np.array([W / 2, H / 2]) - R @ c])
-    out = cv2.warpAffine(src, M, (W, H), flags=cv2.INTER_LINEAR)
+    out = cv2.warpAffine(src, M, (W, H), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT,
+                         borderValue=(24, 24, 24))
     return out if out.ndim == 3 else cv2.cvtColor(out, cv2.COLOR_GRAY2BGR)
 
 
@@ -293,12 +295,12 @@ def minimap(img, m, A, B, size=MAP_W, zcolor=None, others=(), right=0):
     k = (size - 70) / (MAP_COLS * sx)
     W = size
     H = int(MAP_ROWS * sy * k) + 60
-    X0, Y0 = img.shape[1] - W - 12 - right, 12
+    X0, Y0 = img.shape[1] - W - 8 - right, 8
     if X0 < 0 or Y0 + H > img.shape[0]:                                   # окно слишком мало для карты
         return
     sub = img[Y0:Y0 + H, X0:X0 + W]
     under = sub.copy()                                                   # для полупрозрачности
-    sub[:] = (sub * 0.4).astype(sub.dtype)
+    sub[:] = (sub * 0.25 + np.array((26, 27, 31)) * 0.75).astype(sub.dtype)          # как остальные панели
     gx0, gy0 = 46, 30
     gw, gh = MAP_COLS * sx * k, MAP_ROWS * sy * k
 
@@ -393,6 +395,7 @@ def minimap(img, m, A, B, size=MAP_W, zcolor=None, others=(), right=0):
     cv2.rectangle(sub, to(px - w / 2, py - h / 2), to(px + w / 2, py + h / 2), (255, 255, 255), 2)   # поле зрения
     cv2.rectangle(sub, (gx0, gy0), (gx0 + int(gw), gy0 + int(gh)), (120, 120, 120), 1)
     sub[:] = cv2.addWeighted(sub, 0.85, under, 0.15, 0)                 # карта слегка прозрачная
+    cv2.rectangle(sub, (0, 0), (sub.shape[1] - 1, sub.shape[0] - 1), (78, 80, 88), 1)
     if zone and (c1 - c0 >= MAP_COLS or r1 - r0 >= MAP_ROWS):          # обзор всей зоны
         nx_, ny_ = c1 - c0 + 1, r1 - r0 + 1
         ok = 120 / max(nx_ * sx, ny_ * sy)
@@ -671,10 +674,10 @@ def run(m, fullscreen=True, _keys=None):
             LH = th0 + 16
             rects = {}
             ops = []                                         # (что рисовать) — сначала размеры, потом панель
-            x_l = 18
+            x_l = 22
             lw = max(UI.size(t_, FS)[0] for t_ in ("Step X", "Exposure", "Objective")) + 14
             vw = UI.size("000000", FS)[0] + 16
-            y = 16 + int(th0 * 1.6)
+            y = 22 + int(th0 * 1.6)
             big = 0.8 * sc
             pos = [("X", f"{p.x:.1f}"), ("Y", f"{p.y:.1f}"), ("Z", f"{p.z:.1f}")]
             xx = x_l
@@ -744,7 +747,23 @@ def run(m, fullscreen=True, _keys=None):
             if zm['z'] > 1:
                 ops.append(('t', f"Zoom x{zm['z']:.2f}   Z: whole frame", x_l, y, FS * 0.9, UI.ACCENT, 1))
                 y += LH
-            UI.panel(view, 0, 0, right + 14, y - LH + 16, 0.8)
+            hidden_ = getattr(m, '_panel_hidden', False)
+            if hidden_:                                      # панель спрятана: координаты в строке состояния
+                ops, rects = [], {}
+                bt_ = "Panel (P)"
+                wb_, hb_, _ = UI.size(bt_, FS)
+                rects['panel'] = (8, 8, 8 + wb_ + 34, 8 + hb_ + 16)
+                UI.panel(view, *rects['panel'], 0.85, UI.LINE)
+                UI.put(view, ">", 18, rects['panel'][3] - 8, FS, UI.ACCENT)
+                UI.put(view, bt_, 34, rects['panel'][3] - 8, FS, UI.TEXT)
+                line = f"X {p.x:.1f}  Y {p.y:.1f}  Z {p.z:.1f} um    " + line
+            else:
+                UI.panel(view, 8, 8, right + 44, y - LH + 16, 0.82, UI.LINE)
+                rects['panel'] = (right + 14, 14, right + 38, 38)    # кнопка «спрятать»
+                hp_ = hover[0] is not None and rects['panel'][0] <= hover[0][0] <= rects['panel'][2] and \
+                    rects['panel'][1] <= hover[0][1] <= rects['panel'][3]
+                cv2.rectangle(view, rects['panel'][:2], rects['panel'][2:], (96, 96, 104) if hp_ else (62, 62, 70), -1)
+                UI.put(view, "<", rects['panel'][0] + 7, rects['panel'][3] - 7, FS, UI.TEXT)
             for op in ops:
                 if op[0] == 't':
                     UI.put(view, op[1], op[2], op[3], op[4], op[5], op[6])
@@ -788,11 +807,13 @@ def run(m, fullscreen=True, _keys=None):
             minimap(view, m, A, B, zcolor=SM.color(zk) if zk is not None else None, others=others, right=SM.CAR_W)
             items = car_items()
             sel_ = len(m._regions) if m._pending else m._sel
-            pan_, hits_, cont_ = SM.carousel(H, items, sel_, car['scroll'], title="Samples")
+            hx_ = hover[0]
+            hv_ = (hx_[0] - (W - SM.CAR_W), hx_[1]) if hx_ is not None and hx_[0] >= W - SM.CAR_W else None
+            pan_, hits_, cont_ = SM.carousel(H, items, sel_, car['scroll'], title="Samples", hover=hv_)
             car['hits'], car['content'] = hits_, cont_
             view[:, W - SM.CAR_W:] = pan_
             cv2.imshow(WIN, view)
-        key = next(keys, 27) if keys is not None else cv2.waitKeyEx(8 if live is not None else 30)
+        key = next(keys, EXIT) if keys is not None else cv2.waitKeyEx(8 if live is not None else 30)
         if keys is not None:
             cv2.waitKey(1)
             if isinstance(key, tuple):                    # тест: щелчок мышью (x, y)
@@ -858,6 +879,9 @@ def run(m, fullscreen=True, _keys=None):
             if hit and hit[0] == 'usefp':
                 key, edit = ord('y'), None
                 break
+            if hit and hit[0] == 'panel':                # кнопка «спрятать / показать панель»
+                key, edit = ord('p'), None
+                break
             edit = (hit[0], "") if hit else None
         if key == -1:
             if keys is None and cv2.getWindowProperty(WIN, cv2.WND_PROP_VISIBLE) < 1:
@@ -867,6 +891,8 @@ def run(m, fullscreen=True, _keys=None):
             except MicroControlError as e:
                 msg, msg_t = str(e), time.monotonic()
             continue
+        if exit_key(key):                                 # Shift+Esc / Ctrl+Esc — выйти
+            break
         if key == 9:                                      # Tab: следующее поле (X -> Y -> Z -> выход из ввода)
             if edit:
                 commit(edit)
@@ -898,7 +924,7 @@ def run(m, fullscreen=True, _keys=None):
             hold.__enter__()
         try:
             if key == 27:
-                break
+                msg = "Exit: Shift+Esc or close the window"
             elif key in LEFT or ch == 'a':
                 m.move(**{'d' + ah: -sh * steps[ah]}); msg = ''
             elif key in RIGHT or ch == 'd':
@@ -907,6 +933,9 @@ def run(m, fullscreen=True, _keys=None):
                 m.move(**{'d' + av: -sv * steps[av]}); msg = ''
             elif key in DOWN or ch == 's':
                 m.move(**{'d' + av: sv * steps[av]}); msg = ''
+            elif ch == 'p':                                # левая панель: спрятать / показать
+                m._panel_hidden = not getattr(m, '_panel_hidden', False)
+                msg = "Panel hidden: P or the button shows it" if m._panel_hidden else ""
             elif raw in ('[', ']'):                        # отразить мини-карту по горизонтали / вертикали
                 k_ = 'map_flip_x' if raw == '[' else 'map_flip_y'
                 setattr(m, k_, not getattr(m, k_))

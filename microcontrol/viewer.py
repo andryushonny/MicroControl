@@ -15,7 +15,7 @@ from collections import OrderedDict
 import cv2
 import numpy as np
 from .storage import ScanData, THUMB, meta_A
-from .util import wheel_delta, open_window, window_size
+from .util import wheel_delta, open_window, window_size, exit_key, EXIT
 from . import ui as UI
 from . import anomaly as _AD
 
@@ -111,7 +111,7 @@ class _Scene:
         return out
 
 
-HELP_V2 = "Drag: move  Wheel: zoom  0: whole  R: straight  , / .: sample  H: all keys  Esc: exit"
+HELP_V2 = "Drag: move  Wheel: zoom  0: whole  R: straight  , / .: sample  H: all keys  Shift+Esc: exit"
 HELP_MODE = {
     'look': "G: mark crosses  F: fit grid  S: select  B: brush  P: polygon  N: number squares  Y: hints  E: export",
     'cross': "Click: cross (2 in a row = tilt)  Right click: remove  Backspace: undo  C: start again  F: fit grid  Esc: done",
@@ -126,7 +126,8 @@ HELP_V = ("G: 2 crosses in a row = tilt (right click = remove, C = again)   F: f
           "(yellow), Shift+Y: select them, U, < / >: sensitivity   A / X: all / none   E: export   Esc: exit")
 HELP_ALL = [
     ("Look", "Drag (right / middle in any mode): move   Wheel, + / -: zoom   0: whole   Arrows, W A S D: move"),
-    ("", "R: straight / as shot   , / .: previous / next sample   H: this help   Esc: leave the mode, then exit"),
+    ("", "R: straight / as shot   , / .: previous / next sample   H: this help   Esc: leave the mode"),
+    ("Exit", "Shift+Esc (or Ctrl+Esc), or close the window"),
     ("Grid", "G: mark crosses: click two neighbouring crosses in one row = tilt; more crosses far apart = more exact"),
     ("", "Right click: remove a cross   Backspace: undo   C: start again   F: fit the grid to all crosses"),
     ("Numbers", "N: click a square, type the number written next to it (X Y), Enter. Two squares fix all numbers"),
@@ -224,8 +225,7 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
     Wv, Hv = car['size']
     st = dict(cx=sc.size[0] / 2, cy=sc.size[1] / 2, s=None, rot=0.0, mode='look', down=None, box=None,
               poly=[], dirty=True, Wv=Wv - SM.CAR_W, Hv=Hv, straight=False, switch=None,
-              msg=(f"Sample {SM.sample_index(folder)} ({subs.index(folder) + 1} of {len(subs)})   " if len(subs) > 1 else "") +
-              "G: mark crosses   H: help")
+              msg=(f"Sample {SM.sample_index(folder)} ({subs.index(folder) + 1} of {len(subs)})" if len(subs) > 1 else ""))
 
     def car_click(x, y):
         h_ = SM.hit(car.get('hits', []), x - st['Wv'], y)
@@ -328,6 +328,11 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
     def mouse(ev, x, y, flags, _=None):
         shift = bool(flags & cv2.EVENT_FLAG_SHIFTKEY)
         if x >= st['Wv'] and not st['down']:              # карусель образцов справа
+            if ev == cv2.EVENT_MOUSEMOVE:                   # наведение: подсветка кнопок и карточек
+                h_ = SM.hit(car['hits'], x - st['Wv'], y)
+                if h_ != car.get('hov'):
+                    car['hov'], car['hxy'], st['car_dirty'] = h_, (x - st['Wv'], y), True
+                return
             if ev == cv2.EVENT_LBUTTONUP:
                 car_click(x, y)
             elif ev == cv2.EVENT_MOUSEWHEEL:
@@ -335,6 +340,8 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
                                                car['scroll'] - 60 * np.sign(wheel_delta(flags)))))
                 st['dirty'] = True
             return
+        if car.get('hov') is not None:                      # мышь ушла с карусели
+            car['hov'], car['hxy'], st['car_dirty'] = None, None, True
         if ev in (cv2.EVENT_LBUTTONDOWN, cv2.EVENT_RBUTTONDOWN, cv2.EVENT_MBUTTONDOWN):
             st['down'] = (x, y, st['cx'], st['cy'], ev, shift, False)
             st['ctrl'] = bool(flags & cv2.EVENT_FLAG_CTRLKEY)
@@ -436,6 +443,7 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
             t = mid() - Rm @ np.array([D / 2, D / 2])
             img = cv2.warpAffine(big, np.float32(np.c_[Rm, t]), (Wv, Hv), flags=cv2.INTER_LINEAR)
         red, green, yellow = (40, 40, 255), (60, 200, 60), (0, 220, 255)
+        base_, void_ = img.copy(), (img <= 22).all(2)                # вне мозаики сетку и заливку не рисуем
         if g.ready():
             lo = np.min([from_view(v) for v in ((0, 0), (Wv, 0), (0, Hv), (Wv, Hv))], 0)
             hi = np.max([from_view(v) for v in ((0, 0), (Wv, 0), (0, Hv), (Wv, Hv))], 0)
@@ -486,6 +494,7 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
                         cv2.line(img, tuple(np.int32(np.round(a_))), tuple(np.int32(np.round(b_))), red, 1, cv2.LINE_8)
             elif g.selected:
                 st['msg'] = st['msg'] if 'zoom in' in st['msg'] else st['msg']
+        img[void_] = base_[void_]
         for q in g.cr.marks:
             cv2.circle(img, tuple(np.int32(to_view(q))), 6, red, 1, cv2.LINE_AA)
         if st['poly']:
@@ -494,9 +503,9 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
         if st['box']:
             bx0, by0, bx1, by1, shb = st['box']
             cv2.rectangle(img, (bx0, by0), (bx1, by1), (0, 140, 255) if shb else yellow, 1)
-        mode = {'look': 'LOOK', 'cross': 'MARK CROSSES', 'select': 'SELECT', 'poly': 'POLYGON',
-                'paint': 'BRUSH', 'label': 'NUMBER SQUARES'}[st['mode']]
-        mcol = {'look': (200, 200, 200), 'cross': (90, 90, 255), 'select': (90, 210, 90), 'poly': (90, 210, 90),
+        mode = {'look': 'Look', 'cross': 'Mark crosses', 'select': 'Select', 'poly': 'Polygon',
+                'paint': 'Brush', 'label': 'Number squares'}[st['mode']]
+        mcol = {'look': (170, 170, 178), 'cross': (90, 90, 255), 'select': (90, 210, 90), 'poly': (90, 210, 90),
                 'paint': (90, 210, 90), 'label': UI.ACCENT}[st['mode']]
         if st.get('lab'):
             st['msg'] = f"Square number X Y: {st['lab'][1]}_   (Enter = set, Esc = cancel)"
@@ -518,8 +527,8 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
             it += [f"hints {len(g.useful)} (sensitivity {g.sensitivity:g})"]
         UI.facts(img, it, x_, bh - 11, fs)
         if st['straight']:
-            w_ = UI.size("STRAIGHT", fs, 2)[0] + 14
-            UI.chip(img, "STRAIGHT", Wv - w_ - 10, bh - 11, fs, (235, 170, 60))
+            w_ = UI.size("Straight", fs)[0] + 18
+            UI.chip(img, "Straight", Wv - w_ - 10, bh - 11, fs, (235, 170, 60))
         hl = [HELP_MODE[st['mode']]] + ([HELP_HINTS] if g.useful and st['mode'] == 'look' else []) + [HELP_V2]
         hb = len(hl) * (th_ + 12) + 12
         UI.panel(img, 0, Hv - hb, Wv, Hv, 0.82)             # низ: клавиши этого режима
@@ -547,9 +556,13 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
                 yy = y0_ + 30 + (k_ + 1) * lh
                 UI.put(img, a_, x0_ + 18, yy, fsh, UI.ACCENT, 1)
                 UI.put(img, b_, x0_ + 18 + wl, yy, fsh, UI.TEXT)
-        pan_, car['hits'], car['content'] = SM.carousel(Hv, _car_items(subs, folder, car), subs.index(folder),
-                                                        car['scroll'], title="Samples", go=False)
-        return np.hstack([img, pan_])
+        st['scene'] = img
+        return np.hstack([img, carousel_img()])
+
+    def carousel_img():
+        pan_, car['hits'], car['content'] = SM.carousel(st['Hv'], _car_items(subs, folder, car), subs.index(folder),
+                                                        car['scroll'], title="Samples", go=False, hover=car.get('hxy'))
+        return pan_
 
     cv2.setMouseCallback(WIN, mouse)
     while True:
@@ -564,8 +577,11 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
             fit()
         if st['dirty']:
             cv2.imshow(WIN, render())
-            st['dirty'] = False
-        key = next(keys, 27) if keys is not None else cv2.waitKeyEx(8 if st['down'] else 20)
+            st['dirty'] = st['car_dirty'] = False
+        elif st.get('car_dirty') and st.get('scene') is not None:   # только карусель (наведение мыши)
+            cv2.imshow(WIN, np.hstack([st['scene'], carousel_img()]))
+            st['car_dirty'] = False
+        key = next(keys, EXIT) if keys is not None else cv2.waitKeyEx(8 if st['down'] else 20)
         if keys is not None:
             cv2.waitKey(1)
             if isinstance(key, tuple):                      # тест: ('click'|'rclick', x, y[, shift]) или ('drag', ...)
@@ -585,6 +601,9 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
                 st['switch'] = False
                 break
             continue
+        if exit_key(key):                                   # Shift+Esc / Ctrl+Esc — выйти из просмотра
+            st['switch'] = False
+            break
         if st.get('sens') is not None:                      # ввод чувствительности 0…100
             if 48 <= key <= 57 and len(st['sens']) < 3:
                 st['sens'] += chr(key)
@@ -633,8 +652,8 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
             elif st['mode'] != 'look':
                 st['mode'] = 'look'
             else:
-                st['switch'] = False
-                break
+                st['msg'] = "Exit: Shift+Esc or close the window"
+            st['dirty'] = True
         elif raw in (',', '.') and len(subs) > 1:           # предыдущий / следующий образец
             st['switch'] = subs[(subs.index(folder) + (1 if raw == '.' else -1)) % len(subs)]
         elif ch == 'c' and st['mode'] == 'cross':           # кресты заново
@@ -658,7 +677,9 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
                 n0 = len(g.selected)
                 g.selected |= set(g.useful)
                 g.save(px_um)
-                st['msg'] = f"Hints selected: +{len(g.selected) - n0} squares, total {len(g.selected)}"
+                st['mode'] = 'paint'                        # сразу кисть: поправить выделение руками
+                st['msg'] = f"Hints selected: +{len(g.selected) - n0} squares, total {len(g.selected)}. " \
+                            "Brush: drag to add, Shift+drag to erase"
         elif ch == 'y' and g.ready():                       # Y: подсказка вкл. / выкл. (первый раз — посчитать)
             if not getattr(g, 'scores', None):
                 st['msg'] = "Looking for squares with something in them..."

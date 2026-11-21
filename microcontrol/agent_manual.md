@@ -61,7 +61,7 @@ grid and squares (`mark_cross`, `undo_cross`, `fit_grid`, `label_square`, `list_
 - The Z of the stage at `area_corner` 1 and 2 and at `add_focus_point` becomes a focus point. So focus first.
 - Focus points are numbered through all areas: area 1 has 1, 2, 3, ...; the next area continues the count.
 - `get_status` → `areas`: sample number, corners (um), size (mm), frames, focus points with numbers.
-- `goto_area` drives to an area centre at its focus height. `delete_area` removes one (approval).
+- `goto_area` drives to the frame of the area nearest to the stage, at its focus height. `delete_area` removes one (approval).
 - Several samples: make areas one after another. A new area is "new" until corner 2 is set.
 
 ## scan

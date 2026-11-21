@@ -256,3 +256,4 @@ Thumbs.db
 .vscode/
 .idea/
 !docs/img/*.jpg
+microcontrol/icon.ico

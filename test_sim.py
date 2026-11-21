@@ -281,7 +281,7 @@ assert all(json.load(open(os.path.join(x, 'meta.json')))['sample_index'] == i + 
 r = mc.stitch(ses, verbose=False)
 assert len(r) == 2, r
 Wsc = 1280 - mc.samples.CAR_W
-mc.view(ses, _keys=[-1, ord('.'), -1, -1, ('click', 1280 - 20, 52), -1, ('click', 1280 - 20, 52), -1, -1, 27])
+mc.view(ses, _keys=[-1, ord('.'), -1, -1, ('click', 1280 - 25, 64), -1, ('click', 1280 - 25, 64), -1, -1, 27])
 left = mc.samples.samples(ses)
 assert [os.path.basename(x) for x in left] == ['sample_02'] and os.path.isdir(os.path.join(ses, '_removed', 'sample_01'))   # x у 1-го
 print("Samples: 2 areas, focus points 1-5, two folders, carousel switch and remove: OK")

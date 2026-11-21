@@ -35,12 +35,17 @@ def panel(img, x0, y0, x1, y1, alpha=0.78, border=None):
         cv2.rectangle(img, (x0, y0), (x1 - 1, y1 - 1), border, 1)
 
 
-def chip(img, s, x, y, scale, bg, fg=(20, 20, 20)):
-    """Плашка с текстом; (x, y) — левый край и базовая линия текста. Возвращает правый край."""
-    w, h, _ = size(s, scale, 2)
-    cv2.rectangle(img, (int(x), int(y - h - 6)), (int(x + w + 14), int(y + 6)), bg, -1)
-    put(img, s, x + 7, y, scale, fg, 2)
-    return x + w + 14
+def chip(img, s, x, y, scale, color, fg=None):
+    """Плашка режима: тонированный фон, рамка и текст цвета color (обычное начертание).
+    (x, y) — левый край и базовая линия текста. Возвращает правый край."""
+    w, h, _ = size(s, scale)
+    x0, y0, x1, y1 = int(x), int(y - h - 7), int(x + w + 18), int(y + 7)
+    tint = tuple(int(0.28 * c + 0.72 * p) for c, p in zip(color, PANEL))
+    cv2.rectangle(img, (x0, y0), (x1, y1), tint, -1)
+    cv2.rectangle(img, (x0, y0), (x1, y1), color, 1)
+    light = tuple(min(255, int(c * 0.55 + 255 * 0.45)) for c in color)
+    put(img, s, x + 9, y, scale, fg or light, 1)
+    return x1
 
 
 def keys_line(img, s, x, y, scale, max_x=None):

@@ -553,14 +553,15 @@ Result: `join/positions_all.csv`, `join/stitch.json`, `join/preview_all.jpg` (re
 | right click on green | remove this whole green area (connected squares); in the look mode, `S`, `B`, `P` |
 | `B` | brush: drag over the squares — all squares under the cursor are selected; with `Shift` — rub out |
 | `N` | square numbers: click a square, type two numbers `X Y`, `Enter` (with no digits — confirm the shown number); right button — remove a label |
-| `Y` | yellow hint on / off; `Shift`+`Y` or `Ctrl`+`Y` — select all yellow squares (make them green) |
+| `Y` | yellow hint on / off; `Shift`+`Y` or `Ctrl`+`Y` — select all yellow squares (make them green) and switch to the brush to correct them |
 | `U`; `<` / `>` | hint sensitivity 0…100: type a number; −5 / +5 |
 | `P` | polygon: clicks — vertices, `Enter` — select inside, `Del` — unselect, right button / `Backspace` — remove a vertex |
 | `A` / `X` | select all / none |
 | `E` | export the selection |
 | `,` / `.`; carousel on the right | previous / next sample; click — open, **x** — remove (to `_removed/`) |
 | `H` | all keys |
-| `Esc` | leave the mode, then the viewer |
+| `Esc` | leave the mode (cancel) |
+| `Shift`+`Esc` (or `Ctrl`+`Esc`), the window's × | exit the viewer |
 
 The lattice is always **square**: $\mathbf{v}_2$ is $\mathbf{v}_1$ turned by 90° (no skew, no "projection"); there are four unknowns — origin $\mathbf{O}$, pitch and tilt — found by least squares from the marks. Two neighbouring crosses are enough; far crosses reduce the tilt error in proportion to the distance. The `F` key optionally fits the same square lattice to all crosses of the mosaic. Simulator check (tilt 3.5°): 2 neighbouring crosses and 2 far ones — pitch 99.998 µm, tilt 3.494°. Marks and selection are stored in `grid.json` (in mosaic pixels; after a new stitch the marks must be made again).
 
@@ -731,7 +732,8 @@ The camera is read in a separate thread: the window is redrawn at once (pan, zoo
 | `L` | light on / off |
 | Space | picture |
 | `H` | help |
-| `Esc` | exit; the areas are kept for `m.scan()` |
+| `Shift`+`Esc` (or `Ctrl`+`Esc`), the window's × | exit; the areas are kept for `m.scan()`. A single `Esc` only cancels — no exit by accident |
+| `P` or the `<` button | hide / show the left panel (the position then moves to the bottom line) |
 
 **Step fields** (top left, under the coordinates): Step X, Step Y, Step Z, µm. Only multiples of 5 µm are allowed; the number is rounded to the nearest multiple of 5 and capped by the per-command limit (`max_move` for X, Y; for Z the smaller of `max_move_z`, `max_move_down`). The steps are kept between entries into manual mode within a session.
 
@@ -755,13 +757,13 @@ The mini map grid is the scan frames with `SCAN_OVERLAP` overlap (20 %; 25 % for
 
 Focus points are numbered through all areas: the first area has 1, 2 (its corners) and the points added with `F` (e.g. 3, 4), the next area continues with 5, 6, 7, 8, and so on. `F` adds the point to the area under the stage (or to the new area). After deleting an area the others are renumbered.
 
-**Carousel** (right, full height): one card per area — colour, number of frames, size in mm, its focus points and two small pictures (the corners). Click — choose the area (the mini map shows it), **Go** (or `Enter`) — drive to its centre: first down if its focus is lower, then X, Y in legs not longer than `max_jump`, then up to its focus in steps not larger than `max_move_z`. **x** — delete the area (click x again to confirm); `C` — cancel the new area or delete the chosen one (press twice). `,` / `.` — previous / next area; the wheel over the carousel scrolls it.
+**Carousel** (right, full height): one card per area — colour, number of frames, size in mm, its focus points and two small pictures (the corners). Click — choose the area (the mini map shows it), **Go** (or `Enter`) — drive to its frame nearest to the stage: first down if its focus is lower, then X, Y in legs not longer than `max_jump`, then up to its focus in steps not larger than `max_move_z`. **x** — delete the area (click x again to confirm); `C` — cancel the new area or delete the chosen one (press twice). `,` / `.` — previous / next area; the wheel over the carousel scrolls it.
 
 `m.scan()` shoots all areas, each with the Z from its own focus points, into one session folder (section 11): `sample_01`, `sample_02`, … `mc.stitch`, `mc.export`, `mc.clean`, `mc.hints` accept the session folder and work on every sample. `mc.view(session)` opens the first sample; the same carousel on the right switches samples (click, `,` / `.`), each sample has its own crosses, red grid, selection and numbers; **x** removes a sample — its folder is moved to `<session>/_removed/` (not deleted).
 
 The stage coordinates are shown large in the top left corner; the status line at the bottom also has the frame number in the area ("Frame: row $r$/$n_y$, column $c$/$n_x$").
 
-**Scan viewer:** `mc.view(folder)` — move: drag with the mouse, arrows or WASD (faster with Shift), double click — put the spot in the centre; zoom — wheel, `+` `-`, PgUp / PgDn; `0` — the whole scan; `Esc` — exit. While the picture is dragged it is drawn from reduced copies (smoothly), afterwards in full quality. Marking keys — section 12.2.
+**Scan viewer:** `mc.view(folder)` — move: drag with the mouse, arrows or WASD (faster with Shift), double click — put the spot in the centre; zoom — wheel, `+` `-`, PgUp / PgDn; `0` — the whole scan; `Shift`+`Esc` or the window's × — exit. While the picture is dragged it is drawn from reduced copies (smoothly), afterwards in full quality. Marking keys — section 12.2.
 
 ---
 
@@ -848,9 +850,9 @@ Dependencies: `pyserial`, `numpy`, `opencv-python`, `h5py`, `psutil`. The MindVi
 1. Close the Optosky program (its process must not remain in the Task Manager).
 2. Check the link: `python -m microcontrol probe`. Replies to all 5 connection requests must come.
 3. Connect without the camera: `m = mc.Microscope(objective=10, camera=False)`; expect the Mapping type and the cooling fan noise. Then `m.move(dx=200)`.
-4. Connect with the camera, `m.manual()`. Key `Q`: the stage must go **down** (the image blurs slightly). If it goes up — `Esc` at once, then `m.reverse_z = True`.
+4. Connect with the camera, `m.manual()`. Key `Q`: the stage must go **down** (the image blurs slightly). If it goes up — `Shift`+`Esc` at once, then `m.reverse_z = True`.
 5. Arrow `→`: the image must shift **left** by a frame width; likewise `↓` — up. If not — `mirror_x`, `mirror_y` or `reverse_x`, `reverse_y`.
-6. `Shift`+`F` — autofocus; `Esc`; `m.measure_speed()` in focus on an area with details.
+6. `Shift`+`F` — autofocus; `Shift`+`Esc`; `m.measure_speed()` in focus on an area with details.
 7. Check the emergency stop: while `m.manual()` runs, execute `python -m microcontrol stop` in another window.
 8. Set the home at a noticeable mark: `m.set_home()`. Disconnect, connect, `m.confirm_position()`, `m.go_home()` — expect "matches the home photo".
 9. Mark the corners of a small area (`1`, `2`), `folder = m.scan()`, `mc.stitch(folder)`, `mc.view(folder)`.

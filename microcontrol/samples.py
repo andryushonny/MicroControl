@@ -181,15 +181,21 @@ def delete_area(m, k):
 
 
 def goto_area(m, k):
-    """Поехать в центр области k: сначала вниз (если её фокус ниже), потом по X, Y отрезками не длиннее
-    max_jump, потом вверх до её фокуса — подъём кусками не больше max_move_z. Возвращает сообщение."""
+    """Поехать в ближайшую к столику клетку (кадр) области k: сначала вниз (если её фокус ниже), потом по X, Y
+    отрезками не длиннее max_jump, потом вверх до её фокуса — подъём кусками не больше max_move_z.
+    Возвращает сообщение."""
     from .scan import focus_z
     from .errors import MicroControlError
+    from .manual import snap
     init_areas(m)
     if not 0 <= k < len(m._regions):
         raise MicroControlError('E703', f"No sample {k + 1}")
     reg = m._regions[k]
-    X, Y = (reg['A'][0] + reg['B'][0]) / 2, (reg['A'][1] + reg['B'][1]) / 2
+    rp = m.real_position
+    (ax, ay), (bx, by) = reg['A'], reg['B']
+    cx = min(max(rp.x, min(ax, bx)), max(ax, bx))                # ближайшая точка области ...
+    cy = min(max(rp.y, min(ay, by)), max(ay, by))
+    X, Y = snap(m, (ax, ay), (cx, cy))                            # ... и центр её клетки (кадра)
     z_t = focus_z(reg['pts'], X, Y) - m._off['z'] if reg['pts'] else None
     if z_t is not None and z_t < m.position.z:
         m.goto(z=z_t)
@@ -201,7 +207,7 @@ def goto_area(m, k):
     while z_t is not None and z_t > m.position.z + 0.5 * m.motor_step:
         m.goto(z=min(z_t, m.position.z + m.max_move_z * 0.95))
     m._sel = k
-    return f"Sample {k + 1}: at its centre" + (f", focus Z {z_t:.1f} um (from its points)" if z_t is not None else "")
+    return f"Sample {k + 1}: at its nearest frame" + (f", focus Z {z_t:.1f} um (from its points)" if z_t is not None else "")
 
 
 def areas_info(m):
@@ -283,42 +289,61 @@ CAR_W = 210          # ширина карусели, px
 _FONT = cv2.FONT_HERSHEY_SIMPLEX
 
 
-def carousel(H, items, sel, scroll=0, title="Samples", go=True):
+def _button(img, x0, y0, x1, y1, label, hover=False, danger=False, active=False):
+    """Кнопка: тёмная заливка, при наведении светлее; текст строго по центру."""
+    base = (62, 62, 70) if not active else (60, 60, 190)
+    if hover:
+        base = (60, 60, 200) if danger else (96, 96, 104)
+    cv2.rectangle(img, (x0, y0), (x1, y1), base, -1)
+    cv2.rectangle(img, (x0, y0), (x1, y1), (120, 120, 130) if hover else (84, 84, 92), 1)
+    (tw, th), _ = cv2.getTextSize(label, _FONT, 0.45, 1)
+    cv2.putText(img, label, (x0 + (x1 - x0 - tw) // 2 + 1, y0 + (y1 - y0 + th) // 2), _FONT, 0.45,
+                (245, 245, 245), 1, cv2.LINE_AA)
+
+
+def carousel(H, items, sel, scroll=0, title="Samples", go=True, hover=None):
     """Вертикальная карусель на всю высоту. items: [dict(title, lines, color, thumbs, confirm)].
+    hover — (x, y) мыши в координатах карусели (подсветка кнопок и карточки) или None.
     Возвращает (картинка H x CAR_W, области щелчков [(x0, y0, x1, y1, действие, индекс)], высота содержимого).
     Действия: 'sel' — выбрать, 'go' — поехать (если go), 'del' — удалить (второй щелчок — подтверждение)."""
     W = CAR_W
-    img = np.full((H, W, 3), 28, np.uint8)
+    img = np.full((H, W, 3), 30, np.uint8)
     hits = []
-    cv2.putText(img, title, (10, 22), _FONT, 0.55, (235, 235, 235), 1, cv2.LINE_AA)
-    cv2.line(img, (0, 32), (W, 32), (70, 70, 70), 1)
-    y = 40 - scroll
+    over = lambda x0, y0, x1, y1: hover is not None and x0 <= hover[0] <= x1 and y0 <= hover[1] <= y1
+    cv2.putText(img, title, (14, 25), _FONT, 0.6, (240, 240, 240), 1, cv2.LINE_AA)
+    if items:
+        n_ = str(len(items))
+        (tw, _), _ = cv2.getTextSize(n_, _FONT, 0.45, 1)
+        cv2.rectangle(img, (W - tw - 26, 10), (W - 12, 30), (62, 62, 70), -1)
+        cv2.putText(img, n_, (W - tw - 19, 25), _FONT, 0.45, (220, 220, 220), 1, cv2.LINE_AA)
+    cv2.line(img, (0, 38), (W, 38), (62, 62, 70), 1)
+    top = 39
+    y = 46 - scroll
     for k, it in enumerate(items):
         th = it.get('thumbs') or []
         h_th = max((t.shape[0] for t in th), default=0)
         h = 46 + 15 * len(it.get('lines', [])) + (h_th + 6 if th else 0)
         y0, y1 = y, y + h
-        if y1 > 34 and y0 < H:
+        if y1 > top and y0 < H:
             c = it['color']
-            card = img[max(34, y0):min(H, y1)]
-            if k == sel:
-                card[:] = np.clip(card.astype(int) + 22, 0, 255).astype(np.uint8)
-            cv2.rectangle(img, (4, y0 + 2), (W - 5, y1 - 2), c if k == sel else (70, 70, 70), 2 if k == sel else 1)
-            cv2.rectangle(img, (4, y0 + 2), (12, y1 - 2), c, -1)          # цветная полоска области
-            cv2.putText(img, it['title'], (18, y0 + 20), _FONT, 0.5, c, 1, cv2.LINE_AA)
-            bx = W - 30                                                   # кнопка «удалить»
+            card = img[max(top, y0):min(H, y1), 6:W - 6]
+            hv = over(6, y0, W - 6, y1)
+            if k == sel or hv:
+                card[:] = np.clip(card.astype(int) + (16 if k == sel else 9), 0, 255).astype(np.uint8)
+            cv2.rectangle(img, (6, y0 + 2), (W - 7, y1 - 2), c if k == sel else (66, 66, 74), 1)
+            cv2.rectangle(img, (6, y0 + 2), (10, y1 - 2), c, -1)            # цветная полоска области
+            cv2.putText(img, it['title'], (18, y0 + 22), _FONT, 0.52, c, 1, cv2.LINE_AA)
             conf = it.get('confirm')
-            cv2.rectangle(img, (bx, y0 + 6), (bx + 22, y0 + 26), (60, 60, 200) if conf else (90, 90, 90), -1 if conf else 1)
-            cv2.putText(img, 'x', (bx + 6, y0 + 21), _FONT, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
-            hits.append((bx, y0 + 6, bx + 22, y0 + 26, 'del', k))
+            bx0, bx1 = W - 36, W - 14                                      # кнопка «удалить»
+            _button(img, bx0, y0 + 8, bx1, y0 + 28, 'x', over(bx0, y0 + 8, bx1, y0 + 28), True, bool(conf))
+            hits.append((bx0, y0 + 8, bx1, y0 + 28, 'del', k))
             if go and it.get('go', True):                                 # кнопка «поехать»
-                gx = W - 64
-                cv2.rectangle(img, (gx, y0 + 6), (gx + 30, y0 + 26), (90, 90, 90), 1)
-                cv2.putText(img, 'Go', (gx + 4, y0 + 21), _FONT, 0.45, (230, 230, 230), 1, cv2.LINE_AA)
-                hits.append((gx, y0 + 6, gx + 30, y0 + 26, 'go', k))
-            yy = y0 + 40
+                gx0, gx1 = W - 78, W - 42
+                _button(img, gx0, y0 + 8, gx1, y0 + 28, 'Go', over(gx0, y0 + 8, gx1, y0 + 28))
+                hits.append((gx0, y0 + 8, gx1, y0 + 28, 'go', k))
+            yy = y0 + 44
             for ln in it.get('lines', []):
-                cv2.putText(img, ln, (18, yy), _FONT, 0.4, (210, 210, 210), 1, cv2.LINE_AA)
+                cv2.putText(img, ln, (18, yy), _FONT, 0.4, (200, 200, 205), 1, cv2.LINE_AA)
                 yy += 15
             if conf:
                 cv2.putText(img, "click x again to delete", (18, yy), _FONT, 0.38, (120, 120, 255), 1, cv2.LINE_AA)
@@ -326,21 +351,23 @@ def carousel(H, items, sel, scroll=0, title="Samples", go=True):
                 xx = 18
                 for t in th:
                     ty0 = yy - 6
-                    a, b = max(0, 34 - ty0), max(0, ty0 + t.shape[0] - H)
-                    if t.shape[0] - a - b > 0 and xx + t.shape[1] <= W - 6:
+                    a, b = max(0, top - ty0), max(0, ty0 + t.shape[0] - H)
+                    if t.shape[0] - a - b > 0 and xx + t.shape[1] <= W - 8:
                         img[ty0 + a:ty0 + t.shape[0] - b, xx:xx + t.shape[1]] = t[a:t.shape[0] - b]
                         cv2.rectangle(img, (xx, ty0), (xx + t.shape[1], ty0 + t.shape[0]), dim(c, 0.8), 1)
                     xx += t.shape[1] + 6
-            hits.append((4, y0, W - 4, y1, 'sel', k))
-        y = y1 + 4
+            hits.append((6, y0, W - 6, y1, 'sel', k))
+        y = y1 + 6
     content = y + scroll
     if not items:
-        cv2.putText(img, "none yet", (10, 60), _FONT, 0.45, (150, 150, 150), 1, cv2.LINE_AA)
+        cv2.putText(img, "none yet", (14, 66), _FONT, 0.45, (150, 150, 150), 1, cv2.LINE_AA)
+        cv2.putText(img, "keys 1 and 2: area corners", (14, 88), _FONT, 0.4, (120, 120, 125), 1, cv2.LINE_AA) \
+            if go else None
     if content > H:                                                       # полоса прокрутки
         hgt = max(20, int(H * H / content))
-        top = int((H - hgt) * scroll / max(1, content - H))
-        cv2.rectangle(img, (W - 3, top), (W - 1, top + hgt), (120, 120, 120), -1)
-    cv2.line(img, (0, 0), (0, H), (90, 90, 90), 1)
+        top_ = int((H - hgt) * scroll / max(1, content - H))
+        cv2.rectangle(img, (W - 3, top_), (W - 1, top_ + hgt), (120, 120, 120), -1)
+    cv2.line(img, (0, 0), (0, H), (70, 70, 78), 1)
     return img, hits, content
 
 

@@ -1,5 +1,5 @@
 """Текстовые ответы (Result) и полоса прогресса (Progress)."""
-import sys, time
+import os, sys, time
 
 
 def fmt(v):
@@ -25,6 +25,7 @@ def open_window(name, fullscreen=False):
     import cv2
     from .config import WINDOW_SIZE
     cv2.namedWindow(name, cv2.WINDOW_NORMAL)
+    set_icon(name)
     if fullscreen:
         cv2.setWindowProperty(name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
         return None
@@ -98,3 +99,54 @@ def wheel_delta(flags):
             pass
     d = (int(flags) >> 16) & 0xFFFF
     return d - 0x10000 if d >= 0x8000 else d
+
+
+EXIT = -27          # «выйти» (от тестов и когда нажатия кончились)
+
+
+def exit_key(key):
+    """Выход из окна: Shift+Esc или Ctrl+Esc (одиночный Esc только отменяет). Windows: какие клавиши
+    зажаты, спрашивается у системы; Linux / GTK: модификаторы — в старших битах кода клавиши."""
+    if key == EXIT:
+        return True
+    if key is None or key < 0 or key & 0xFF != 27:
+        return False
+    if key >> 16:
+        return True
+    try:
+        import ctypes
+        u = ctypes.windll.user32
+        return bool((u.GetAsyncKeyState(0x10) | u.GetAsyncKeyState(0x11)) & 0x8000)
+    except Exception:
+        return False
+
+
+def icon_path():
+    """Значок программы: microcontrol/icon.ico или ~/.microcontrol/icon.ico (если файл положили)."""
+    for p in (os.path.join(os.path.dirname(__file__), 'icon.ico'),
+              os.path.join(os.path.expanduser('~'), '.microcontrol', 'icon.ico')):
+        if os.path.exists(p):
+            return p
+    return None
+
+
+def set_icon(title):
+    """Значок окна OpenCV и панели задач (Windows); на других системах — ничего."""
+    p = icon_path()
+    if not p:
+        return
+    try:
+        import ctypes
+        u = ctypes.windll.user32
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("MicroControl")   # своя кнопка на панели задач
+        hwnd = u.FindWindowW(None, title)
+        if not hwnd:
+            return
+        u.LoadImageW.restype = ctypes.c_void_p
+        big = u.LoadImageW(None, p, 1, 32, 32, 0x10)          # IMAGE_ICON, LR_LOADFROMFILE
+        small = u.LoadImageW(None, p, 1, 16, 16, 0x10)
+        u.SendMessageW.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_void_p, ctypes.c_void_p]
+        u.SendMessageW(hwnd, 0x80, 1, big)                    # WM_SETICON, ICON_BIG
+        u.SendMessageW(hwnd, 0x80, 0, small)                  # ICON_SMALL
+    except Exception:
+        pass

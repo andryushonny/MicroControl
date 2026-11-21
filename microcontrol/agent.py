@@ -149,6 +149,12 @@ def _ask_window(title, text):
     except Exception:
         return _ask_console(title, text)
     root.title("MicroControl — agent asks")
+    try:
+        from .util import icon_path
+        if icon_path():
+            root.iconbitmap(icon_path())
+    except Exception:
+        pass
     root.attributes('-topmost', True)
     root.configure(bg='#1e1f24', padx=18, pady=14)
     tk.Label(root, text=title, font=('Segoe UI', 13, 'bold'), fg='#ffd257', bg='#1e1f24',
@@ -660,9 +666,9 @@ def _point(ag):
     return dict(message=SM.add_point(m), areas=SM.areas_info(m))
 
 
-@tool('goto_area', "Drive to the centre of sample area N at its focus height (safe order: down, X/Y, up).",
+@tool('goto_area', "Drive to the frame of sample area N nearest to the stage, at its focus height (safe order: down, X/Y, up).",
       {'sample': {'type': 'integer', 'minimum': 1}, 'reason': REASON}, ('sample', 'reason'), risk='act',
-      ask=lambda ag, a: f"Drive to the centre of sample area {a['sample']}.")
+      ask=lambda ag, a: f"Drive to the nearest frame of sample area {a['sample']}.")
 def _goto_area(ag, sample, reason):
     m = ag.need_m()
     msg = SM.goto_area(m, sample - 1)

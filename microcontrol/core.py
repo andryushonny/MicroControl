@@ -337,6 +337,9 @@ class Microscope:
             if cooling:                                        # и охлаждение спектрометра (слышен вентилятор)
                 self._cmd(P.SET_TEC, P.tec_data(P.COOL_C))
                 L.event('CON-005', f"Spectrometer cooling {P.COOL_C} C (as the Optosky software).")
+            moved = self._check_last_view()                    # картинка = конец прошлого сеанса? иначе — поправить
+            if moved:
+                restored = moved if not restored else restored + " " + moved
         except BaseException:
             self.close()
             raise
@@ -355,11 +358,13 @@ class Microscope:
                    + f"   ({len(self._regions)} selections)")
         if self._mem.home:
             r['Home'] = f"set {self._mem.home['time']}"
+        if self._mem.last:
+            r['Position'] = f"{self.position} (continued from the last session" + \
+                (", NOT confirmed)" if self._uncertain else ")")
         if restored:
-            r['Position'] = f"{self.position} (from the last session, not confirmed)"
             r['Note'] = restored
-        elif not self._mem.home:
-            r['Home'] = "not set: coordinates start here. Set once: m.set_home()"
+        if not self._mem.home:
+            r['Home'] = "not set (optional: m.set_home() keeps a photo of this place to check the position later)"
         print(r)
 
     _PUBLIC = {'port', 'folder', 'dirs', 'log_file', 'allow_laser', 'allow_homing', 'area', 'last_scan',
@@ -592,6 +597,7 @@ class Microscope:
                 except Exception as e:
                     warnings.warn(f"Could not switch the {name} off: {e}")
             self._remember()
+            self._save_last_view()                             # кадр здесь — сверка при следующем подключении
             self._ser.close()
             L.event('CON-002', f"Disconnected at {self.position}.")
             L.event('SYS-002')
@@ -1057,18 +1063,78 @@ class Microscope:
         mem = self._mem
         if self._world is not None and 'sim_true' in mem.data:       # симулятор помнит, где стоит столик
             self._world._p = {a: float(v) for a, v in mem.data['sim_true'].items()}
-        if not mem.home or not mem.last:
+        if not mem.last:
             return None
+        # Мотор шаговый, датчика положения нет: столик стоит, где его оставили. Координаты продолжаются
+        # с прошлого сеанса (и с домом, и без него) — выделения образца остаются на своих местах. При подключении
+        # картинка камеры ещё сверяется с кадром конца прошлого сеанса (_check_last_view): сдвинули столик —
+        # координаты поправляются по картинке.
         self._p = {a: int(mem.last['p'][a]) for a in AXES}
-        self._uncertain = set(AXES)
         broken = mem.last.get('moving')
+        if broken:
+            self._uncertain = set(AXES)
         L.event('CON-004', f"Position {self.position} restored from {mem.last['time']}"
-                           + (" (that session ended during a move)" if broken else "") + ". Not confirmed yet.",
+                           + (" (that session ended during a move: not confirmed)" if broken else "") + ".",
                 30 if broken else 20)
-        return ("The last session ended DURING A MOVE: the position may be off. Go home by eye, then "
-                "m.set_home(replace=True), or check with m.go_home() after m.confirm_position()." if broken else
-                "If nobody moved the stage since then (by hand or in the Optosky software): m.confirm_position(). "
-                "Check: m.go_home() compares the picture with the home photo.")
+        return ("The last session ended DURING A MOVE: the position may be off. Check with m.go_home() "
+                "(compares the picture with the home photo), then m.confirm_position()." if broken else None)
+
+    def _save_last_view(self):
+        """Кадр камеры здесь и сейчас — в память прибора (для сверки при следующем подключении)."""
+        if not self.cam or self._mem is None:
+            return
+        try:
+            img = self.image()
+            g = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.ndim == 3 else img
+            path = os.path.splitext(self._mem.path)[0] + "_last.png"
+            imwrite(path, g)
+            self._mem.data['last_view'] = dict(file=path, p=dict(self._p), objective=self.objective,
+                                               turn_180=bool(self.turn_180), time=datetime.now().isoformat(timespec='seconds'))
+            self._mem.save()
+        except Exception as e:
+            L.event('CON-008', f"Last view not saved: {e}", 30)
+
+    def _check_last_view(self):
+        """Подключение: сверить картинку камеры с кадром конца прошлого сеанса. Совпала со сдвигом — столик
+        двигали (рукой или другой программой): координаты поправляются на этот сдвиг, выделения остаются на
+        своих местах на образце. Не совпала — положение под вопросом (сообщение)."""
+        lv = self._mem.data.get('last_view') if self._mem is not None else None
+        if not self.cam or not lv or not os.path.exists(lv.get('file', '')) or lv.get('objective') != self.objective \
+                or bool(lv.get('turn_180')) != bool(self.turn_180) or {a: int(v) for a, v in lv['p'].items()} != self._p:
+            return None
+        a = imread(lv['file']).astype(np.float32)
+        img = self.image()
+        b = (cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.ndim == 3 else img).astype(np.float32)
+        if a.shape != b.shape:
+            return None
+        k = 4                                                  # по уменьшенным: шум камеры и расфокус не мешают
+        sm = lambda im: cv2.resize(cv2.GaussianBlur(im, (0, 0), 1.5), None, fx=1 / k, fy=1 / k,
+                                   interpolation=cv2.INTER_AREA)
+        a4, b4 = sm(a), sm(b)
+        win = cv2.createHanningWindow(a4.shape[::-1], cv2.CV_32F)
+        (sx, sy), resp = cv2.phaseCorrelate(a4, b4, win)
+        sx, sy = sx * k, sy * k
+        same = float(np.corrcoef(a4.ravel(), b4.ravel())[0, 1])  # картинка та же (без сдвига)
+        if resp < 0.1 and same > 0.9:
+            sx = sy = 0.0
+        elif resp < 0.1:
+            self._uncertain = set(AXES)
+            L.event('CON-009', f"The picture differs from the end of the last session (response {resp:.2f}).", 30)
+            return ("The camera picture differs from the end of the last session: was the stage moved or the sample "
+                    "changed? Selections may be off. Check: m.go_home(), then m.confirm_position().")
+        e = np.linalg.solve(self._pixels_per_step(), np.array([sx, sy]))
+        d = {'x': int(round(e[0])), 'y': int(round(e[1]))}
+        if not d['x'] and not d['y']:
+            L.event('CON-009', "The picture matches the end of the last session: position confirmed.")
+            return None
+        for ax in 'xy':
+            self._p[ax] += d[ax]
+        self._remember()
+        um = {ax: d[ax] * self.motor_step for ax in 'xy'}
+        L.event('CON-009', f"The stage was moved since the last session by X {um['x']:+.1f}, Y {um['y']:+.1f} um: "
+                           "coordinates corrected by the picture.", 30)
+        return (f"The stage was moved since the last session (X {um['x']:+.1f}, Y {um['y']:+.1f} um by the camera): "
+                "coordinates corrected, the selections stay on their places on the sample.")
 
     def set_home(self, replace=False):
         """Дом этого микроскопа: текущая точка становится настоящим (0, 0, 0) — один раз и навсегда.

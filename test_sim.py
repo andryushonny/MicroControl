@@ -176,9 +176,14 @@ try:
 except AttributeError as e:
     assert 'find_limits' in str(e)
 m.move(dx=300, dy=-200); m.close()
-m = mc.Microscope('sim', objective=10, folder=hd)                 # новый сеанс: положение восстановлено
-assert m.position.x == round(54 * mc.config.UM_PER_STEP, 1) and m._uncertain == {'x', 'y', 'z'}
-refused(lambda: m.goto(x=0), 'E211')
+m = mc.Microscope('sim', objective=10, folder=hd)                 # новый сеанс: положение продолжается, картинка сверена
+assert m.position.x == round(54 * mc.config.UM_PER_STEP, 1) and not m._uncertain, (m.position, m._uncertain)
+mp_ = m._mem.path; px0 = dict(m._p); m.close()
+import json as _js                                                   # между сеансами столик сдвинули рукой на 7 шагов
+d_ = _js.load(open(mp_)); d_['sim_true']['x'] += 7; _js.dump(d_, open(mp_, 'w'))
+m = mc.Microscope('sim', objective=10, folder=hd)
+assert m._p['x'] == px0['x'] + 7 and not m._uncertain, (m._p, px0)  # координаты поправлены по картинке
+m.move(dx=-7 * m.motor_step)
 m.confirm_position()
 r = m.go_home(); print(r); assert 'matches' in r['Picture']
 home_true = dict(m._world.p)
@@ -190,6 +195,11 @@ m._remember(moving=True); m._ser.close(); m._lock.release(); m._lock = None; m._
 m = mc.Microscope('sim', objective=10, folder=hd)
 assert m._uncertain == {'x', 'y', 'z'}
 m.set_home(replace=True); assert not m._uncertain
+m.close()
+hd2 = tempfile.mkdtemp()                                            # без дома: координаты тоже продолжаются
+m = mc.Microscope('sim', objective=10, folder=hd2); m.focus(); m.move(dx=400, dy=200); p_ = m.position; m.close()
+m = mc.Microscope('sim', objective=10, folder=hd2)
+assert m.position == p_ and not m._uncertain, (m.position, p_)
 m.close()
 print("Home: OK")
 

@@ -317,7 +317,7 @@ The controller reply to a move tells **which** limit switch is closed (from Opto
 
 ### 7.4. Unconfirmed position
 
-After a limit switch, a lost reply, a `03`/`04` code, and when the position is restored from a previous session, the axis position is considered unconfirmed. In this state `goto`, G-code and scanning are blocked (`E211`); `move` and manual mode work. The block is cleared by `m.confirm_position()` after checking that the stage is where expected.
+**Between sessions** the coordinates continue (with or without a home): the stepper stage stays where it was left, the last position is kept in the device memory after every move, so the selections of a sample stay on their places. At disconnection (and when manual mode closes) a camera frame is kept; at the next connection the picture is compared with it: the same picture — the position is confirmed; shifted — the stage was moved by hand or by another program, and the coordinates are corrected by the shift; a different picture — the position is unconfirmed (message). After a limit switch, a lost reply, a `03`/`04` code, and when the last session ended during a move, the axis position is considered unconfirmed. In this state `goto`, G-code and scanning are blocked (`E211`); `move` and manual mode work. The block is cleared by `m.confirm_position()` after checking that the stage is where expected.
 
 ### 7.5. Locked functions
 
@@ -870,7 +870,7 @@ Dependencies: `pyserial`, `numpy`, `opencv-python`, `h5py`, `psutil`. The MindVi
 5. Arrow `→`: the image must shift **left** by a frame width; likewise `↓` — up. If not — `mirror_x`, `mirror_y` or `reverse_x`, `reverse_y`.
 6. `F` — autofocus; `Shift`+`Esc`; `m.measure_speed()` in focus on an area with details.
 7. Check the emergency stop: while `m.manual()` runs, execute `python -m microcontrol stop` in another window.
-8. Set the home at a noticeable mark: `m.set_home()`. Disconnect, connect, `m.confirm_position()`, `m.go_home()` — expect "matches the home photo".
+8. Optional: set the home at a noticeable mark, `m.set_home()`. Disconnect, connect, `m.go_home()` — expect "matches the home photo".
 9. Mark the corners of a small area (`1`, `2`), `folder = m.scan()`, `mc.stitch(folder)`, `mc.view(folder)`.
 10. For smeared frames: `m.move_pause = 0.5`, `m.photo_pause = 0.6`.
 

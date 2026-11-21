@@ -1473,6 +1473,8 @@ def _run(m, fullscreen=False, _keys=None):
                 pass
     if live is not None:
         live.stop()
+    m._save_last_view()                                   # кадр здесь — сверка положения при следующем подключении
+    SM.persist(m)
     if not fullscreen:
         window_size(WIN, remember=True)                                  # запомнить размер для следующего окна
     cv2.destroyWindow(WIN)

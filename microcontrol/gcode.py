@@ -209,7 +209,7 @@ def _points(a, b, step):
 
 class _Recorder:
     """Запись скана: каждый M240 — кадр в ScanData + проверка резкости и перефокус мутных кадров."""
-    def __init__(self, m, name, program, notes, area):
+    def __init__(self, m, name, program, notes, area, folder=None, extra=None):
         from .storage import ScanData
         from . import __version__, AUTHORS
         os.makedirs(m.dirs['scans'], exist_ok=True)
@@ -219,7 +219,7 @@ class _Recorder:
         if free < 1.5 * need + 500:
             raise SafetyError('E702', f"Need about {need:.0f} MB, free {free:.0f} MB.")
         safe = re.sub(r'[^\w\-]+', '_', name).strip('_') or 'scan'
-        self.folder = os.path.join(m.dirs['scans'], datetime.now().strftime("%Y-%m-%d_%H%M%S") + f"_{m.objective}x_{safe}")
+        self.folder = folder or os.path.join(m.dirs['scans'], datetime.now().strftime("%Y-%m-%d_%H%M%S") + f"_{m.objective}x_{safe}")
         if hasattr(m.cam, 'freeze'):
             m.cam.freeze()                                       # одна экспозиция на весь скан
         w, h = m.frame_size
@@ -235,7 +235,8 @@ class _Recorder:
                          photo_pause_s=m.photo_pause, move_pause_s=m.move_pause, speed_um_s=m.motor_speed, references=dict(m.references),
                          offset_um=dict(m._off), device=dict(getattr(m, 'device', {}) or {}),
                          frames_planned=n, status='running', log=L.path(),
-                         crosses=m._crosses.to_dict() if getattr(m, '_crosses', None) is not None and m._crosses.marks else None)
+                         crosses=m._crosses.to_dict() if getattr(m, '_crosses', None) is not None and m._crosses.marks else None,
+                         **(extra or {}))
         self.store = ScanData.create(self.folder, self.meta, batch_size=m.batch_size, fmt=m.frame_format,
                                      quality=m.jpg_quality)
         self.jpg = os.path.join(self.folder, 'jpg') if (m.save_jpg and m.frame_format == 'h5') else None
@@ -311,7 +312,7 @@ class _Recorder:
         self.store.close()
 
 
-def run(m, program, save=None, notes=''):
+def run(m, program, save=None, notes='', folder=None, extra=None):
     if isinstance(program, str) and '\n' not in program and program.lower().endswith(('.gcode', '.nc', '.txt')) \
             and os.path.exists(program):
         with open(program, encoding='utf-8') as f:
@@ -320,7 +321,7 @@ def run(m, program, save=None, notes=''):
     cmds = parse(program)
     area = m.area
     _preflight(m, cmds, area)
-    rec = _Recorder(m, save, program, notes, area) if save else None
+    rec = _Recorder(m, save, program, notes, area, folder, extra) if save else None
     L.event('GC-001', f"Program of {len(cmds)} commands" + (f", recording to {rec.folder}" if rec else "") + ".")
     absolute, status, done, t0 = True, 'done', 0, time.monotonic()
     pr = Progress(len(cmds), "Scan" if rec else "G-code") if (rec or len(cmds) > 20) else None

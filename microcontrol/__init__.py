@@ -12,7 +12,7 @@ Authors: Andrey Lyapeikov, Savely Domenko.
 
 Help: mc.help()
 """
-__version__ = "0.18.0"
+__version__ = "0.19.0"
 AUTHORS = ["Ляпейков Андрей", "Доменко Савелий"]
 
 from .errors import (MicroControlError, SafetyError, LimitError, CommError, CameraError,
@@ -37,7 +37,8 @@ CONNECT
 
 WORKFLOW
   m.manual()                       Live view on the full screen; mark the area with keys 1 and 2
-  folder = m.scan()                Shoot the area with 20 % overlap (25 % at 50x, 100x); Z from the focus points (corners) if set
+  folder = m.scan()                Shoot every sample area (each into its own folder sample_01, ...); 20 % overlap
+                                   (25 % at 50x, 100x); Z of each area from its own focus points
   mc.stitch(folder)                Exact positions of all frames by their overlaps (like ASHLAR)
   mc.view(folder)                  Mark crosses on the mosaic, straighten it, select the squares you need
   mc.hints(folder, sensitivity=50) Yellow hint without the window: squares with something in them (0-100)
@@ -52,7 +53,8 @@ MANUAL WINDOW
   G                Steps X, Y = one frame   F       Keep Z here as a focus point (Shift+F: autofocus)
   Y                Autofocus by corners during the scan (on / off)
   M                Next objective (4x, 10x, 20x, 100x)
-  1 / 2            Area corner A / B        C       Clear the area
+  1 / 2            Corners of a sample area, one area after another (areas do not overlap)
+  Carousel, , / .  Choose an area; Go / Enter: drive there; x or C (twice): delete it
   Space            Picture                  L       Light on / off
   0                Zero here (offset)       R       Real coordinates (remove the offset)
   B                White balance

@@ -25,15 +25,19 @@ from .errors import MicroControlError
 from .util import wheel_delta, open_window, window_size
 from . import focus as F_
 import threading
-from .scan import Area
+from .scan import Area, focus_z
 from .config import scan_overlap
+from . import samples as SM
 
 WIN = "MicroControl"
 HELP = ["Esc: Exit", "Arrows / WASD: Move by Step X / Step Y", "E / Q: Stage up / down by Step Z (Shift: x5)",
         "Tab or click a field: steps (multiple of 5 um), exposure (ms), objective; Enter",
         "G: Steps X, Y = one frame", "M: Next objective (4x, 10x, 20x, 100x)",
-        "1 / 2: Area corner A / B (their Z is kept as focus points)", "F: Keep Z here as a focus point   Shift+F: Autofocus",
-        "Y (or the box): Autofocus by corners during the scan", "C: Clear the area and focus points", "Space: Picture",
+        "1 / 2: Corners of a sample area, one area after another (their Z is kept as focus points)",
+        "F: Keep Z here as a focus point of this area   Shift+F: Autofocus",
+        "Y (or the box): Autofocus by corners during the scan",
+        "Samples (right): click = choose, Go = drive there, x = delete;  , / . = previous / next;  Enter = drive",
+        "C: Cancel the new area / delete the chosen one (press twice)", "Space: Picture",
         "0: Zero here (offset)", "R: Real coordinates (remove the offset)", "B: White balance (aim at an empty place)",
         "Wheel: zoom   Middle button or Shift+drag: move the zoomed picture   Z: whole frame",
         "[ / ]: Turn the mini map over left-right / up-down (remembered)",
@@ -227,7 +231,7 @@ def screen(m):
     (ah, sgh), (av, sgv) = ax['h'], ax['v']
     sgh = -sgh if getattr(m, 'map_flip_x', False) else sgh        # отражение мини-карты (помнится для прибора;
     sgv = -sgv if getattr(m, 'map_flip_y', False) else sgv        # в окне — клавиши [ и ])
-    st = m._frame_step(1 - scan_overlap(m.objective))
+    st = m._frame_step()                                           # клетка карты = ровно кадр камеры
     fw, fh = m.frame_size
     size = {'x': fw, 'y': fh}
     f = lambda x, y: (sgh * {'x': x, 'y': y}[ah], sgv * {'x': x, 'y': y}[av])
@@ -235,8 +239,9 @@ def screen(m):
 
 
 def snap(m, A, pt):
-    """Точка -> центр ближайшей клетки решётки с началом в A (угол B встаёт ровно на сетку). Оси столика."""
-    st = m._frame_step(1 - scan_overlap(m.objective))
+    """Точка -> центр ближайшей клетки решётки с началом в A (угол B встаёт ровно на сетку). Оси столика.
+    Клетка = кадр камеры; перекрытие кадров при съёмке добавляет scan.plan."""
+    st = m._frame_step()
     ox, oy = A if A else (0.0, 0.0)
     return ox + round((pt[0] - ox) / st['x']) * st['x'], oy + round((pt[1] - oy) / st['y']) * st['y']
 
@@ -266,7 +271,7 @@ def cell_of(m, A, B):
     return None, None, ny, nx
 
 
-def minimap(img, m, A, B, size=MAP_W):
+def minimap(img, m, A, B, size=MAP_W, zcolor=None, others=(), right=0):
     """Мини-карта: бесконечная серая решётка кадров вокруг столика (рисуются только видимые клетки),
     зелёная зона (после клавиши 1 — предпросмотр от A до текущей клетки, после 2 — зафиксированная),
     жёлтая клетка — где столик, белая рамка — поле зрения. Номера кадров зоны по краям, сколько кадров
@@ -287,7 +292,9 @@ def minimap(img, m, A, B, size=MAP_W):
     k = (size - 70) / (MAP_COLS * sx)
     W = size
     H = int(MAP_ROWS * sy * k) + 60
-    X0, Y0 = img.shape[1] - W - 12, 12
+    X0, Y0 = img.shape[1] - W - 12 - right, 12
+    if X0 < 0 or Y0 + H > img.shape[0]:                                   # окно слишком мало для карты
+        return
     sub = img[Y0:Y0 + H, X0:X0 + W]
     under = sub.copy()                                                   # для полупрозрачности
     sub[:] = (sub * 0.4).astype(sub.dtype)
@@ -312,7 +319,8 @@ def minimap(img, m, A, B, size=MAP_W):
     if zone:
         c0, c1, r0, r1 = zone
         fixed = B is not None
-        fill, line = ((40, 95, 40), (80, 200, 80)) if fixed else ((40, 80, 60), (120, 220, 170))
+        zc_ = zcolor or (80, 200, 80)
+        fill, line = (SM.dim(zc_, 0.45), zc_) if fixed else (SM.dim(zc_, 0.35), tuple(min(255, int(v * 1.2)) for v in zc_))
         for i in range(max(c0, i0), min(c1, i0 + MAP_COLS - 1) + 1):
             for j in range(max(r0, j0), min(r1, j0 + MAP_ROWS - 1) + 1):
                 cell(i, j, fill, -1)
@@ -326,10 +334,22 @@ def minimap(img, m, A, B, size=MAP_W):
                                                (cu0, cv0, cu0, cv1, ux0 >= gx0), (cu1, cv0, cu1, cv1, ux1 <= gx1)):
                 if show:
                     cv2.line(sub, (x_a, y_a), (x_b, y_b), line, 2)
+    gx1_, gy1_ = gx0 + int(gw), gy0 + int(gh)
+    for (rx0, ry0, rx1, ry1), oc, olab in others:                        # другие области — своим цветом
+        corners_ = [to(*f(xx, yy)) for xx, yy in ((rx0, ry0), (rx1, ry0), (rx0, ry1), (rx1, ry1))]
+        u0, u1 = min(c_[0] for c_ in corners_), max(c_[0] for c_ in corners_)
+        v0, v1 = min(c_[1] for c_ in corners_), max(c_[1] for c_ in corners_)
+        cu0, cu1, cv0, cv1 = max(u0, gx0), min(u1, gx1_), max(v0, gy0), min(v1, gy1_)
+        if cu0 < cu1 and cv0 < cv1:
+            ovr = sub.copy()
+            cv2.rectangle(ovr, (int(cu0), int(cv0)), (int(cu1), int(cv1)), SM.dim(oc, 0.6), -1)
+            sub[:] = cv2.addWeighted(ovr, 0.5, sub, 0.5, 0)
+            cv2.rectangle(sub, (int(cu0), int(cv0)), (int(cu1), int(cv1)), oc, 2)
+            label(olab, ((cu0 + cu1) / 2, (cv0 + cv1) / 2), oc, 0.45)
     a_, b_ = to(px - w / 2, py - h / 2), to(px + w / 2, py + h / 2)      # жёлтое — ровно поле зрения
     ov_ = sub.copy()
-    cv2.rectangle(ov_, (max(a_[0], gx0), max(a_[1], gy0)), (min(b_[0], gx0 + int(gw)), min(b_[1], gy0 + int(gh))),
-                  (0, 200, 255), -1)
+    cv2.rectangle(ov_, (int(max(a_[0], gx0)), int(max(a_[1], gy0))),
+                  (int(min(b_[0], gx0 + int(gw))), int(min(b_[1], gy0 + int(gh)))), (0, 200, 255), -1)
     sub[:] = cv2.addWeighted(ov_, 0.55, sub, 0.45, 0)
     # номера столбцов и строк — всегда, у каждой видимой клетки: от угла зоны (1 — первый кадр зоны),
     # без зоны — от угла A или рабочего нуля. Зелёные — внутри зоны, серые — вне, жёлтые — где столик.
@@ -347,24 +367,28 @@ def minimap(img, m, A, B, size=MAP_W):
         up, down = max(0, j0 - r0), max(0, r1 - (j0 + MAP_ROWS - 1))
         hid = "  ".join(f"{a}{n_}" for a, n_ in (('<', left), ('>', right), ('^', up), ('v', down)) if n_)
         nx_, ny_ = c1 - c0 + 1, r1 - r0 + 1
-        label(f"{'Area' if fixed else 'Preview'} {nx_} x {ny_} = {nx_ * ny_}" + (f"    hidden {hid}" if hid else ""),
+        try:                                                             # кадров съёмки (с перекрытием)
+            Bp = B if B else (m.position.x, m.position.y)
+            fx_, fy_ = Area(A[0], A[1], *snap(m, A, Bp)).size(m._frame_step(1 - scan_overlap(m.objective)))
+            nfr = f" fields, {fx_ * fy_} frames"
+        except Exception:
+            nfr = ""
+        label(f"{'Area' if fixed else 'Preview'} {nx_} x {ny_}{nfr}" + (f"    hidden {hid}" if hid else ""),
               (W / 2, H - 12), line, 0.45)
     else:
-        label(f"Frame: row {cj + 1}, column {ci + 1}    Key 1: corner A", (W / 2, H - 12), (170, 170, 170), 0.45)
-    for c, name in ((A, "A"), (B, "B")):
-        if c:
-            u, v = to(*f(*c))
-            if gx0 <= u <= gx0 + gw and gy0 <= v <= gy0 + gh:
-                cv2.putText(sub, name, (u - 4, v + 5), font, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
+        label(f"Frame: row {cj + 1}, column {ci + 1}    Key 1: corner of a new area", (W / 2, H - 12), (170, 170, 170), 0.45)
     cr = getattr(m, '_crosses', None)
     if cr is not None and cr.marks:                                      # решётка крестов (красная)
         offv = np.array([m._off['x'], m._off['y']])
         draw_lattice(sub, cr, lambda S: to(*f(*(np.asarray(S) - offv))), (gx0, gy0, int(gw), int(gh)), solid=True)
-    for f_ in getattr(m, '_focus_pts', None) or []:                      # точки фокуса (голубые)
+    nreg = len(getattr(m, '_regions', None) or [])
+    for num, k_, f_ in SM.numbered(m):                                   # точки фокуса: сквозные номера
         u, v = to(*f(f_['x'] - m._off['x'], f_['y'] - m._off['y']))
         if gx0 <= u <= gx0 + gw and gy0 <= v <= gy0 + gh:
-            cv2.circle(sub, (u, v), 4, (255, 220, 80), -1, cv2.LINE_AA)
-            cv2.putText(sub, f_['tag'], (u + 5, v - 4), font, 0.4, (255, 220, 80), 1, cv2.LINE_AA)
+            pc = SM.color(k_ if k_ >= 0 else nreg)
+            cv2.circle(sub, (u, v), 5, (255, 255, 255), -1, cv2.LINE_AA)
+            cv2.circle(sub, (u, v), 3, pc, -1, cv2.LINE_AA)
+            cv2.putText(sub, str(num), (u + 6, v - 4), font, 0.42, (255, 255, 255), 1, cv2.LINE_AA)
     cv2.rectangle(sub, to(px - w / 2, py - h / 2), to(px + w / 2, py + h / 2), (255, 255, 255), 2)   # поле зрения
     cv2.rectangle(sub, (gx0, gy0), (gx0 + int(gw), gy0 + int(gh)), (120, 120, 120), 1)
     sub[:] = cv2.addWeighted(sub, 0.85, under, 0.15, 0)                 # карта слегка прозрачная
@@ -372,7 +396,7 @@ def minimap(img, m, A, B, size=MAP_W):
         nx_, ny_ = c1 - c0 + 1, r1 - r0 + 1
         ok = 120 / max(nx_ * sx, ny_ * sy)
         oW, oH = max(8, int(nx_ * sx * ok)), max(8, int(ny_ * sy * ok))
-        oxp, oyp = img.shape[1] - 12 - oW - 4, Y0 + H + 6
+        oxp, oyp = img.shape[1] - 12 - oW - 4 - right, Y0 + H + 6
         ov = img[oyp:oyp + oH + 4, oxp:oxp + oW + 4]
         ov[:] = (ov * 0.25).astype(ov.dtype)
         to2 = lambda i, j: (int(2 + (i - c0 + 0.5) * sx * ok), int(2 + (j - r0 + 0.5) * sy * ok))
@@ -452,11 +476,21 @@ def run(m, fullscreen=True, _keys=None):
         SW, SH = screen_size()
     L.event('MAN-001', f"Manual mode at {m.position}.")
     show_help, msg, msg_t, sharp, n = False, "H: Help.  Tab or click a field to edit it", time.monotonic(), 0.0, 0
+    # области образцов (настоящие мкм): m._regions — зафиксированные, m._pending — новая (есть угол 1, нет 2)
+    if getattr(m, '_regions', None) is None:
+        m._regions = []
+        if m.area is not None:                           # зона, заданная раньше одной парой углов, — область 1
+            off_ = (m._off['x'], m._off['y'])
+            m._regions.append(dict(A=(m.area.x0 + off_[0], m.area.y0 + off_[1]),
+                                   B=(m.area.x1 + off_[0], m.area.y1 + off_[1]),
+                                   pts=[dict(x=f_['x'], y=f_['y'], z=f_['z']) for f_ in (getattr(m, '_focus_pts', None) or [])],
+                                   thumbs=[]))
+    if not hasattr(m, '_pending'):
+        m._pending = None
+    if getattr(m, '_sel', None) is None or m._sel >= len(m._regions):
+        m._sel = len(m._regions) - 1 if m._regions else None
+    car = dict(scroll=0, hits=[], confirm=None, t=0.0)   # карусель справа
     A = B = None
-    if m.area is not None:
-        A, B = (m.area.x0, m.area.y0), (m.area.x1, m.area.y1)
-    elif getattr(m, '_corner_a', None):                  # угол A из прошлого входа (хранится в настоящих координатах)
-        A = (m._corner_a[0] - m._off['x'], m._corner_a[1] - m._off['y'])
     if not getattr(m, '_manual_steps', None):
         m._manual_steps = default_steps(m)
     steps = m._manual_steps                              # шаги X, Y, Z, мкм (помнятся между входами)
@@ -488,6 +522,12 @@ def run(m, fullscreen=True, _keys=None):
         # тянуть любой кнопкой по картинке (левой — не по полям) — сдвиг увеличенной картинки; колесо, + / - — зум
         if ev == cv2.EVENT_MOUSEMOVE:
             hover[0], hover[1] = (x, y), time.monotonic()
+        if x >= W - SM.CAR_W and not zm['pan']:          # карусель образцов справа
+            if ev == cv2.EVENT_LBUTTONDOWN:
+                clicks.append(('car', x, y))
+            elif ev == cv2.EVENT_MOUSEWHEEL:
+                clicks.append(('carw', x, y, wheel_delta(flags)))
+            return
         if ev == cv2.EVENT_MOUSEWHEEL:
             clicks.append(('wheel', x, y, wheel_delta(flags)))
         elif ev in (cv2.EVENT_MBUTTONDOWN, cv2.EVENT_RBUTTONDOWN) or (ev == cv2.EVENT_LBUTTONDOWN and not on_field(x, y)):
@@ -517,6 +557,69 @@ def run(m, fullscreen=True, _keys=None):
     live = _Live(m) if keys is None else None             # в тестах — синхронно
     last_n, last_t, img = -1, 0.0, None
     W, H = WH0 if WH0 else (1280, 900)
+
+    def work(P):                                         # настоящие -> рабочие мкм
+        return (P[0] - m._off['x'], P[1] - m._off['y'])
+
+    def reg_rect(reg):
+        fw_, fh_ = m.frame_size
+        return SM.rect(reg, fw_, fh_)
+
+    def reg_area(reg):
+        return Area(*work(reg['A']), *work(reg['B']))
+
+    def first_num(k):                                    # номера точек фокуса области k
+        nums = [n_ for n_, kk, _p in SM.numbered(m) if kk == k]
+        return (f"{nums[0]}-{nums[-1]}" if len(nums) > 1 else str(nums[0])) if nums else "-"
+
+    def car_items():
+        st_ = m._frame_step(1 - scan_overlap(m.objective))
+        items = []
+        for k, reg in enumerate(m._regions):
+            nx_, ny_ = reg_area(reg).size(st_)
+            x0_, y0_, x1_, y1_ = reg_rect(reg)
+            items.append(dict(title=f"Sample {k + 1}", color=SM.color(k), thumbs=reg.get('thumbs', []),
+                              confirm=car['confirm'] == k,
+                              lines=[f"{nx_} x {ny_} = {nx_ * ny_} frames",
+                                     f"{(x1_ - x0_) / 1000:.2f} x {(y1_ - y0_) / 1000:.2f} mm",
+                                     f"focus points {first_num(k)}"]))
+        if m._pending:
+            k = len(m._regions)
+            items.append(dict(title=f"Sample {k + 1} (new)", color=SM.color(k), thumbs=m._pending.get('thumbs', []),
+                              go=False, confirm=car['confirm'] == k,
+                              lines=["corner 1 set", "go to the other corner, press 2", f"focus points {first_num(-1)}"]))
+        return items
+
+    def go_region(k):
+        """Поехать в центр области k: сначала вниз (если её фокус ниже), потом по X, Y отрезками не длиннее
+        max_jump, потом вверх до её фокуса — подъём кусками не больше max_move_z."""
+        nonlocal msg
+        reg = m._regions[k]
+        X, Y = (reg['A'][0] + reg['B'][0]) / 2, (reg['A'][1] + reg['B'][1]) / 2
+        z_t = focus_z(reg['pts'], X, Y) - m._off['z'] if reg['pts'] else None
+        if z_t is not None and z_t < m.position.z:
+            m.goto(z=z_t)
+        x_t, y_t = work((X, Y))
+        p0 = m.position
+        nleg = max(1, int(np.ceil(np.hypot(x_t - p0.x, y_t - p0.y) / (m.max_jump * 0.95))))
+        for i_ in range(1, nleg + 1):
+            m.goto(x=p0.x + (x_t - p0.x) * i_ / nleg, y=p0.y + (y_t - p0.y) * i_ / nleg)
+        while z_t is not None and z_t > m.position.z + 0.5 * m.motor_step:
+            m.goto(z=min(z_t, m.position.z + m.max_move_z * 0.95))
+        m._sel = k
+        msg = f"Sample {k + 1}: at its centre" + (f", focus Z {z_t:.1f} um (from its points)" if z_t is not None else "")
+
+    def delete_region(k):
+        nonlocal msg
+        if k == len(m._regions) and m._pending:
+            m._pending = None
+            msg = "New area cancelled"
+        elif 0 <= k < len(m._regions):
+            m._regions.pop(k)
+            m._sel = min(k, len(m._regions) - 1) if m._regions else None
+            msg = f"Sample {k + 1} deleted; the others are renumbered"
+            L.event('MAN-003', msg + ".")
+        car['confirm'] = None
 
     def commit(ed):
         """Применить набранное значение: кратно 5 мкм, от 5 до предела оси."""
@@ -563,6 +666,12 @@ def run(m, fullscreen=True, _keys=None):
         if need:
             img = live.img if live is not None else m.image(0)
             last_n, last_t = (live.n if live is not None else last_n), time.monotonic()
+            if m._pending:                                 # карта и строка состояния — по новой или выбранной области
+                A, B, zk = work(m._pending['A']), None, len(m._regions)
+            elif m._sel is not None:
+                A, B, zk = work(m._regions[m._sel]['A']), work(m._regions[m._sel]['B']), m._sel
+            else:
+                A = B = zk = None
             if n % 4 == 0:                                     # резкость по тому же кадру (не дёргаем камеру ещё раз)
                 sharp = round(F_.sharpness(img, m.focus_method), 1)
             n += 1
@@ -577,13 +686,14 @@ def run(m, fullscreen=True, _keys=None):
                    f"    Sharpness {sharp:.0f}"
             if A and B:
                 r, c, ny, nx = cell_of(m, A, B)
-                line += f"    Area {nx} x {ny} = {nx * ny} frames" + \
+                line += f"    Sample {zk + 1}: {nx} x {ny} = {nx * ny} frames" + \
                         (f"    Frame: row {r + 1}/{ny}, column {c + 1}/{nx}" if r is not None else "    Outside the area")
             else:
                 *_, (ci_, cj_), _z = _grid(m, A, B)
                 b0c, b0r = (_z[0], _z[2]) if _z else (0, 0)
                 line += f"    Frame: row {cj_ - b0r + 1}, column {ci_ - b0c + 1}" + \
-                        (f"    Corner {'A' if A else 'B'} set, mark the other one" if (A or B) else "")
+                        (f"    Sample {zk + 1}: corner 1 set, press 2 at the other corner" if A else
+                         "    Key 1: corner of a sample area")
             q = i2v(cimg + np.array([gd['u'], gd['v']]))                 # точка направляющих в окне
 
             def lines(im):
@@ -619,9 +729,9 @@ def run(m, fullscreen=True, _keys=None):
                 (120, 230, 255) if m._use_fp else (235, 235, 235), (90, 90, 90), 'usefp')
             if zm['z'] > 1:
                 row(f"Zoom x{zm['z']:.2f}   wheel or + / -: zoom, drag the picture: move, Z: whole frame", (200, 200, 200))
-            fp = m._focus_pts
-            row(("Focus points: " + "   ".join(f"{f_['tag']}: Z {f_['z'] - m._off['z']:.1f}" for f_ in fp)
-                 + "   (scan takes Z from them)") if fp else
+            fp = SM.numbered(m)
+            row(("Focus points: " + "   ".join(f"{n_}: Z {f_['z'] - m._off['z']:.1f}" for n_, _k, f_ in fp[-8:])
+                 + "   (each area takes Z from its own)") if fp else
                 "Focus points: none (keys 1, 2 keep Z of the corners; F keeps Z here)", (230, 220, 120))
             if msg and time.monotonic() - msg_t < 4:
                 row(msg, (90, 90, 255) if msg.startswith('[E') else (120, 230, 120))
@@ -632,7 +742,14 @@ def run(m, fullscreen=True, _keys=None):
                     row(s_)
             y_[0] = H - 12                                               # строка состояния — тем же шрифтом
             row(line)
-            minimap(view, m, A, B)
+            others = [(tuple(np.r_[work(reg_rect(rg)[:2]), work(reg_rect(rg)[2:])]), SM.color(k_), str(k_ + 1))
+                      for k_, rg in enumerate(m._regions) if k_ != zk]
+            minimap(view, m, A, B, zcolor=SM.color(zk) if zk is not None else None, others=others, right=SM.CAR_W)
+            items = car_items()
+            sel_ = len(m._regions) if m._pending else m._sel
+            pan_, hits_, cont_ = SM.carousel(H, items, sel_, car['scroll'], title="Samples  (1, 2: new area)")
+            car['hits'], car['content'] = hits_, cont_
+            view[:, W - SM.CAR_W:] = pan_
             cv2.imshow(WIN, view)
         key = next(keys, 27) if keys is not None else cv2.waitKeyEx(8 if live is not None else 30)
         if keys is not None:
@@ -646,6 +763,39 @@ def run(m, fullscreen=True, _keys=None):
                 zm['z'] = min(8.0, max(1.0, zm['z'] * (1.25 if c_[3] > 0 else 0.8)))
                 k2 = min(W / img.shape[1], H / img.shape[0]) * zm['z']
                 zm['c'] = pix - (np.array(c_[1:3], float) - (W / 2, H / 2)) / k2
+                continue
+            if c_[0] == 'carw':                                     # прокрутка карусели
+                car['scroll'] = int(max(0, min(car.get('content', 0) - H + 20, car['scroll'] - 60 * np.sign(c_[3]))))
+                continue
+            if c_[0] == 'car':                                      # щелчок по карусели
+                h_ = SM.hit(car['hits'], c_[1] - (W - SM.CAR_W), c_[2])
+                if h_:
+                    act, k = h_
+                    if act == 'sel':
+                        car['confirm'] = None
+                        if k < len(m._regions):
+                            m._sel = k
+                            msg, msg_t = f"Sample {k + 1} chosen (Go or Enter: drive there)", time.monotonic()
+                    elif act == 'del':
+                        if car['confirm'] == k:
+                            delete_region(k)
+                        else:
+                            car['confirm'] = k
+                            msg = f"Click x again to delete sample {k + 1}"
+                        msg_t = time.monotonic()
+                    elif act == 'go' and k < len(m._regions):
+                        car['confirm'] = None
+                        hold_ = live.hold() if live is not None else None
+                        try:
+                            if hold_:
+                                hold_.__enter__()
+                            go_region(k)
+                        except MicroControlError as e:
+                            msg = str(e)
+                        finally:
+                            if hold_:
+                                hold_.__exit__()
+                        msg_t = time.monotonic()
                 continue
             if c_[0] in ('pan0', 'pan', 'pan1'):                    # сдвиг увеличенной картинки
                 if c_[0] == 'pan0':
@@ -751,25 +901,37 @@ def run(m, fullscreen=True, _keys=None):
             elif raw == 'F':                               # Shift+F: автофокус
                 r = m.focus()
                 msg = f"Focused at Z {r['Z']}" + ("  (weak peak)" if 'Note' in r else "")
-            elif ch == 'f':                                # F: запомнить Z здесь как точку фокуса
+            elif ch == 'f':                                # F: запомнить Z здесь как точку фокуса этой области
                 rp = m.real_position
-                m._focus_pts.append(dict(x=rp.x, y=rp.y, z=rp.z, tag=str(len(m._focus_pts) + 1)))
-                msg = f"Focus point {len(m._focus_pts)}: Z {p.z:.1f} um at X {p.x:.0f}, Y {p.y:.0f}"
+                k = next((k_ for k_, rg in enumerate(m._regions) if SM.inside(reg_rect(rg), rp.x, rp.y)), None)
+                if k is not None:
+                    m._regions[k]['pts'].append(dict(x=rp.x, y=rp.y, z=rp.z))
+                elif m._pending:
+                    m._pending['pts'].append(dict(x=rp.x, y=rp.y, z=rp.z))
+                elif m._sel is not None:
+                    k = m._sel
+                    m._regions[k]['pts'].append(dict(x=rp.x, y=rp.y, z=rp.z))
+                else:
+                    raise MicroControlError('E701', "Mark a sample area first: keys 1 and 2")
+                num = len(SM.numbered(m)) if k is None else [n_ for n_, kk, _p in SM.numbered(m) if kk == k][-1]
+                who = f"sample {k + 1}" if k is not None else f"sample {len(m._regions) + 1} (new)"
+                msg = f"Focus point {num} ({who}): Z {p.z:.1f} um at X {p.x:.0f}, Y {p.y:.0f}"
                 L.event('MAN-006', msg + ".")
+            elif raw in (',', '.') and m._regions:         # предыдущая / следующая область
+                m._sel = ((m._sel if m._sel is not None else 0) + (1 if raw == '.' else -1)) % len(m._regions)
+                msg = f"Sample {m._sel + 1} chosen (Enter: drive there)"
+            elif key in (13, 10) and m._sel is not None and not m._pending:
+                go_region(m._sel)
             elif ch == ' ':
                 m.photo()
                 msg = f"Picture saved: {m.last_photo}"
-            elif ch in '0r':
-                old = dict(m._off)
+            elif ch in '0r':                               # области хранятся в настоящих мкм: остаются на месте
                 if ch == '0':
                     m.offset()
                     msg = "Zero is here. Real position " + repr(m.real_position)
                 else:
                     m.offset_clear()
                     msg = "Offset removed: real coordinates"
-                dx, dy = old['x'] - m._off['x'], old['y'] - m._off['y']   # углы зоны остаются на месте
-                A = (A[0] + dx, A[1] + dy) if A else None
-                B = (B[0] + dx, B[1] + dy) if B else None
             elif ch == 'b':
                 m.white_balance()
                 msg = "White balance done"
@@ -778,25 +940,47 @@ def run(m, fullscreen=True, _keys=None):
                 msg = "Light on" if m.light else "Light off"
             elif ch == 'h':
                 show_help = not show_help
-            elif ch == 'c':
-                A = B = None
-                m.area = None
-                m._focus_pts.clear()
-                msg = "Area and focus points cleared"
-            elif ch in '12':
-                pt = (p.x, p.y)
+            elif ch == 'c':                                # отменить новую область / удалить выбранную (дважды)
+                if m._pending:
+                    delete_region(len(m._regions))
+                elif m._sel is not None:
+                    if car['confirm'] == m._sel and time.monotonic() - car['t'] < 4:
+                        delete_region(m._sel)
+                    else:
+                        car['confirm'], car['t'] = m._sel, time.monotonic()
+                        msg = f"Press C again to delete sample {m._sel + 1}"
+            elif ch in '12':                               # углы области: строго по очереди 1, потом 2
+                rp = m.real_position
+                fpt = dict(x=rp.x, y=rp.y, z=rp.z)
+                hit_ = next((k_ for k_, rg in enumerate(m._regions) if SM.inside(reg_rect(rg), rp.x, rp.y)), None)
                 if ch == '1':
-                    A = pt
-                    if B:
-                        B = snap(m, A, B)                 # B — ровно на сетке кадров от A
+                    if hit_ is not None:
+                        raise MicroControlError('E704', f"Here is sample {hit_ + 1}: a new area must not overlap it")
+                    if m._pending:                         # угол 1 заново
+                        m._pending['A'] = (rp.x, rp.y)
+                        m._pending['pts'][0] = fpt
+                        m._pending['thumbs'][:1] = [SM.thumb(img)]
+                    else:
+                        m._pending = dict(A=(rp.x, rp.y), pts=[fpt], thumbs=[SM.thumb(img)])
+                    k = len(m._regions)
+                    msg = f"Sample {k + 1}: corner 1 at X {p.x:.0f}, Y {p.y:.0f} um, focus point " \
+                          f"{len(SM.numbered(m)) - len(m._pending['pts']) + 1}. Go to the other corner, press 2"
                 else:
-                    B = pt = snap(m, A, pt) if A else pt
-                rp = m.real_position                      # Z угла — точка фокуса (A, B)
-                tag = 'A' if ch == '1' else 'B'
-                m._focus_pts[:] = [f_ for f_ in m._focus_pts if f_['tag'] != tag]
-                m._focus_pts.insert(0 if tag == 'A' else min(1, len(m._focus_pts)),
-                                    dict(x=rp.x, y=rp.y, z=rp.z, tag=tag))
-                msg = f"Corner {tag} at X {pt[0]:.0f}, Y {pt[1]:.0f} um, focus Z {p.z:.1f} um"
+                    if not m._pending:
+                        raise MicroControlError('E701', "Press 1 first: the first corner of a new sample area")
+                    Aw = work(m._pending['A'])
+                    Bw = snap(m, Aw, (p.x, p.y))           # угол 2 — ровно на сетке кадров от угла 1
+                    new = dict(A=m._pending['A'], B=(Bw[0] + m._off['x'], Bw[1] + m._off['y']),
+                               pts=[m._pending['pts'][0], fpt] + m._pending['pts'][1:],
+                               thumbs=m._pending['thumbs'][:1] + [SM.thumb(img)])
+                    bad = [k_ + 1 for k_, rg in enumerate(m._regions) if SM.overlap(reg_rect(new), reg_rect(rg))]
+                    if bad:
+                        raise MicroControlError('E704', f"This area overlaps sample {', '.join(map(str, bad))}: "
+                                                f"choose corner 2 so that the areas do not overlap")
+                    m._regions.append(new)
+                    m._pending, m._sel = None, len(m._regions) - 1
+                    nx_, ny_ = reg_area(new).size(m._frame_step(1 - scan_overlap(m.objective)))
+                    msg = f"Sample {m._sel + 1} fixed: {nx_} x {ny_} = {nx_ * ny_} frames. Key 1: the next sample"
                 L.event('MAN-003', msg + ".")
             else:
                 continue
@@ -816,13 +1000,18 @@ def run(m, fullscreen=True, _keys=None):
         window_size(WIN, remember=True)                                  # запомнить размер для следующего окна
     cv2.destroyWindow(WIN)
     cv2.waitKey(1)
-    if A and B:
-        m.area = Area(*A, *B)
-    m._corner_a = (A[0] + m._off['x'], A[1] + m._off['y']) if (A and not B) else None
-    L.event('MAN-002', f"Manual mode closed at {m.position}. Area: {m.area}.")
-    if m.area is None:
-        print("Manual mode closed. The area is not set: mark two corners with keys 1 and 2.")
+    regs = m._regions
+    m.area = reg_area(regs[m._sel if m._sel is not None else 0]) if regs else None
+    m._focus_pts = [dict(p_, tag=str(n_)) for n_, k_, p_ in SM.numbered(m) if k_ == (m._sel or 0)] if regs else []
+    L.event('MAN-002', f"Manual mode closed at {m.position}. Samples: {len(regs)}.")
+    if not regs:
+        print("Manual mode closed. No sample area: mark two corners with keys 1 and 2.")
         return None
-    nx, ny = m.area.size(m._frame_step(1 - scan_overlap(m.objective)))
-    print(f"Manual mode closed.\n  Area     {m.area}\n  Frames   {nx} x {ny} = {nx * ny}")
+    st_ = m._frame_step(1 - scan_overlap(m.objective))
+    lines_ = []
+    for k, rg in enumerate(regs):
+        nx, ny = reg_area(rg).size(st_)
+        lines_.append(f"  Sample {k + 1}  {reg_area(rg)}   {nx} x {ny} = {nx * ny} frames   focus points {first_num(k)}")
+    print("Manual mode closed." + (" The new area without corner 2 is kept for the next time." if m._pending else "")
+          + "\n" + "\n".join(lines_) + "\n  m.scan() shoots all samples, each into its own folder.")
     return m.area

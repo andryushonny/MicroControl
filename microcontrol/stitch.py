@@ -13,6 +13,7 @@
 mc.view(folder) показывает скан по этим положениям, мозаика целиком в память не собирается.
 engine='ashlar' — настоящий ASHLAR (pip install ashlar; нужна Java).
 """
+from .samples import per_sample as _per_sample
 import math, csv, json, os, time
 import numpy as np
 import cv2
@@ -67,6 +68,7 @@ def _pair(st, ia, ib, d, W, H, pad, sigma, max_shift, other=None):
     return dt, 1.0 - ncc
 
 
+@_per_sample
 def stitch(folder, engine='builtin', max_shift_um=40.0, sigma=None, alpha=0.01, preview=True, verbose=True,
            flat=True):
     """Сшить скан: найти точные положения кадров. engine='auto' | 'builtin' | 'ashlar'.

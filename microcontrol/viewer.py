@@ -9,7 +9,8 @@
 Мелкий масштаб собирается из превью (1/16), которые пишутся при скане;
 крупный — из нужных кусков кадров. Поэтому окно открывается сразу и на тысячах кадров.
 """
-import csv, math, os
+from .samples import per_sample as _per_sample
+import csv, json, math, os
 from collections import OrderedDict
 import cv2
 import numpy as np
@@ -108,12 +109,81 @@ class _Scene:
         return out
 
 
-HELP_V2 = "Move: drag (right / middle in any mode, Ctrl+drag in S, B), arrows   Zoom: wheel, + / -, 0 = whole   R: straight"
+HELP_V2 = "Move: drag (right / middle in any mode, Ctrl+drag in S, B), arrows   Zoom: wheel, + / -, 0 = whole   R: straight   , / .: sample"
 HELP_V = ("G: 2 crosses in a row = tilt (right click = remove, C = again)   F: fit grid   S: select (click, box; Shift = unselect; right click = remove the green area)   B: brush   "
-          "P: polygon   N: number squares (X Y)   Y: hints (yellow), Shift+Y: select them, U: sensitivity   A / X: all / none   E: export   Esc: exit")
+          "P: polygon   N: number squares (X Y)   Y: hints (yellow), Shift+Y: select them, U, < / >: sensitivity   A / X: all / none   E: export   Esc: exit")
+
+
+_PREV = {}
+
+
+def _preview(folder, w):
+    """Картинка образца для карусели: обзорная мозаика (после сшивки) или первый кадр."""
+    pv = os.path.join(folder, 'join', 'preview_all.jpg')
+    key = (folder, os.path.getmtime(pv) if os.path.exists(pv) else 0, w)
+    if key not in _PREV:
+        img = cv2.imdecode(np.fromfile(pv, np.uint8), cv2.IMREAD_COLOR) if os.path.exists(pv) else None
+        if img is None:
+            try:
+                st_ = ScanData(folder)
+                img = st_.thumbs()[0] if len(st_) else None
+                st_.close()
+            except Exception:
+                img = None
+        if img is None:
+            img = np.full((60, w, 3), 40, np.uint8)
+        k = min(w / img.shape[1], 130 / img.shape[0])
+        _PREV[key] = cv2.resize(img, (max(1, int(img.shape[1] * k)), max(1, int(img.shape[0] * k))),
+                                interpolation=cv2.INTER_AREA)
+    return _PREV[key]
+
+
+def _car_items(subs, cur, car):
+    from . import samples as SM
+    items = []
+    for k, f in enumerate(subs):
+        lines = []
+        try:
+            n = sum(1 for _ in open(os.path.join(f, 'index.csv'), encoding='utf-8')) - 1
+            lines.append(f"{n} frames" + ("" if os.path.exists(os.path.join(f, 'join', 'positions_all.csv'))
+                                          else "   not stitched"))
+        except Exception:
+            pass
+        gp = os.path.join(f, 'grid.json')
+        if os.path.exists(gp):
+            try:
+                d = json.load(open(gp, encoding='utf-8'))
+                lines.append(f"selected {len(d.get('selected', []))}   hints {len(d.get('useful', []))}")
+            except Exception:
+                pass
+        else:
+            lines.append("no grid yet (G)")
+        items.append(dict(title=f"Sample {SM.sample_index(f)}", color=SM.sample_color(f),
+                          lines=lines, thumbs=[_preview(f, SM.CAR_W - 36)], confirm=car.get('confirm') == f, go=False))
+    return items
 
 
 def view(folder, fullscreen=False, sensitivity=None, _keys=None):
+    """Открыть сшитый скан (или папку сеанса из нескольких образцов). Справа — карусель образцов:
+    щелчок — открыть образец, x — убрать образец (папка уходит в <сеанс>/_removed/), , / . — предыдущий / следующий."""
+    from . import samples as SM
+    from .manual import screen_size
+    ses, subs = SM.session_of(folder)
+    cur = subs[0] if (ses and os.path.abspath(folder) == ses) else os.path.abspath(folder)
+    if not subs:
+        raise FileNotFoundError(f"No samples in {folder}")
+    keys = iter(_keys) if _keys is not None else None
+    Wv, Hv = open_window(WIN, fullscreen) or screen_size()
+    car = dict(scroll=0, confirm=None, size=(Wv, Hv))
+    while cur:
+        cur = _view_one(cur, fullscreen, sensitivity, keys, car)
+    if not fullscreen:
+        window_size(WIN, remember=True)                                    # запомнить размер для следующего окна
+    cv2.destroyWindow(WIN)
+    cv2.waitKey(1)
+
+
+def _view_one(folder, fullscreen, sensitivity, keys, car):
     """Открыть сшитый скан. Перемещение — левая кнопка (в режимах выделения — правая или средняя), колесо — масштаб.
     G — отметить кресты (щелчок у креста: центр находится сам по симметрии креста); соседний крест по ряду,
     по столбцу и дальние — решётка уточняется. R — повернуть картинку так, чтобы квадраты стали ровными.
@@ -121,15 +191,43 @@ def view(folder, fullscreen=False, sensitivity=None, _keys=None):
     щелчки — вершины, Enter — выделить внутри, Del — снять внутри. A — все, X — ни одного.
     E — вывести выделенное (mc.export). Разметка хранится в <скан>/grid.json."""
     from .mask import Grid, snap_cross, export, sens_frac
+    from . import samples as SM
     sc = _Scene(folder)
     g = Grid(folder)
     if sensitivity is not None:
         g.sensitivity = float(min(100, max(0, sensitivity)))
     px_um = sc.st.meta.get('pixel_size_um') or 1.0
-    from .manual import screen_size
-    Wv, Hv = open_window(WIN, fullscreen) or screen_size()
+    ses, subs = SM.session_of(folder)
+    Wv, Hv = car['size']
     st = dict(cx=sc.size[0] / 2, cy=sc.size[1] / 2, s=None, rot=0.0, mode='look', down=None, box=None,
-              poly=[], dirty=True, Wv=Wv, Hv=Hv, msg="G: mark crosses   H: help", straight=False)
+              poly=[], dirty=True, Wv=Wv - SM.CAR_W, Hv=Hv, straight=False, switch=None,
+              msg=(f"Sample {SM.sample_index(folder)} ({subs.index(folder) + 1} of {len(subs)})   " if len(subs) > 1 else "") +
+              "G: mark crosses   H: help")
+
+    def car_click(x, y):
+        h_ = SM.hit(car.get('hits', []), x - st['Wv'], y)
+        if not h_:
+            return
+        act, k = h_
+        f = subs[k]
+        if act == 'sel':
+            car['confirm'] = None
+            if f != folder:
+                st['switch'] = f
+        elif act == 'del':
+            if car.get('confirm') == f:
+                car['confirm'] = None
+                g.save(px_um) if f == folder else None
+                if f == folder:
+                    sc.st.close()
+                dst = SM.remove_sample(f)
+                rest = [s_ for s_ in subs if s_ != f]
+                st['msg'] = f"Sample {SM.sample_index(dst)} removed to {dst}"
+                st['switch'] = (folder if f != folder else (rest[min(k, len(rest) - 1)] if rest else False))
+            else:
+                car['confirm'] = f
+                st['msg'] = f"Click x again to remove sample {SM.sample_index(f)} (its folder goes to _removed/)"
+        st['dirty'] = True
 
     def R():
         t = np.radians(st['rot'])
@@ -206,6 +304,14 @@ def view(folder, fullscreen=False, sensitivity=None, _keys=None):
 
     def mouse(ev, x, y, flags, _=None):
         shift = bool(flags & cv2.EVENT_FLAG_SHIFTKEY)
+        if x >= st['Wv'] and not st['down']:              # карусель образцов справа
+            if ev == cv2.EVENT_LBUTTONUP:
+                car_click(x, y)
+            elif ev == cv2.EVENT_MOUSEWHEEL:
+                car['scroll'] = int(max(0, min(car.get('content', 0) - st['Hv'] + 20,
+                                               car['scroll'] - 60 * np.sign(wheel_delta(flags)))))
+                st['dirty'] = True
+            return
         if ev in (cv2.EVENT_LBUTTONDOWN, cv2.EVENT_RBUTTONDOWN, cv2.EVENT_MBUTTONDOWN):
             st['down'] = (x, y, st['cx'], st['cy'], ev, shift, False)
             st['ctrl'] = bool(flags & cv2.EVENT_FLAG_CTRLKEY)
@@ -377,15 +483,19 @@ def view(folder, fullscreen=False, sensitivity=None, _keys=None):
         for k_, (txt, y_) in enumerate(((top, 22), (st['msg'], 46), (HELP_V2, Hv - 36), (HELP_V, Hv - 12))):
             cv2.rectangle(img, (0, y_ - 17), (min(Wv, 9 * len(txt) + 10), y_ + 6), (0, 0, 0), -1)
             cv2.putText(img, txt, (8, y_), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (235, 235, 235), 1, cv2.LINE_AA)
-        return img
+        pan_, car['hits'], car['content'] = SM.carousel(Hv, _car_items(subs, folder, car), subs.index(folder),
+                                                        car['scroll'], title="Samples  (, / .)", go=False)
+        return np.hstack([img, pan_])
 
     cv2.setMouseCallback(WIN, mouse)
-    keys = iter(_keys) if _keys is not None else None
     while True:
+        if st['switch'] is not None:                      # другой образец из карусели
+            break
         if not fullscreen:
-            W_, H_ = window_size(WIN, (st['Wv'], st['Hv']))
-            if W_ >= 100 and H_ >= 100 and (W_, H_) != (st['Wv'], st['Hv']):
-                st['Wv'], st['Hv'], st['dirty'] = W_, H_, True
+            W_, H_ = window_size(WIN, (st['Wv'] + SM.CAR_W, st['Hv']))
+            if W_ >= 100 + SM.CAR_W and H_ >= 100 and (W_ - SM.CAR_W, H_) != (st['Wv'], st['Hv']):
+                st['Wv'], st['Hv'], st['dirty'] = W_ - SM.CAR_W, H_, True
+                car['size'] = (W_, H_)
         if st['s'] is None:
             fit()
         if st['dirty']:
@@ -408,6 +518,7 @@ def view(folder, fullscreen=False, sensitivity=None, _keys=None):
                 key = -1
         if key == -1:
             if keys is None and cv2.getWindowProperty(WIN, cv2.WND_PROP_VISIBLE) < 1:
+                st['switch'] = False
                 break
             continue
         if st.get('sens') is not None:                      # ввод чувствительности 0…100
@@ -456,7 +567,10 @@ def view(folder, fullscreen=False, sensitivity=None, _keys=None):
             elif st['mode'] != 'look':
                 st['mode'] = 'look'
             else:
+                st['switch'] = False
                 break
+        elif raw in (',', '.') and len(subs) > 1:           # предыдущий / следующий образец
+            st['switch'] = subs[(subs.index(folder) + (1 if raw == '.' else -1)) % len(subs)]
         elif ch == 'c' and st['mode'] == 'cross':           # кресты заново
             g.cr.clear(); g.refined = None; set_straight(False); g.save(px_um)
             st['msg'] = "Crosses cleared. Click a cross, then its neighbour in the same row"
@@ -489,7 +603,7 @@ def view(folder, fullscreen=False, sensitivity=None, _keys=None):
             st['msg'] = (f"Hints: {len(g.useful)} squares in yellow, sensitivity {g.sensitivity:g}. Shift+Y or Ctrl+Y: "
                          f"select them; U: type the sensitivity 0-100, < / >: -5 / +5") if st.get('hints', True) \
                 else "Hints hidden"
-        elif raw in (',', '.', '<', '>') and g.ready():      # чувствительность подсказки -5 / +5
+        elif raw in ('<', '>') and g.ready():                # чувствительность подсказки -5 / +5
             set_sens(g.sensitivity + (5 if raw in '.>' else -5))
         elif ch == 'u' and g.ready():                       # ввести чувствительность числом
             st['sens'] = ""
@@ -547,14 +661,13 @@ def view(folder, fullscreen=False, sensitivity=None, _keys=None):
         elif key in {2621440, 65364} or (ch == 's' and raw.isupper()):
             st['cy'] += step
         st['dirty'] = True
-    g.save(px_um)
-    if not fullscreen:
-        window_size(WIN, remember=True)                                    # запомнить размер для следующего окна
-    cv2.destroyWindow(WIN)
-    cv2.waitKey(1)
-    sc.st.close()
+    if os.path.isdir(folder):
+        g.save(px_um)
+        sc.st.close()
+    return st['switch'] or None
 
 
+@_per_sample
 def hints(folder, sensitivity=None):
     """Жёлтая подсказка без окна: квадраты, где что-то есть. Нужна решётка (кресты в mc.view).
     sensitivity 0…100 (больше — больше квадратов). Пишется в grid.json, видна в mc.view (Y)."""

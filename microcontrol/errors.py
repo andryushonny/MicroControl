@@ -45,6 +45,7 @@ CODES = {
     'E701': "Scan area not set",
     'E702': "Not enough disk space",
     'E703': "Invalid scan parameters",
+    'E704': "Sample areas overlap",
     'E801': "Scan folder not found or empty",
     'E901': "G-code syntax error",
     'E902': "Unsupported G-code command",

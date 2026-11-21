@@ -1,5 +1,5 @@
 """Microscope — управление ATR8300 как 3D-принтером: движение, свет, лазер, камера, фокус, G-код, скан."""
-import atexit, math, os, time, warnings
+import atexit, math, os, re, time, warnings
 from datetime import datetime
 import numpy as np
 import cv2
@@ -1351,7 +1351,8 @@ class Microscope:
 
     def expected_z(self):
         """Ожидаемый Z фокуса здесь (настоящие мкм) по точкам фокуса из m.manual(), или None."""
-        pts = getattr(self, '_focus_pts', None) or []
+        regs = getattr(self, '_regions', None) or []
+        pts = [p for r in regs for p in r['pts']] or getattr(self, '_focus_pts', None) or []
         if not pts:
             return None
         from .scan import focus_z
@@ -1408,22 +1409,72 @@ class Microscope:
                'each' — автофокус в каждом кадре. Пересъёмка размытых кадров с фокусом — m.refocus = True.
         overlap — перекрытие соседних кадров 0..0.5; path — 'snake' или 'rows'.
         name, notes — название образца и заметки (пишутся в описание скана).
-        Возвращает папку скана."""
+        Несколько образцов (области 1, 2, 3… из m.manual()): каждая область снимается в свою папку
+        sample_01, sample_02… внутри одной папки сеанса, Z кадров — по точкам фокуса своей области.
+        Возвращает папку скана (для нескольких образцов — папку сеанса)."""
         from .scan import plan
+        regs = getattr(self, '_regions', None) or []
+        pts = None
+        if area is None and len(regs) > 1:
+            return self._scan_samples(regs, focus, overlap, path, name, notes)
+        if area is None and len(regs) == 1:                # одна область — обычный скан в одну папку
+            from .scan import Area
+            rg, off = regs[0], self._off
+            area = Area(rg['A'][0] - off['x'], rg['A'][1] - off['y'], rg['B'][0] - off['x'], rg['B'][1] - off['y'])
+            pts = rg['pts']
         if self.cam and self.scan_check:                   # знаки осей картинки — до плана (от них зависит сшивка)
             r = self.check_orientation()
             if 'Changed' in r or 'Reason' in r:
                 print(r)
         from .config import scan_overlap
-        prog = plan(self, area=area, focus=focus, overlap=scan_overlap(self.objective) if overlap is None else overlap, path=path)
+        prog = plan(self, area=area, focus=focus, overlap=scan_overlap(self.objective) if overlap is None else overlap, path=path,
+                    pts=pts)
         r = self.gcode(prog, save=name or 'scan', notes=notes)
         r.title = "Scan finished" if r.title == "Program finished" else "Scan stopped"
         print(r)
         return r['Folder']
 
-    def gcode(self, program, save=None, notes=''):
+    def _scan_samples(self, regs, focus, overlap, path, name, notes):
+        """Скан нескольких областей: папка сеанса, в ней по обычной папке скана на образец."""
+        import json as _json
+        from datetime import datetime as _dt
+        from .scan import plan, Area
+        from .config import scan_overlap
+        from .samples import color
+        if self.cam and self.scan_check:
+            r = self.check_orientation()
+            if 'Changed' in r or 'Reason' in r:
+                print(r)
+        ov = scan_overlap(self.objective) if overlap is None else overlap
+        off = self._off
+        safe = re.sub(r'[^\w\-]+', '_', name or 'samples').strip('_') or 'samples'
+        ses = os.path.join(self.dirs['scans'], _dt.now().strftime("%Y-%m-%d_%H%M%S") + f"_{self.objective}x_{safe}")
+        os.makedirs(ses, exist_ok=True)
+        info = dict(project="MicroControl", name=name, notes=notes, objective=self.objective,
+                    date=_dt.now().isoformat(timespec='seconds'), samples=[])
+        n0 = 0
+        for k, reg in enumerate(regs):
+            area = Area(reg['A'][0] - off['x'], reg['A'][1] - off['y'], reg['B'][0] - off['x'], reg['B'][1] - off['y'])
+            pts = [dict(p, tag=str(n0 + i + 1)) for i, p in enumerate(reg['pts'])]
+            nums = [n0 + 1, n0 + len(pts)]
+            n0 += len(pts)
+            info['samples'].append(dict(index=k + 1, folder=f"sample_{k + 1:02d}", color_bgr=list(color(k)),
+                                        area_um=[area.x0, area.y0, area.x1, area.y1], focus_points=nums))
+            _json.dump(info, open(os.path.join(ses, 'session.json'), 'w', encoding='utf-8'), indent=1, ensure_ascii=False)
+            prog = plan(self, area=area, focus=focus, overlap=ov, path=path, pts=pts)
+            print(f"Sample {k + 1} of {len(regs)}: {area}")
+            r = self.gcode(prog, save=f"{name or 'sample'} {k + 1}", notes=notes,
+                           folder=os.path.join(ses, f"sample_{k + 1:02d}"),
+                           extra=dict(sample_index=k + 1, session=os.path.basename(ses), focus_points=nums))
+            print(r)
+            if r.title != "Program finished":
+                break
+        print(f"Session: {ses}")
+        return ses
+
+    def gcode(self, program, save=None, notes='', folder=None, extra=None):
         """Выполнить G-код (строка или путь к файлу .gcode). Единицы — мкм.
         save='имя' — все снимки (M240) пишутся в новую папку скана; без save — в photos/.
         Перед запуском программа целиком проверяется: при ошибке столик не двигается."""
         from .gcode import run
-        return run(self, program, save=save, notes=notes)
+        return run(self, program, save=save, notes=notes, folder=folder, extra=extra)

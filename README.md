@@ -2,7 +2,9 @@
 
 **Software control of the Optosky ATR8300 Raman microscope (MP / Mapping version): stage, illumination, laser, camera, autofocus, area scanning, stitching and preparation of images for training datasets.**
 
-**Authors:** A. Lyapeikov, S. Domenko. **Version:** 0.18.0. Русский: [docs/README_ru.md](docs/README_ru.md) · 中文: [docs/README_zh.md](docs/README_zh.md) · PDF: [EN](docs/MicroControl_en.pdf), [RU](docs/MicroControl_ru.pdf), [中文](docs/MicroControl_zh.pdf).
+**Authors:** A. Lyapeikov, S. Domenko. **Version:** 0.19.0. Русский: [docs/README_ru.md](docs/README_ru.md) · 中文: [docs/README_zh.md](docs/README_zh.md) · PDF: [EN](docs/MicroControl_en.pdf), [RU](docs/MicroControl_ru.pdf), [中文](docs/MicroControl_zh.pdf).
+
+![Viewer: red grid of squares, selection (green), hints (yellow), carousel of samples](docs/img/view.jpg)
 
 > Independent project, not affiliated with Optosky. Provided as is, without warranty — see the [Disclaimer](#disclaimer) and the [MIT licence](LICENSE).
 
@@ -435,7 +437,7 @@ Number of frames
 n_x = \left\lceil \frac{|x_B - x_A|}{s_x} - 0.05 \right\rceil + 1,\qquad n_y = \left\lceil \frac{|y_B - y_A|}{s_y} - 0.05 \right\rceil + 1;
 ```
 
-the 0.05 tolerance avoids an extra frame due to rounding. The path is a "snake" (`path='snake'`, even rows reversed) or row by row (`path='rows'`).
+the 0.05 tolerance avoids an extra frame due to rounding. The frames are then spread evenly from corner to corner, $s'_x = |x_B - x_A| / (n_x - 1) \le s_x$ (the same for $y$): the first frame stands at $A$, the last one exactly at $B$, the overlap is not less than $q$. The path is a "snake" (`path='snake'`, even rows reversed) or row by row (`path='rows'`).
 
 ### 10.2. Focus during a scan
 
@@ -466,7 +468,9 @@ F_k < 0.5\,\mathrm{median}(F_{k-20}, \dots, F_{k-1})
 ## 11. Data storage
 
 ```
-scans/<date>_<time>_<objective>_<name>/
+scans/<date>_<time>_<objective>_<name>/      one area; several samples — a session folder:
+  session.json       list of samples: number, colour, area, focus points
+  sample_01/, sample_02/, …   each is a normal scan folder (as below)
   meta.json          objective, pixel size, field of view, motor step, step→pixel matrix,
                      area, camera and exposure, light, focus settings, pauses, speed, reference frames,
                      zero offset, instrument info, state, number of frames
@@ -498,7 +502,7 @@ st.export()                                    # PNG files and TileConfiguration
 ## 12. Stitching and marking (main workflow)
 
 **Workflow.**
-1. `m.manual()`: the green area — corners `1`, `2`.
+1. `m.manual()`: sample areas — corners `1`, `2`, one area after another (several samples: section 15).
 2. Focus at the corners: at each corner bring the image into focus (`E`/`Q`) and press `1`/`2` (area corners) and `F` (other corners). The "Autofocus by corners" checkbox (`Y`, on by default): $Z$ of each frame from the 4 nearest points with weights $1/d^2$.
 3. `folder = m.scan()` — frames with 20 % overlap, 25 % at 50x and 100x (`scan_overlap` in `config.py`). Before each picture two consecutive frames are compared by phase correlation: if the picture still moves by more than 1 px (the stage has not settled), the picture is postponed (`m.still_check`). Exposure and white balance are manual for the scan (they do not drift from frame to frame).
 4. `mc.stitch(folder)` — exact frame positions from the overlaps (12.1). Once per objective — `mc.distortion(folder)` (12.5).
@@ -534,6 +538,8 @@ Result: `join/positions_all.csv`, `join/stitch.json`, `join/preview_all.jpg` (re
 
 ### 12.2. Marking in the viewer (`mc.view`)
 
+![Close-up: squares numbered from two labels, selected squares, hints](docs/img/view_zoom.jpg)
+
 | Key / mouse | Action |
 |---|---|
 | drag with the right or middle button — in any mode; with the left one — in the look mode, `G`, `P`; `Ctrl`+left — in `S` and `B` | move |
@@ -549,6 +555,7 @@ Result: `join/positions_all.csv`, `join/stitch.json`, `join/preview_all.jpg` (re
 | `P` | polygon: clicks — vertices, `Enter` — select inside, `Del` — unselect, right button / `Backspace` — remove a vertex |
 | `A` / `X` | select all / none |
 | `E` | export the selection |
+| `,` / `.`; carousel on the right | previous / next sample; click — open, **x** — remove (to `_removed/`) |
 | `Esc` | leave the mode, then the viewer |
 
 The lattice is always **square**: $\mathbf{v}_2$ is $\mathbf{v}_1$ turned by 90° (no skew, no "projection"); there are four unknowns — origin $\mathbf{O}$, pitch and tilt — found by least squares from the marks. Two neighbouring crosses are enough; far crosses reduce the tilt error in proportion to the distance. The `F` key optionally fits the same square lattice to all crosses of the mosaic. Simulator check (tilt 3.5°): 2 neighbouring crosses and 2 far ones — pitch 99.998 µm, tilt 3.494°. Marks and selection are stored in `grid.json` (in mosaic pixels; after a new stitch the marks must be made again).
@@ -677,6 +684,8 @@ The `F` (feed) parameter is not supported (`E902`): the speed is set by the cont
 
 ## 15. Manual mode and viewer
 
+![Manual mode: mini map with three sample areas and focus points 1–7, carousel on the right](docs/img/manual.jpg)
+
 `m.manual()` opens the camera image on the full screen; `m.manual(fullscreen=False)` — in a window. The `manual` and `view` windows have the same size: `WINDOW_SIZE` = 1280 × 900 by default (config), then the last size the window was stretched to.
 
 The camera is read in a separate thread: the window is redrawn at once (pan, zoom, text) without waiting for the next frame; during a move, focusing and a picture the thread pauses. All text and fields are always visible, the mini map is always shown, slightly transparent.
@@ -694,15 +703,16 @@ The camera is read in a separate thread: the window is redrawn at once (pan, zoo
 | `Shift`+`F` | autofocus |
 | wheel, `+` / `-`; `Z` | zoom (to the cursor / to the centre); whole frame |
 | drag the picture (any button; the left one — not on the fields) | move the zoomed picture |
-| `1` / `2` | area corner A / B; $Z$ at that moment is kept as focus point A / B |
-| `C` | delete the area and focus points |
+| `1` / `2` | corners of a sample area, strictly one area after another; $Z$ at that moment is kept as a focus point |
+| `C` | cancel the new area / delete the chosen one (press twice) |
+| `,` / `.`; `Enter` | previous / next area; drive to the chosen area |
 | `0` | working zero here (`m.offset()`); the area corners stay at their place on the sample |
 | `R` | remove the zero offset |
 | `B` | white balance on the current frame |
 | `L` | light on / off |
 | Space | picture |
 | `H` | help |
-| `Esc` | exit; the area is written to `m.area` |
+| `Esc` | exit; the areas are kept for `m.scan()` |
 
 **Step fields** (top left, under the coordinates): Step X, Step Y, Step Z, µm. Only multiples of 5 µm are allowed; the number is rounded to the nearest multiple of 5 and capped by the per-command limit (`max_move` for X, Y; for Z the smaller of `max_move_z`, `max_move_down`). The steps are kept between entries into manual mode within a session.
 
@@ -710,17 +720,25 @@ The camera is read in a separate thread: the window is redrawn at once (pan, zoo
 
 One key press — one move: key presses accumulated during a move (auto-repeat while the key is held) are dropped.
 
-**Mini map** (top right) — a window of $11 \times 9$ frames, a "room": while the stage is inside, the window stands still and the field-of-view frame moves across it; when the stage reaches the edge (the last cell), the window turns a page and the stage appears at the opposite edge of the new room. If the area fits in the window, the window stands on it. It can be flipped with `[` (left-right) and `]` (up-down), remembered for the microscope (`m.map_flip_x`, `m.map_flip_y`; both `True` by default on the ATR8300). Flipping changes only the map picture, not the motion or stitching. Blue dots are the focus points.
+**Mini map** (top right, left of the carousel) — a window of $11 \times 9$ frames, a "room": while the stage is inside, the window stands still and the field-of-view frame moves across it; when the stage reaches the edge (the last cell), the window turns a page and the stage appears at the opposite edge of the new room. If the area fits in the window, the window stands on it. It can be flipped with `[` (left-right) and `]` (up-down), remembered for the microscope (`m.map_flip_x`, `m.map_flip_y`; both `True` by default on the ATR8300). Flipping changes only the map picture, not the motion or stitching. Blue dots are the focus points.
 
-- **Grey grid** without borders fills the whole window: each cell is a frame (step — field of view rounded down to the motor step). The grid is tied to corner A, before it is marked — to the working zero. Only visible cells are drawn.
+- **Grey grid** without borders fills the whole window: each cell is exactly one camera frame (field of view rounded down to the motor step), so the yellow field of view covers one cell. The overlap of the scan frames is added by `m.scan()` and does not change the map. The grid is tied to corner A, before it is marked — to the working zero. Only visible cells are drawn.
 - **Row and column numbers** — always, at every visible cell: from the first frame of the area (preview or fixed), without an area — from the working zero; the stage row and column numbers are yellow and repeated under the map and in the status line.
 - **White frame** — the field of view, **yellow fill** — exactly what is inside it (not the nearest cell).
-- **Area preview**: after the `1` key the green area stretches from A to the stage cell; at the bottom — "Preview $n_x \times n_y = N$".
-- **Fixed area**: the `2` key puts corner B exactly in the centre of the current grid cell; at the bottom — "Area $n_x \times n_y = N$", along the edges — the column and row numbers of the area.
+- **Area preview**: after the `1` key the new area (in its colour) stretches from corner 1 to the stage cell; at the bottom — "Preview $n_x \times n_y$ fields, $N$ frames" ($N$ — frames of the scan with overlap, section 10.1).
+- **Fixed area**: the `2` key puts corner B exactly in the centre of the current grid cell; at the bottom — "Area $n_x \times n_y$ fields, $N$ frames", along the edges — the column and row numbers of the area.
 - If the area is larger than the window: at the bottom — the number of area frames hidden on each side ("hidden <9 >10 ^6 v5"), under the map — an overview of the whole area with the visible window.
 - Corner A marked without B is kept until the next entry into manual mode.
 
 The mini map grid is the scan frames with `SCAN_OVERLAP` overlap (20 %; 25 % for 50x and 100x).
+
+**Several samples on the stage.** Several samples can lie side by side; each gets its own area. Areas are set strictly one after another: `1` — first corner of a new area, `2` — the opposite corner (the area is fixed); then `1` again for the next sample. Areas must not overlap: `1` inside an existing area and a corner `2` that makes the new area cover another one are refused (`E704`). Each area has its own colour (green, blue, orange, purple, cyan, pink, …; colours do not repeat) on the mini map and in the carousel.
+
+Focus points are numbered through all areas: the first area has 1, 2 (its corners) and the points added with `F` (e.g. 3, 4), the next area continues with 5, 6, 7, 8, and so on. `F` adds the point to the area under the stage (or to the new area). After deleting an area the others are renumbered.
+
+**Carousel** (right, full height): one card per area — colour, number of frames, size in mm, its focus points and two small pictures (the corners). Click — choose the area (the mini map shows it), **Go** (or `Enter`) — drive to its centre: first down if its focus is lower, then X, Y in legs not longer than `max_jump`, then up to its focus in steps not larger than `max_move_z`. **x** — delete the area (click x again to confirm); `C` — cancel the new area or delete the chosen one (press twice). `,` / `.` — previous / next area; the wheel over the carousel scrolls it.
+
+`m.scan()` shoots all areas, each with the Z from its own focus points, into one session folder (section 11): `sample_01`, `sample_02`, … `mc.stitch`, `mc.export`, `mc.clean`, `mc.hints` accept the session folder and work on every sample. `mc.view(session)` opens the first sample; the same carousel on the right switches samples (click, `,` / `.`), each sample has its own crosses, red grid, selection and numbers; **x** removes a sample — its folder is moved to `<session>/_removed/` (not deleted).
 
 The stage coordinates are shown large in the top left corner; the status line at the bottom also has the frame number in the area ("Frame: row $r$/$n_y$, column $c$/$n_x$").
 
@@ -962,7 +980,7 @@ Error texts are in English, with a code. List: `mc.ERRORS`.
 | E401, E402 | laser locked; power above the limit |
 | E501–E505 | camera: not found, no SDK, not connected, does not respond |
 | E601–E603 | autofocus: no room to search, unknown measure, no clear maximum at any point |
-| E701–E703 | scanning: area not set, low disk space, invalid parameters |
+| E701–E704 | scanning: area not set, low disk space, invalid parameters, sample areas overlap |
 | E801 | scan folder not found |
 | E901, E902 | G-code: syntax, unsupported command |
 

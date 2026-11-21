@@ -6,6 +6,7 @@
 Вывод (mc.export): только выделенные квадраты, ровно (поворот снят), фон прозрачный (PNG) или белый (JPG);
 DXF для AutoCAD — квадраты в мкм.
 """
+from .samples import per_sample as _per_sample
 import json, math, os, shutil
 import numpy as np
 import cv2
@@ -403,6 +404,7 @@ class Frames:
         self.st.close()
 
 
+@_per_sample
 def export(folder, fmt='png', scale=1.0, cells=False, dxf=True, max_mb=2000, margin=0, blend='multiband'):
     """Вывести только выделенные квадраты: ровно (поворот подложки снят), стык строго по крестам.
     fmt='png' — фон прозрачный, 'jpg' — белый. cells=True — ещё и каждый квадрат отдельным файлом.
@@ -500,6 +502,7 @@ def write_dxf(path, cells, pitch):
         f.write("\n".join(L_) + "\n")
 
 
+@_per_sample
 def clean(folder, confirm=False):
     """Удалить рабочие файлы скана: кадры, пачки, превью-кэш, большие мозаики. Остаются meta.json, index.csv,
     grid.json, join/positions_all.csv, stitch.json и папка export/. confirm=False — только показать."""

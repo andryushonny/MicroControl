@@ -22,10 +22,13 @@ class Area:
         """Центры кадров: список (строка, столбец, x, y) в порядке обхода. step — {'x':, 'y':} мкм."""
         nx = max(1, math.ceil((self.x1 - self.x0) / step['x'] - 0.05) + 1)   # допуск на округление
         ny = max(1, math.ceil((self.y1 - self.y0) / step['y'] - 0.05) + 1)
+        # кадры ровно от угла до угла: шаг подогнан (не больше заданного), последний кадр — точно в углу B
+        sx = (self.x1 - self.x0) / (nx - 1) if nx > 1 else step['x']
+        sy = (self.y1 - self.y0) / (ny - 1) if ny > 1 else step['y']
         out = []
         for r in range(ny):
             cols = range(nx) if path == 'rows' or r % 2 == 0 else range(nx - 1, -1, -1)
-            out += [(r, c, self.x0 + c * step['x'], self.y0 + r * step['y']) for c in cols]
+            out += [(r, c, self.x0 + c * sx, self.y0 + r * sy) for c in cols]
         return out
 
     def size(self, step):
@@ -48,12 +51,12 @@ def focus_z(pts, X, Y, k=4):
     return float((w * z[near]).sum() / w.sum())
 
 
-def plan(m, area=None, focus='auto', overlap=0.2, path='snake'):
+def plan(m, area=None, focus='auto', overlap=0.2, path='snake', pts=None):
     """Программа скана в G-коде."""
     area = area or m.area
     if area is None:
         raise SafetyError('E701', "Mark two corners in m.manual() (keys 1 and 2) or pass area=mc.Area(x0, y0, x1, y1).")
-    pts = getattr(m, '_focus_pts', None) or []
+    pts = (getattr(m, '_focus_pts', None) or []) if pts is None else pts
     if focus == 'auto':                    # точки фокуса из m.manual() и галочка «по углам» — Z по ним
         focus = 'points' if (pts and getattr(m, '_use_fp', True)) else 'off'
     if focus not in ('plane', 'each', 'off', 'points'):

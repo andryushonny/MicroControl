@@ -145,7 +145,7 @@ m.close(); print("Moving: OK")
 print("\n== Minimap ==")
 import microcontrol.manual as MAN
 m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp())
-st = m._frame_step(1 - mc.config.SCAN_OVERLAP)
+st = m._frame_step()                      # клетка мини-карты = кадр камеры
 m.area = mc.Area(0, 0, st['x'] * 29, st['y'] * 19)
 for x, y in ((0, 0), (14, 10), (34, 10)):
     m._travel(x=st['x'] * x, y=st['y'] * y)
@@ -215,8 +215,9 @@ def mos_xy(S):
     return fr.P[k] + np.array([fr.W / 2, fr.H / 2]) + A @ (true[k] - S / d)
 def view_xy(S):
     M = mos_xy(S)
-    s = min(1280 / fr.size[0], 900 / fr.size[1]) * 0.95
-    v = np.array([640, 450]) + s * (M - fr.size / 2)
+    Wsc = 1280 - mc.samples.CAR_W                                   # справа — карусель образцов
+    s = min(Wsc / fr.size[0], 900 / fr.size[1]) * 0.95
+    v = np.array([Wsc / 2, 450]) + s * (M - fr.size / 2)
     return int(v[0]) + 3, int(v[1]) - 2
 sq = {n: mos_xy(world(*ij)) for n, ij in (('a', (2.5, 2.5)), ('b', (4.5, 3.5)), ('c', (3.5, 2.5)), ('e', (2.5, 4.5)))}
 fr.close()
@@ -250,3 +251,33 @@ assert n1 < n0, (n0, n1)
 mc.clean(f, confirm=True)
 assert not os.path.exists(os.path.join(f, 'frames'))
 print("Stitch / mask / export: OK")
+
+# 15. Несколько образцов: области 1, 2, 3 по очереди, без перекрытия -> сеанс -> карусель в view
+print("\n== Samples ==")
+import microcontrol.manual as M
+m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp())
+m._world.size = (640, 480); m.focus()
+R_, D_, L_, U_ = 65363, 65364, 65361, 65362
+keys = [ord('1'), -1, R_, -1, R_, -1, D_, -1, ord('f'), -1, ord('2'), -1]          # образец 1: 3 x 2 кадра, точки 1-3
+keys += [R_, -1, R_, -1, ord('1'), -1, R_, -1, D_, -1, ord('2'), -1]                 # образец 2: точки 4-5
+keys += [L_, -1, L_, -1, ord('1'), -1]                                              # внутри образца 2 -> отказ
+keys += [L_, -1, L_, -1, L_, -1, U_, -1, U_, -1, U_, -1, ord('1'), -1,                # новый угол 1 над образцом 1,
+         D_, -1, D_, -1, D_, -1, ord('2'), -1, ord('c'), -1, 27]                     # угол 2 внутри него -> отказ, отмена
+M.run(m, fullscreen=False, _keys=keys)
+regs = m._regions
+assert len(regs) == 2 and m._pending is None, (len(regs), m._pending)
+assert [n for n, k, _ in mc.samples.numbered(m)] == [1, 2, 3, 4, 5] and [len(r['pts']) for r in regs] == [3, 2]
+fw_, fh_ = m.frame_size
+assert not mc.samples.overlap(mc.samples.rect(regs[0], fw_, fh_), mc.samples.rect(regs[1], fw_, fh_))
+ses = m.scan(name='Two samples')
+m.close()
+subs = mc.samples.samples(ses)
+assert [os.path.basename(x) for x in subs] == ['sample_01', 'sample_02'], subs
+assert all(json.load(open(os.path.join(x, 'meta.json')))['sample_index'] == i + 1 for i, x in enumerate(subs))
+r = mc.stitch(ses, verbose=False)
+assert len(r) == 2, r
+Wsc = 1280 - mc.samples.CAR_W
+mc.view(ses, _keys=[-1, ord('.'), -1, -1, ('click', 1280 - 20, 52), -1, ('click', 1280 - 20, 52), -1, -1, 27])
+left = mc.samples.samples(ses)
+assert [os.path.basename(x) for x in left] == ['sample_02'] and os.path.isdir(os.path.join(ses, '_removed', 'sample_01'))   # x у 1-го
+print("Samples: 2 areas, focus points 1-5, two folders, carousel switch and remove: OK")

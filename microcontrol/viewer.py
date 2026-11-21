@@ -179,7 +179,7 @@ def _preview(folder, w):
                     kk = (img.shape[1] - 2) / ms_['size'][0] * k
                     ov = small.copy()
                     for q in ms_['px']:
-                        cv2.fillPoly(ov, [np.int32(np.round(q * kk))], (40, 120, 40))
+                        cv2.fillPoly(ov, [np.int32(np.round(q * kk))], _SM.dim(_SM.sample_color(folder), 0.6))
                     small = cv2.addWeighted(ov, 0.7, small, 0.3, 0)
             except Exception:
                 pass
@@ -636,7 +636,7 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
             Rm = R()
             t = mid() - Rm @ np.array([D / 2, D / 2])
             img = cv2.warpAffine(big, np.float32(np.c_[Rm, t]), (Wv, Hv), flags=cv2.INTER_LINEAR)
-        red, green, yellow = (40, 40, 255), (60, 200, 60), (0, 220, 255)
+        red, green, yellow = (40, 40, 255), SM.sample_color(folder), (0, 220, 255)   # выбранные — цветом выделения
         base_, void_ = img.copy(), (img <= 22).all(2)                # вне мозаики сетку и заливку не рисуем
         if g.ready():
             lo = np.min([from_view(v) for v in ((0, 0), (Wv, 0), (0, Hv), (Wv, Hv))], 0)

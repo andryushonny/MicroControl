@@ -649,3 +649,61 @@ M.run(m, fullscreen=False, _keys=[ord('v'), -1, -1])
 VW.view = _v0
 assert opened and opened[0] == m.sample.selections[-1].latest.folder, (opened, m.sample.selections)
 m.close(); print("Undo / redo in manual mode (selections and moves), ruler, scan + stitch (S) and view (V) from the window: OK")
+
+# ------------------------------------------------------------------ 24. Маска выделения: каждая замкнутая фигура — отдельно
+import microcontrol.manual as M
+from microcontrol import samples as SM
+from microcontrol.mask import Grid
+m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp()); m.focus()
+fw, fh = m.frame_size
+m.area = mc.Area(0, 0, 3 * fw, 2 * fh)
+f = m.scan(); mc.stitch(f, verbose=False)
+px_um = json.load(open(os.path.join(f, 'meta.json')))['pixel_size_um']
+g = Grid(f); p0 = np.array([150.0, 120.0]); a_ = 100 / px_um
+g.cr.add(p0); g.cr.add(p0 + (a_, 0)); g.cr.add(p0 + (0, a_))
+g.selected |= {(0, 0), (1, 0), (3, 1), (3, 2)}                     # две фигуры: 2 и 2 квадрата
+g.save(px_um)
+parts = SM.mask_parts(m, 0)
+assert [len(p['cells']) for p in parts] == [2, 2], parts
+print(SM.goto_mask(m, 0, 1))
+print(SM.delete_mask(m, 0, 1))                                      # удалить одну фигуру — вторая остаётся
+assert [p['cells'] for p in SM.mask_parts(m, 0)] == [parts[0]['cells']], SM.mask_parts(m, 0)
+shots = []; _o = M.cv2.imshow
+M.cv2.imshow = lambda w, img: (shots.append(img.copy()), _o(w, img))
+M.run(m, fullscreen=False, _keys=[-1, -1])
+M.cv2.imshow = _o
+M.cv2.imwrite('/tmp/mask_parts.png', shots[-1])
+m.close(); print("Mask parts as their own selections: go, delete one: OK")
+
+# ------------------------------------------------------------------ 25. Порядок карточек перетаскиванием, прокрутка карусели
+import copy as _cp
+import microcontrol.manual as M
+from microcontrol import samples as SM
+m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp()); m.focus()
+fw, fh = m.frame_size
+m.area = mc.Area(0, 0, 2 * fw, 2 * fh)
+SM.init_areas(m)
+r0 = m._regions[0]
+for i in range(1, 12):                                              # 12 выделений рядом, не друг в друге
+    r = _cp.deepcopy(r0); r['num'] = i + 1; r['uid'] = f"u{i}"; r['thumbs'] = []
+    d_ = 3 * fw * i
+    r['A'] = (r0['A'][0] + d_, r0['A'][1]); r['B'] = (r0['B'][0] + d_, r0['B'][1])
+    m._regions.append(r)
+m._area_seq = 12
+top = [m._regions[k]['num'] for k, d in SM.tree(m)]
+assert top == list(range(1, 13)), top
+print(SM.reorder(m, 2, 0))                                          # Selection 3 перед Selection 1
+assert [m._regions[k]['num'] for k, d in SM.tree(m)][:3] == [3, 1, 2]
+assert m.sample.data['selections'][2]['rank'] == 0                  # порядок — в sample.json
+X = 1280 - mc.samples.CAR_W + 60
+shots = []; _o = M.cv2.imshow
+M.cv2.imshow = lambda w, img: (shots.append(img.copy()), _o(w, img))
+M.run(m, fullscreen=False, _keys=[-1, ('car', X, 70), ('cmove', X, 200), ('cmove', X, 300), -1,
+                                  ('cdrop', X, 300), -1,                                   # первую карточку — ниже
+                                  ('carw', X, 300, -1), ('carw', X, 300, -1), -1,          # колесо
+                                  ('car', 1279, 60), ('cmove', 1279, 600), ('cdrop', 1279, 600), -1, -1])   # полоса
+M.cv2.imshow = _o
+M.cv2.imwrite('/tmp/car_drag.png', shots[3]); M.cv2.imwrite('/tmp/car_scroll.png', shots[-1])
+order = [m._regions[k]['num'] for k, d in SM.tree(m)]
+assert order[0] != 3 and 3 in order[1:5], order                     # карточка Selection 3 переехала вниз
+m.close(); print("Drag and drop order of selections, carousel scroll (wheel, bar): OK", order[:5])

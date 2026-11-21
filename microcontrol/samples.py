@@ -189,11 +189,53 @@ def tree(m):
 
     def walk(k, d):
         out.append((k, d))
-        for c in sorted((c for c in ks if par[c] == k), key=lambda c: (obj(m, m._regions[c]), m._regions[c]['num'])):
+        for c in siblings(m, k, par):
             walk(c, d + 1)
-    for k in sorted((k for k in ks if par[k] is None), key=lambda k: (obj(m, m._regions[k]), m._regions[k]['num'])):
+    for k in siblings(m, None, par):
         walk(k, 0)
     return out
+
+
+def siblings(m, p, par=None):
+    """Выделения, лежащие прямо в выделении p (None — верхний слой), в порядке карусели: сначала по 'rank'
+    (порядок, заданный перетаскиванием), новые — в конце, по объективу и номеру."""
+    par = par if par is not None else {k: parent(m, k) for k in range(len(m._regions))}
+    key = lambda c: (m._regions[c].get('rank', 1e9), obj(m, m._regions[c]), m._regions[c]['num'])
+    return sorted((c for c in range(len(m._regions)) if par[c] == p), key=key)
+
+
+def reorder_ok(m, src, dst):
+    """Можно ли поставить src рядом с dst (один слой)."""
+    if isinstance(src, tuple) or isinstance(dst, tuple):
+        return isinstance(src, tuple) and isinstance(dst, tuple) and src[1] == dst[1]
+    return max(src, dst) < len(m._regions) and parent(m, src) == parent(m, dst)
+
+
+def reorder(m, src, dst, after=False):
+    """Перетаскивание в карусели: поставить src перед dst (after=True — после). src, dst — индексы выделений
+    одного слоя (лежат прямо в одном выделении) или части маски одного выделения ('m', k, i).
+    Возвращает сообщение; порядок хранится в sample.json ('rank', 'mask_order')."""
+    if src == dst:
+        return None
+    if isinstance(src, tuple) and isinstance(dst, tuple) and src[1] == dst[1]:
+        k = src[1]
+        ps = mask_parts(m, k)
+        ids = list(range(len(ps)))
+        ids.remove(src[2])
+        ids.insert(ids.index(dst[2]) + (1 if after else 0), src[2])
+        m._regions[k]['mask_order'] = [list(ps[i]['cells'][0]) for i in ids]
+        persist(m)
+        return f"Mask {num(m, k)}.{src[2] + 1} moved: now {num(m, k)}.{ids.index(src[2]) + 1}"
+    if isinstance(src, int) and isinstance(dst, int) and max(src, dst) < len(m._regions) \
+            and parent(m, src) == parent(m, dst):
+        sib = siblings(m, parent(m, src))
+        sib.remove(src)
+        sib.insert(sib.index(dst) + (1 if after else 0), src)
+        for i, c in enumerate(sib):
+            m._regions[c]['rank'] = i
+        persist(m)
+        return f"Selection {num(m, src)} moved {'after' if after else 'before'} Selection {num(m, dst)}"
+    return "Drop it next to a card of the same layer: selections inside the same selection, masks of the same selection"
 
 
 def layer_name(m, k):
@@ -364,6 +406,97 @@ def goto_area(m, k):
     return (f"Selection {reg['num']} ({obj(m, reg)}x): at its nearest frame"
             + (f", focus Z {z_t:.1f} um (from its points)" if z_t is not None else "")
             + (f". It was marked with {obj(m, reg)}x, now {m.objective}x: Z not changed" if other else ""))
+
+
+def drive_to(m, X, Y, z=None):
+    """Безопасно поехать в точку (настоящие мкм): вниз (если z ниже), X/Y отрезками ≤ max_jump, вверх кусками."""
+    if z is not None and z < m.position.z:
+        m.goto(z=z)
+    x_t, y_t = X - m._off['x'], Y - m._off['y']
+    p0 = m.position
+    nleg = max(1, int(np.ceil(np.hypot(x_t - p0.x, y_t - p0.y) / (m.max_jump * 0.95))))
+    for i_ in range(1, nleg + 1):
+        m.goto(x=p0.x + (x_t - p0.x) * i_ / nleg, y=p0.y + (y_t - p0.y) * i_ / nleg)
+    while z is not None and z > m.position.z + 0.5 * m.motor_step:
+        m.goto(z=min(z, m.position.z + m.max_move_z * 0.95))
+
+
+def mask_of(m, k):
+    """Маска выделения k — выбранные квадраты его последней съёмки (dict из selections.marked_squares) или None.
+    Кэш — пока не изменился grid.json (карусель перерисовывается часто)."""
+    try:
+        from .project import Selection
+        from .selections import marked_squares
+        sc_ = Selection(m.sample, m._regions[k]).latest
+        if not sc_:
+            return None
+        gp = os.path.join(sc_.folder, 'grid.json')
+        key = (sc_.folder, os.path.getmtime(gp) if os.path.exists(gp) else 0)
+        if _MASKS.get(sc_.folder, (None,))[0] != key:
+            _MASKS[sc_.folder] = (key, marked_squares(sc_.folder))
+        return _MASKS[sc_.folder][1]
+    except Exception:
+        return None
+
+
+_MASKS = {}
+
+
+def mask_parts(m, k):
+    """Маска выделения k по частям: каждая замкнутая фигура (квадраты, соседние по стороне) — отдельно.
+    [dict(cells, um, folder)]: в порядке, заданном перетаскиванием ('mask_order'), остальные — большие первыми."""
+    mk = mask_of(m, k)
+    if not mk:
+        return []
+    idx = {c: i for i, c in enumerate(mk['cells'])}
+    left, parts = set(idx), []
+    while left:
+        st, comp = [left.pop()], []
+        while st:
+            c = st.pop()
+            comp.append(c)
+            for d in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                n = (c[0] + d[0], c[1] + d[1])
+                if n in left:
+                    left.remove(n)
+                    st.append(n)
+        parts.append(dict(cells=sorted(comp), um=[mk['um'][idx[c]] for c in sorted(comp)], folder=mk['folder']))
+    parts.sort(key=lambda p_: (-len(p_['cells']), p_['cells'][0]))
+    mo = [tuple(c) for c in m._regions[k].get('mask_order') or []]        # порядок, заданный перетаскиванием
+    return sorted(parts, key=lambda p_: mo.index(p_['cells'][0]) if p_['cells'][0] in mo else len(mo))
+
+
+def goto_mask(m, k, part=0):
+    """Поехать к ближайшему квадрату части маски выделения k (Z — по точкам фокуса выделения)."""
+    from .scan import focus_z
+    ps = mask_parts(m, k)
+    if not ps or part >= len(ps):
+        return "No mask"
+    rp = np.array([m.real_position.x, m.real_position.y])
+    c = min((q.mean(0) for q in ps[part]['um']), key=lambda c_: np.hypot(*(c_ - rp)))
+    reg = m._regions[k]
+    z = focus_z(reg['pts'], c[0], c[1]) - m._off['z'] if reg['pts'] and obj(m, reg) == m.objective else None
+    drive_to(m, c[0], c[1], z)
+    return f"Mask {reg['num']}.{part + 1}: at its nearest square ({len(ps[part]['cells'])} squares)"
+
+
+def delete_mask(m, k, part=0):
+    """Удалить часть маски выделения k: её квадраты снимаются с выбора в последней съёмке (остальные части
+    остаются; снятые — в grid.json, 'selected_removed')."""
+    import json as _j
+    ps = mask_parts(m, k)
+    if not ps or part >= len(ps):
+        return "No mask"
+    gp = os.path.join(ps[part]['folder'], 'grid.json')
+    d = _j.load(open(gp, encoding='utf-8'))
+    gone = {tuple(c) for c in ps[part]['cells']}
+    d['selected_removed'] = d.get('selected_removed', []) + [list(c) for c in sorted(gone)]
+    d['selected'] = [c for c in d.get('selected', []) if tuple(c) not in gone]
+    with open(gp, 'w', encoding='utf-8') as f:
+        _j.dump(d, f, indent=1)
+    _MASKS.pop(ps[part]['folder'], None)
+    return (f"Mask {m._regions[k]['num']}.{part + 1} deleted ({len(gone)} squares); "
+            f"{len(ps) - 1} other part{'s' if len(ps) != 2 else ''} stay")
 
 
 def areas_info(m):
@@ -597,7 +730,8 @@ def carousel(H, items, sel, scroll=0, title="Selections", go=True, hover=None):
     if content > H:                                                       # полоса прокрутки
         hgt = max(20, int(H * H / content))
         top_ = int((H - hgt) * scroll / max(1, content - H))
-        cv2.rectangle(img, (W - 3, top_), (W - 1, top_ + hgt), (120, 120, 120), -1)
+        cv2.rectangle(img, (W - 6, top + 1), (W - 1, H - 1), (44, 44, 50), -1)
+        cv2.rectangle(img, (W - 6, max(top + 1, top_)), (W - 1, top_ + hgt), (130, 130, 136), -1)
     cv2.line(img, (0, 0), (0, H), (70, 70, 78), 1)
     return img, hits, content
 

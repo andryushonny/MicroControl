@@ -372,12 +372,12 @@ def minimap(img, m, A, B, size=MAP_W, zcolor=None, others=(), right=0):
     if polys:
         ovm = sub.copy()
         gx1m, gy1m = gx0 + gw, gy0 + gh
-        for q in polys:
+        for q, sn in polys:                                              # цвет своего выделения, темнее
             pts = np.int32([to(*f(x_ - m._off['x'], y_ - m._off['y'])) for x_, y_ in q])
             if pts[:, 0].max() < gx0 or pts[:, 0].min() > gx1m or pts[:, 1].max() < gy0 or pts[:, 1].min() > gy1m:
                 continue
-            cv2.fillPoly(ovm, [pts], (40, 105, 40))
-            cv2.polylines(ovm, [pts], True, (70, 160, 70), 1, cv2.LINE_AA)
+            cv2.fillPoly(ovm, [pts], SM.dim(SM.color(sn - 1), 0.5))
+            cv2.polylines(ovm, [pts], True, SM.dim(SM.color(sn - 1), 0.8), 1, cv2.LINE_AA)
         sub[gy0:int(gy1m), gx0:int(gx1m)] = cv2.addWeighted(ovm, 0.75, sub, 0.25, 0)[gy0:int(gy1m), gx0:int(gx1m)]
     a_, b_ = to(px - sx / 2, py - sy / 2), to(px + sx / 2, py + sy / 2)  # жёлтое — кадр = клетка карты
     ov_ = sub.copy()
@@ -572,6 +572,12 @@ def _run(m, fullscreen=False, _keys=None):
         y -= UI.MENU_H
         if ev == cv2.EVENT_MOUSEMOVE:
             hover[0], hover[1] = (x, y), time.monotonic()
+        if car.get('press') is not None:                 # тянут карточку или полосу прокрутки карусели
+            if ev == cv2.EVENT_MOUSEMOVE and flags & cv2.EVENT_FLAG_LBUTTON:
+                clicks.append(('cmove', x, y))
+            elif ev == cv2.EVENT_LBUTTONUP or (ev == cv2.EVENT_MOUSEMOVE and not flags & cv2.EVENT_FLAG_LBUTTON):
+                clicks.append(('cdrop', x, y))
+            return
         if x >= W - SM.CAR_W and not zm['pan']:          # карусель образцов справа
             if ev == cv2.EVENT_LBUTTONDOWN:
                 clicks.append(('car', x, y))
@@ -622,6 +628,17 @@ def _run(m, fullscreen=False, _keys=None):
         nums = [n_ for n_, kk, _p in SM.numbered(m) if kk == k]
         return (f"{nums[0]}-{nums[-1]}" if len(nums) > 1 else str(nums[0])) if nums else "-"
 
+    def car_clamp(v):
+        return int(max(0, min(car.get('content', 0) - H + 20, v)))
+
+    def car_target(y):
+        """Куда бросить карточку: (элемент car['order'], после него?) по высоте y, или None."""
+        cards = [h_ for h_ in car.get('hits', []) if h_[4] == 'sel' and h_[5] < len(car.get('order', []))]
+        if not cards:
+            return None
+        h_ = min(cards, key=lambda h: 0 if h[1] <= y <= h[3] else min(abs(y - h[1]), abs(y - h[3])))
+        return car['order'][h_[5]], y > (h_[1] + h_[3]) / 2
+
     def car_items():
         """Карточки деревом слоёв: карта, под ней (с отступом) её участки большего увеличения и т. д.
         car['order'][позиция] -> индекс выделения (len(m._regions) — новое)."""
@@ -640,6 +657,13 @@ def _run(m, fullscreen=False, _keys=None):
                                      f"focus points {first_num(k)}"]
                               + ([f"put {o_}x in place to scan it"] if o_ != m.objective else [])))
             order.append(k)
+            for pi_, part in enumerate(SM.mask_parts(m, k)):   # маска: каждая замкнутая фигура — своя карточка
+                P_ = np.vstack(part['um'])
+                items.append(dict(title=f"Mask {SM.num(m, k)}.{pi_ + 1}", obj=f"{o_}x", color=SM.dim(SM.col(m, k), 0.7),
+                                  confirm=car['confirm'] == ('m', k, pi_), depth=depth + 1, muted=o_ != m.objective,
+                                  lines=[f"{len(part['cells'])} square{'s' if len(part['cells']) > 1 else ''}, "
+                                         f"{np.ptp(P_[:, 0]) / 1000:.2f} x {np.ptp(P_[:, 1]) / 1000:.2f} mm"]))
+                order.append(('m', k, pi_))
         if m._pending:
             k = len(m._regions)
             items.append(dict(title=f"Selection {SM.num(m, k)}", color=SM.col(m, k), thumbs=m._pending.get('thumbs', []),
@@ -979,14 +1003,14 @@ def _run(m, fullscreen=False, _keys=None):
                 rp_ = np.array([m.real_position.x, m.real_position.y])
                 rad_ = 1.5 * max(m.frame_size) / max(1.0, zm['z']) + 2 * max(m.frame_size)
                 ov_ = None
-                for q in polys_:
+                for q, sn in polys_:                        # цвет своего выделения, темнее
                     if np.abs(q.mean(0) - rp_).max() > rad_:
                         continue
                     pts = np.int32([to_v(S_) for S_ in q])
                     if ov_ is None:
                         ov_ = view[:, :Wl].copy()
-                    cv2.fillPoly(ov_, [pts], (30, 90, 30))
-                    cv2.polylines(view[:, :Wl], [pts], True, (60, 170, 60), 1, cv2.LINE_AA)
+                    cv2.fillPoly(ov_, [pts], SM.dim(SM.color(sn - 1), 0.45))
+                    cv2.polylines(view[:, :Wl], [pts], True, SM.dim(SM.color(sn - 1), 0.85), 1, cv2.LINE_AA)
                 if ov_ is not None:
                     view[:, :Wl] = cv2.addWeighted(ov_, 0.3, view[:, :Wl], 0.7, 0)
             if rul['on'] and rul['pts']:                    # линейка (точки — на образце: едут вместе с ним)
@@ -1189,6 +1213,20 @@ def _run(m, fullscreen=False, _keys=None):
             hv_ = (hx_[0] - (W - SM.CAR_W), hx_[1]) if hx_ is not None and hx_[0] >= W - SM.CAR_W else None
             pan_, hits_, cont_ = SM.carousel(H, items, sel_, car['scroll'], title="Selections", hover=hv_)
             car['hits'], car['content'] = hits_, cont_
+            car['scroll'] = car_clamp(car['scroll'])
+            dr_ = car.get('drag')
+            if dr_ is not None:                                # перетаскивание: куда ляжет карточка
+                tg_ = car_target(dr_['y'])
+                src_h = next((h for h in hits_ if h[4] == 'sel' and h[5] < len(car['order'])
+                              and car['order'][h[5]] == dr_['src']), None)
+                if src_h is not None:
+                    pan_[max(39, src_h[1]):max(39, src_h[3]), src_h[0]:src_h[2]] //= 2
+                th_ = next((h for h in hits_ if h[4] == 'sel' and h[5] < len(car['order'])
+                            and tg_ is not None and car['order'][h[5]] == tg_[0]), None)
+                if th_ is not None:
+                    ok_ = SM.reorder_ok(m, dr_['src'], tg_[0])
+                    yl_ = th_[3] - 1 if tg_[1] else th_[1] + 1
+                    cv2.line(pan_, (th_[0], yl_), (th_[2], yl_), (90, 220, 90) if ok_ else (80, 80, 230), 3)
             view[:, W - SM.CAR_W:] = pan_
             cv2.imshow(WIN, np.vstack([menu_img(W), view]))
             if n == 1:                                    # окно уже на экране: значок программы (Windows)
@@ -1213,13 +1251,72 @@ def _run(m, fullscreen=False, _keys=None):
                     menu_do(it_)
                 continue
             if c_[0] == 'carw':                                     # прокрутка карусели
-                car['scroll'] = int(max(0, min(car.get('content', 0) - H + 20, car['scroll'] - 60 * np.sign(c_[3]))))
+                car['scroll'] = car_clamp(car['scroll'] - 60 * np.sign(c_[3]))
+                continue
+            if c_[0] in ('cmove', 'cdrop'):                         # тянут: полосу прокрутки или карточку
+                pr_ = car.get('press')
+                if pr_ is None:
+                    continue
+                if pr_['what'] == 'bar':
+                    ct_ = max(car.get('content', 0), H + 1)
+                    car['scroll'] = car_clamp(pr_['s0'] + (c_[2] - pr_['y']) * ct_ / H)
+                elif pr_['what'] == 'card':
+                    if abs(c_[2] - pr_['y']) + abs(c_[1] - pr_['x']) > 8:
+                        car['drag'] = dict(src=pr_['k'], x=c_[1], y=c_[2])
+                    if car.get('drag') and c_[0] == 'cmove':        # у края — прокрутить
+                        if c_[2] < 60:
+                            car['scroll'] = car_clamp(car['scroll'] - 20)
+                        elif c_[2] > H - 30:
+                            car['scroll'] = car_clamp(car['scroll'] + 20)
+                if c_[0] == 'cdrop':
+                    car['press'] = None
+                    dr_ = car.pop('drag', None)
+                    if dr_ is not None:
+                        tg_ = car_target(c_[2])
+                        if tg_ is not None and tg_[0] != dr_['src']:
+                            r_ = SM.reorder(m, dr_['src'], tg_[0], tg_[1])
+                            if r_:
+                                msg, msg_t = r_, time.monotonic()
                 continue
             if c_[0] == 'car':                                      # щелчок по карусели
-                h_ = SM.hit(car['hits'], c_[1] - (W - SM.CAR_W), c_[2])
+                xc_ = c_[1] - (W - SM.CAR_W)
+                if xc_ >= SM.CAR_W - 8 and car.get('content', 0) > H:   # полоса прокрутки
+                    car['press'] = dict(what='bar', y=c_[2], s0=car['scroll'])
+                    continue
+                h_ = SM.hit(car['hits'], xc_, c_[2])
+                if h_ and h_[0] == 'sel' and h_[1] < len(car.get('order', [])) and \
+                        car['order'][h_[1]] != len(m._regions):       # карточку можно перетащить
+                    car['press'] = dict(what='card', k=car['order'][h_[1]], x=c_[1], y=c_[2])
                 if h_:
                     act, k = h_
                     k = car['order'][k] if k < len(car.get('order', [])) else k
+                    if isinstance(k, tuple):                        # часть маски выделения
+                        km, kp = k[1], k[2]
+                        if act == 'sel':
+                            car['confirm'] = None
+                            msg = f"Mask {SM.num(m, km)}.{kp + 1}: Go drives to its nearest square, x deletes only it"
+                        elif act == 'del':
+                            if car['confirm'] == k:
+                                msg = SM.delete_mask(m, km, kp)
+                                car['confirm'] = None
+                                L.event('MAN-008', msg + ".")
+                            else:
+                                car['confirm'] = k
+                                msg = f"Click x again to delete mask {SM.num(m, km)}.{kp + 1} (the other parts stay)"
+                        elif act == 'go':
+                            car['confirm'] = None
+                            hold_ = live.hold() if live is not None else None
+                            try:
+                                if hold_:
+                                    hold_.__enter__()
+                                msg = SM.goto_mask(m, km, kp)
+                            except MicroControlError as e:
+                                msg = str(e)
+                            finally:
+                                if hold_:
+                                    hold_.__exit__()
+                        msg_t = time.monotonic()
+                        continue
                     if act == 'sel':
                         car['confirm'] = None
                         if k < len(m._regions):

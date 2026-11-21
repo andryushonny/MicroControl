@@ -290,7 +290,13 @@ def marked_squares(folder):
                 M = np.vstack([Lin.T, S.mean(0) - Pc.mean(0) @ Lin.T])
             px = [np.array([g.cr.point(i, j), g.cr.point(i + 1, j), g.cr.point(i + 1, j + 1), g.cr.point(i, j + 1)],
                            float) for i, j in sorted(g.selected)]
-            out = dict(px=px, um=[np.c_[q, np.ones(4)] @ M for q in px], size=Pm.max(0) + (W, H))
+            try:
+                num = int(json.load(open(os.path.join(folder, 'meta.json'), encoding='utf-8')).get('selection') or 1)
+            except Exception:
+                num = 1
+            out = dict(px=px, um=[np.c_[q, np.ones(4)] @ M for q in px], size=Pm.max(0) + (W, H), num=num,
+                       cells=[tuple(c) for c in sorted(g.selected)],
+                       center_um=np.mean([np.c_[q, np.ones(4)] @ M for q in px], axis=(0, 1)), folder=folder)
     except Exception:
         out = None
     _SQ[folder] = (key, out)
@@ -298,8 +304,8 @@ def marked_squares(folder):
 
 
 def marked_all(root, every=3.0):
-    """Все выбранные квадраты всех сканов в папке сканов (настоящие мкм столика): [4x2]. Обновляется не чаще
-    раза в every секунд."""
+    """Все выбранные квадраты последних съёмок образца (настоящие мкм столика): [(4x2, номер выделения)].
+    Обновляется не чаще раза в every секунд."""
     import time
     now = time.monotonic()
     c = _ALL.get(root)
@@ -309,6 +315,6 @@ def marked_all(root, every=3.0):
     for f in _folders(root, latest=True):                    # на картах — последняя съёмка выделения
         r = marked_squares(f)
         if r:
-            polys += r['um']
+            polys += [(q, r['num']) for q in r['um']]
     _ALL[root] = (now, polys)
     return polys

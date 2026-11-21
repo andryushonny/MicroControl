@@ -82,7 +82,7 @@ Chosen squares of every scan also appear dark green on the mini map and on the l
 
 ## Projects and samples
 
-Work is grouped like this: **Project** (a piece of work, with a description) → **Sample** (one substrate on the stage: its own selections and coordinates, a description) → **Selection** (an area on one objective; layers: map 10x > details 50x > 100x) → **Scan** (every scan of a selection is a new version) → grid, chosen squares, drawing. Selections are saved in the sample and come back when it is opened again; the chosen squares on the maps, `m.list()` and the viewer show only the open sample.
+Work is grouped like this: **Project** (a piece of work, with a description) → **Sample** (one substrate on the stage: its own selections and coordinates, a description) → **Selection** (an area on one objective; layers: map 10x > details 50x > 100x) → **Scan** (every scan of a selection is a new version) → grid, chosen squares, drawing. Selections are saved in the sample and come back when it is opened again; the chosen squares on the maps, `m.list()` and the viewer show only the open sample. In the list on the right each closed figure of chosen squares is its own card (*Mask N.k*, a darker shade of its selection) that can be deleted alone; cards can be reordered by dragging, the list scrolls.
 
 ```python
 p = mc.Project("Graphene", "flakes for transport")   # open or create

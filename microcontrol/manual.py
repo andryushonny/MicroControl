@@ -51,7 +51,7 @@ HELP = ["Shift+Esc: Exit (or close the window)", "P: Hide / show the left panel"
         "L: Light on / off   I: Laser on / off   W: White balance (aim at an empty place)   Space: Picture",
         "R: Ruler: click two points (distance, um)   0: Zero here   Shift+0: Real coordinates",
         "Wheel: zoom   Drag (middle button too): move the zoomed picture   Z: whole frame",
-        "Shift+drag over a mask (chosen squares): move the mask if it sits off the real crosses (Ctrl+Z undoes)",
+        "J: masks snap to the real crosses by themselves (on by default)   Shift+drag over a mask: move it by hand (Ctrl+Z undoes)",
         "T: Turn the camera picture by 180 degrees (remembered)",
         "[ / ]: Arrows left-right / up-down the other way; the mini map always follows the arrows (remembered)",
         "O: check with the camera which way the picture moves",
@@ -374,11 +374,12 @@ def minimap(img, m, A, B, size=MAP_W, zcolor=None, others=(), right=0):
         ovm = sub.copy()
         gx1m, gy1m = gx0 + gw, gy0 + gh
         for q, sn, _f in polys:                                          # цвет своего выделения, темнее
-            pts = np.int32([to(*f(x_ - m._off['x'], y_ - m._off['y'])) for x_, y_ in q])
-            if pts[:, 0].max() < gx0 or pts[:, 0].min() > gx1m or pts[:, 1].max() < gy0 or pts[:, 1].min() > gy1m:
+            pf = np.array([to(*f(x_ - m._off['x'], y_ - m._off['y'])) for x_, y_ in q], float)
+            if pf[:, 0].max() < gx0 or pf[:, 0].min() > gx1m or pf[:, 1].max() < gy0 or pf[:, 1].min() > gy1m:
                 continue
-            cv2.fillPoly(ovm, [pts], SM.dim(SM.color(sn - 1), 0.5))
-            cv2.polylines(ovm, [pts], True, SM.dim(SM.color(sn - 1), 0.8), 1, cv2.LINE_AA)
+            pts = np.int32(np.round(pf * 16))                            # с точностью 1/16 px: ровные наклонные края
+            cv2.fillPoly(ovm, [pts], SM.dim(SM.color(sn - 1), 0.5), cv2.LINE_AA, 4)
+            cv2.polylines(ovm, [pts], True, SM.dim(SM.color(sn - 1), 0.8), 1, cv2.LINE_AA, 4)
         sub[gy0:int(gy1m), gx0:int(gx1m)] = cv2.addWeighted(ovm, 0.75, sub, 0.25, 0)[gy0:int(gy1m), gx0:int(gx1m)]
     a_, b_ = to(px - sx / 2, py - sy / 2), to(px + sx / 2, py + sy / 2)  # жёлтое — кадр = клетка карты
     ov_ = sub.copy()
@@ -1002,8 +1003,68 @@ def _run(m, fullscreen=False, _keys=None):
             while tgt['z'] > m.position.z + 0.5 * m.motor_step:
                 m.goto(z=min(tgt['z'], m.position.z + m.max_move_z * 0.95))
 
+    snp = dict(on=True, thr=None, res=None, pos=None, t=0.0, done=set())   # маски сами садятся на кресты (J)
+
+    def snap_step():
+        """Столик постоял — сравнить живой кадр с мозаикой маски рядом (в потоке) и поправить её сдвиг."""
+        if snp['res'] is not None:                         # результат потока
+            fd_, d_, r_ = snp.pop('res')
+            t0_ = snp.pop('t0', 0.0)
+            snp['res'], snp['thr'] = None, None
+            if snp.get('hand', {}).get(fd_, -1) > t0_:     # пока считали, маску сдвинули рукой — её слово
+                return None
+            lim_ = 0.45 * min(m.frame_size)
+            if d_ is not None and 0.3 < np.hypot(*d_) < lim_:
+                from .selections import marked_squares, shift_mask
+                if fd_ not in mshift0:
+                    mk_ = marked_squares(fd_)
+                    mshift0[fd_] = tuple(mk_['shift_um']) if mk_ else (0.0, 0.0)
+                mshift[fd_] = tuple(map(float, shift_mask(fd_, d_)))
+                SM._MASKS.pop(fd_, None)
+                L.event('MAN-010', f"Mask of {fd_} snapped to the crosses by {d_[0]:+.1f}, {d_[1]:+.1f} um "
+                                   f"(match {r_:.2f}).")
+                return f"Mask snapped to the crosses: {d_[0]:+.1f}, {d_[1]:+.1f} um (J: off, Ctrl+Z: back)"
+            return None
+        if not snp['on'] or snp['thr'] is not None or mdr['on'] or mdr.get('fd'):
+            return None
+        key_ = (m._p['x'], m._p['y'], m._p['z'], m.objective)
+        if key_ != snp['pos']:
+            snp['pos'], snp['t'] = key_, time.monotonic()
+            return None
+        if time.monotonic() - snp['t'] < 0.6:              # кадр — уже после остановки
+            return None
+        from .selections import marked_all
+        P_ = np.array([m._p['x'], m._p['y']], float) * m.motor_step
+        r_ = 0.75 * max(m.frame_size)
+        fds = [fd for fd in dict.fromkeys(fd for q, sn, fd in marked_all(m.dirs['scans']) if np.abs(q.mean(0) - P_).max() < r_)
+               if (key_, fd) not in snp['done']]
+        if not fds:
+            return None
+        fd_ = fds[0]
+        snp['done'].add((key_, fd_))
+        img_, K_, st_ = (live.img.copy() if live is not None else m.image(0)), m._pixels_per_step(), m.motor_step
+
+        def work():
+            try:
+                from .snap import offset
+                d_, r2_ = offset(fd_, img_, P_, K_, st_)
+            except Exception as e:
+                d_, r2_ = None, str(e)
+            snp['res'] = (fd_, d_, r2_ if d_ is not None else 0.0)
+        snp['t0'] = time.monotonic()
+        snp['thr'] = threading.Thread(target=work, daemon=True)
+        snp['thr'].start()
+        return None
+
     h_last = (h_sig(), h_snap())
     while True:
+        try:
+            m_ = snap_step()
+            if m_:
+                msg, msg_t = m_, time.monotonic()
+        except Exception as e:
+            snp['thr'], snp['res'] = None, None
+            L.event('MAN-010', f"Mask snap skipped: {e}")
         sg_ = h_sig()
         if sg_ != h_last[0]:                              # что-то сделано: в историю
             new_ = h_snap()
@@ -1046,11 +1107,11 @@ def _run(m, fullscreen=False, _keys=None):
                         q = q + mdr['d']
                     if np.abs(q.mean(0) - rp_).max() > rad_:
                         continue
-                    pts = np.int32([to_v(S_) for S_ in q])
+                    pts = np.int32(np.round(np.array([to_v(S_) for S_ in q], float) * 16))   # 1/16 px
                     if ov_ is None:
                         ov_ = view[:, :Wl].copy()
-                    cv2.fillPoly(ov_, [pts], SM.dim(SM.color(sn - 1), 0.45))
-                    cv2.polylines(view[:, :Wl], [pts], True, SM.dim(SM.color(sn - 1), 0.85), 1, cv2.LINE_AA)
+                    cv2.fillPoly(ov_, [pts], SM.dim(SM.color(sn - 1), 0.45), cv2.LINE_AA, 4)
+                    cv2.polylines(view[:, :Wl], [pts], True, SM.dim(SM.color(sn - 1), 0.85), 1, cv2.LINE_AA, 4)
                 if ov_ is not None:
                     view[:, :Wl] = cv2.addWeighted(ov_, 0.3, view[:, :Wl], 0.7, 0)
             if rul['on'] and rul['pts']:                    # линейка (точки — на образце: едут вместе с ним)
@@ -1322,6 +1383,8 @@ def _run(m, fullscreen=False, _keys=None):
                                 mshift0[fd_] = tuple(mk_['shift_um']) if mk_ else (0.0, 0.0)
                             mshift[fd_] = tuple(map(float, shift_mask(fd_, d_)))
                             SM._MASKS.pop(fd_, None)
+                            snp.setdefault('hand', {})[fd_] = time.monotonic()
+                            snp['done'].add(((m._p['x'], m._p['y'], m._p['z'], m.objective), fd_))
                             msg, msg_t = (f"Mask moved by {d_[0]:+.1f}, {d_[1]:+.1f} um (total {mshift[fd_][0]:+.1f}, "
                                           f"{mshift[fd_][1]:+.1f}); Ctrl+Z undoes"), time.monotonic()
                 continue
@@ -1589,6 +1652,11 @@ def _run(m, fullscreen=False, _keys=None):
             elif ch in 'fa' and ch:                        # F (и A): автофокус
                 r = m.focus()
                 msg = f"Focused at Z {r['Z']}" + ("  (weak peak)" if 'Note' in r else "")
+            elif ch == 'j':                                # маски сами садятся на кресты: вкл. / выкл.
+                snp['on'] = not snp['on']
+                snp['done'].clear()
+                msg = ("Masks snap to the real crosses by themselves (the camera picture is matched with the scan)"
+                       if snp['on'] else "Masks stay where they are (J: snap again)")
             elif ch == 'k':                                # запомнить Z здесь как точку фокуса выделения
                 msg = SM.add_point(m)
                 L.event('MAN-006', msg + ".")

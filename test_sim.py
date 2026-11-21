@@ -729,12 +729,41 @@ g = Grid(f); g.save(px_um)                                          # просм
 assert np.allclose(SEL.marked_squares(f)['center_um'] - c0, (5, -3))
 SEL.shift_mask(f, to=(0, 0))
 X = 1280 - mc.samples.CAR_W + 60
-M.run(m, fullscreen=False, _keys=[-1, ('car', X, 160), -1, ('mdrag0', 400, 400), ('mdrag', 440, 380), -1,
+M.run(m, fullscreen=False, _keys=[-1, ord('j'), ('car', X, 160), -1, ('mdrag0', 400, 400), ('mdrag', 440, 380), -1,
                                   ('mdrag1', 440, 380), -1, -1])
 d1 = SEL.marked_squares(f)['center_um'] - c0
 assert np.hypot(*d1) > 1, d1
-M.run(m, fullscreen=False, _keys=[-1, ('car', X, 160), -1, ('mdrag0', 400, 400), ('mdrag', 440, 380), -1,
+M.run(m, fullscreen=False, _keys=[-1, ord('j'), ('car', X, 160), -1, ('mdrag0', 400, 400), ('mdrag', 440, 380), -1,
                                   ('mdrag1', 440, 380), -1, 26, -1, -1])                 # Ctrl+Z — назад
 d2 = SEL.marked_squares(f)['center_um'] - c0
 assert np.allclose(d2, d1, atol=0.01), (d1, d2)
 m.close(); print("Mask shift: Shift+drag, kept by the viewer, Ctrl+Z: OK", d1)
+
+# ------------------------------------------------------------------ 27. Маска сама садится на кресты (живой кадр <-> мозаика)
+import time as _t
+import microcontrol.manual as M
+SEL = sys.modules['microcontrol.selections']
+from microcontrol.mask import Grid
+from microcontrol import snap
+m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp()); m.focus()
+fw, fh = m.frame_size
+m.area = mc.Area(0, 0, 3 * fw, 2 * fh)
+f = m.scan(); mc.stitch(f, verbose=False)
+px_um = json.load(open(os.path.join(f, 'meta.json')))['pixel_size_um']
+g = Grid(f); p0 = np.array([150.0, 120.0]); a_ = 100 / px_um
+g.cr.add(p0); g.cr.add(p0 + (a_, 0)); g.cr.add(p0 + (0, a_))
+g.selected |= {(i, j) for i in range(4) for j in range(3)}; g.save(px_um)
+c = SEL.marked_squares(f)['center_um']
+m.goto(x=c[0] - m._off['x'], y=c[1] - m._off['y'])
+SEL.shift_mask(f, to=(6, -4))                                       # маска съехала
+class _Slow:                                                        # клавиши «ничего» ~1.5 с
+    def __init__(s, n): s.n = n
+    def __iter__(s): return s
+    def __next__(s):
+        s.n -= 1
+        if s.n < 0: raise StopIteration
+        _t.sleep(0.01); return -1
+M.run(m, fullscreen=False, _keys=list(_Slow(150)))
+sh = SEL.marked_squares(f)['shift_um']
+assert np.hypot(*sh) < 1.0, sh
+m.close(); print("Mask snaps to the real crosses by itself:", np.round(sh, 2), "OK")

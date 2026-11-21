@@ -179,7 +179,8 @@ def _preview(folder, w):
                     kk = (img.shape[1] - 2) / ms_['size'][0] * k
                     ov = small.copy()
                     for q in ms_['px']:
-                        cv2.fillPoly(ov, [np.int32(np.round(q * kk))], _SM.dim(_SM.sample_color(folder), 0.6))
+                        cv2.fillPoly(ov, [np.int32(np.round(q * kk * 16))], _SM.dim(_SM.sample_color(folder), 0.6),
+                                     cv2.LINE_AA, 4)
                     small = cv2.addWeighted(ov, 0.7, small, 0.3, 0)
             except Exception:
                 pass

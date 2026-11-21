@@ -299,7 +299,7 @@ def marked_squares(folder):
             except Exception:
                 sh = np.zeros(2)
             um = [np.c_[q, np.ones(4)] @ M + sh for q in px]
-            out = dict(px=px, um=um, size=Pm.max(0) + (W, H), num=num, shift_um=sh,
+            out = dict(px=px, um=um, size=Pm.max(0) + (W, H), num=num, shift_um=sh, M=M,
                        cells=[tuple(c) for c in sorted(g.selected)],
                        center_um=np.mean(um, axis=(0, 1)), folder=folder)
     except Exception:

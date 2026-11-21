@@ -67,8 +67,11 @@ class Result(dict):
 
 class Progress:
     """Полоса прогресса в одну строку: Scan [######......] 12/40  Left 01:20."""
-    def __init__(self, total, title):
+    def __init__(self, total, title, expect=None):
+        """expect — ожидаемое время всего, с (из прошлых сканов): в начале «Left» берётся из него, потом всё
+        больше — из того, как идёт на самом деле."""
         self.total, self.title, self.done, self.t0, self._t = max(1, total), title, 0, time.monotonic(), 0
+        self.expect = expect
 
     def update(self, n=1, text=''):
         self.done = min(self.total, self.done + n)
@@ -78,6 +81,9 @@ class Progress:
         self._t = now
         el = now - self.t0
         eta = el / self.done * (self.total - self.done)
+        if self.expect:                                   # смесь: ожидание по прошлым сканам и текущий темп
+            w = self.done / (self.done + 0.15 * self.total)
+            eta = w * eta + (1 - w) * max(0.0, self.expect - el)
         bar = int(24 * self.done / self.total)
         sys.stdout.write(f"\r{self.title} [{'#' * bar}{'.' * (24 - bar)}] {self.done}/{self.total}"
                          f"  Left {int(eta // 60):02d}:{int(eta % 60):02d}  {text}   ")

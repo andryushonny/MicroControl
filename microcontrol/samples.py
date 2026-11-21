@@ -166,6 +166,28 @@ def add_point(m):
     return f"Focus point {num} ({who}): Z {p.z:.1f} um at X {p.x:.0f}, Y {p.y:.0f}"
 
 
+def follow_z(m):
+    """Флажок «Z по точкам фокуса» включён и столик внутри области с ≥ 2 точками фокуса: поставить Z по ним
+    (как в скане: 4 ближайшие, веса 1/d²). Вверх — не больше max_move_z за раз. Возвращает сообщение или ''."""
+    from .scan import focus_z
+    if not getattr(m, '_use_fp', True):
+        return ''
+    init_areas(m)
+    rp = m.real_position
+    k = area_at(m, rp.x, rp.y)
+    pts = m._regions[k]['pts'] if k is not None else []
+    if len(pts) < 2:
+        return ''
+    z_t = focus_z(pts, rp.x, rp.y)
+    dz = z_t - rp.z
+    if abs(dz) < 0.5 * m.motor_step:
+        return ''
+    if dz > m.max_move_z:
+        return f"Z from the focus points is {dz:.0f} um higher (more than max_move_z): not raised, check the points"
+    m.goto(z=z_t - m._off['z'])
+    return f"Z {m.position.z:.1f} um from the focus points of sample {k + 1} ({dz:+.1f})"
+
+
 def delete_area(m, k):
     """Удалить область k (0…); k = len(m._regions) — отменить новую. Возвращает сообщение."""
     from .errors import MicroControlError

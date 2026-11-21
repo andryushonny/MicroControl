@@ -704,9 +704,12 @@ def _scan(ag, reason, dry_run=False, name=''):
     if not fixed:
         raise AgentError('NO_AREA', "No fixed sample area.", "Make one with area_corner 1 and 2 (focus at each corner).")
     n = sum(x['frames'] for x in fixed)
-    est = n * (0.6 + m.photo_pause + m.move_pause)
+    from . import timing as TM
+    fm_ = 'points' if getattr(m, '_use_fp', True) else 'off'
+    est = sum(TM.estimate(m, x['frames'], fm_ if x['focus_points'] else 'off')[0] for x in fixed)
     if dry_run:
         return dict(areas=len(fixed), frames=n, about_minutes=round(est / 60, 1),
+                    estimate_source=TM.estimate(m, n, fm_)[1],
                     pending_area_ignored=any(x['state'] != 'fixed' for x in info))
     t = _TOOLS['scan']
     ag._rate()

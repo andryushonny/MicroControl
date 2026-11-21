@@ -29,6 +29,7 @@ import threading
 from .scan import Area, focus_z
 from .config import scan_overlap
 from . import samples as SM
+from . import timing as TM
 from . import ui as UI
 
 WIN = "MicroControl"
@@ -37,7 +38,7 @@ HELP = ["Shift+Esc: Exit (or close the window)", "P: Hide / show the left panel"
         "G: Steps X, Y = one frame", "M: Next objective (4x, 10x, 20x, 100x)",
         "1 / 2: Corners of a sample area, one area after another (their Z is kept as focus points)",
         "F: Keep Z here as a focus point of this area   Shift+F: Autofocus",
-        "Y (or the box): Autofocus by corners during the scan",
+        "Y (or the box): Z follows the focus points of the area — when moving with the arrows and in the scan",
         "Samples (right): click = choose, Go = drive there, x = delete;  , / . = previous / next;  Enter = drive",
         "C: Cancel the new area / delete the chosen one (press twice)", "Space: Picture",
         "0: Zero here (offset)", "R: Real coordinates (remove the offset)", "B: White balance (aim at an empty place)",
@@ -375,7 +376,9 @@ def minimap(img, m, A, B, size=MAP_W, zcolor=None, others=(), right=0):
         try:                                                             # кадров съёмки (с перекрытием)
             Bp = B if B else (m.position.x, m.position.y)
             fx_, fy_ = Area(A[0], A[1], *snap(m, A, Bp)).size(m._frame_step(1 - scan_overlap(m.objective)))
-            nfr = f" fields, {fx_ * fy_} frames"
+            from . import timing as TM
+            nfr = f" fields, {fx_ * fy_} frames, " + \
+                TM.fmt(TM.estimate(m, fx_ * fy_, 'points' if getattr(m, '_use_fp', True) else 'off')[0])
         except Exception:
             nfr = ""
         label(f"{'Area' if fixed else 'Preview'} {nx_} x {ny_}{nfr}" + (f"    hidden {hid}" if hid else ""),
@@ -577,7 +580,8 @@ def run(m, fullscreen=True, _keys=None):
             x0_, y0_, x1_, y1_ = reg_rect(reg)
             items.append(dict(title=f"Sample {k + 1}", color=SM.color(k), thumbs=reg.get('thumbs', []),
                               confirm=car['confirm'] == k,
-                              lines=[f"{nx_} x {ny_} = {nx_ * ny_} frames",
+                              lines=[f"{nx_} x {ny_} = {nx_ * ny_} frames, " +
+                                     TM.fmt(TM.estimate(m, nx_ * ny_, 'points' if m._use_fp and reg['pts'] else 'off')[0]),
                                      f"{(x1_ - x0_) / 1000:.2f} x {(y1_ - y0_) / 1000:.2f} mm",
                                      f"focus points {first_num(k)}"]))
         if m._pending:
@@ -717,7 +721,7 @@ def run(m, fullscreen=True, _keys=None):
             # флажок: Z каждого кадра — по точкам фокуса
             cb = (x_l, y - th0 - 2, x_l + th0 + 4, y + 2)
             ops.append(('c', cb, m._use_fp))
-            t_ = "Z of each frame from the focus points"
+            t_ = "Z follows the focus points"
             ops.append(('t', t_, cb[2] + 10, y, FS, UI.TEXT if m._use_fp else UI.DIM, 1))
             ops.append(('t', "Y", cb[2] + 22 + UI.size(t_, FS)[0], y, FS, UI.ACCENT, 1))
             rects['usefp'] = (x_l - 6, cb[1] - 4, cb[2] + 40 + UI.size(t_, FS)[0], cb[3] + 4)
@@ -946,13 +950,13 @@ def run(m, fullscreen=True, _keys=None):
             if key == 27:
                 msg = "Exit: Shift+Esc or close the window"
             elif key in LEFT or ch == 'a':
-                m.move(**{'d' + ah: -sh * steps[ah]}); msg = ''
+                m.move(**{'d' + ah: -sh * steps[ah]}); msg = SM.follow_z(m)
             elif key in RIGHT or ch == 'd':
-                m.move(**{'d' + ah: sh * steps[ah]}); msg = ''
+                m.move(**{'d' + ah: sh * steps[ah]}); msg = SM.follow_z(m)
             elif key in UP or ch == 'w':
-                m.move(**{'d' + av: -sv * steps[av]}); msg = ''
+                m.move(**{'d' + av: -sv * steps[av]}); msg = SM.follow_z(m)
             elif key in DOWN or ch == 's':
-                m.move(**{'d' + av: sv * steps[av]}); msg = ''
+                m.move(**{'d' + av: sv * steps[av]}); msg = SM.follow_z(m)
             elif ch == 'p':                                # левая панель: спрятать / показать
                 m._panel_hidden = not getattr(m, '_panel_hidden', False)
                 msg = "Panel hidden: P or the button shows it" if m._panel_hidden else ""
@@ -962,7 +966,8 @@ def run(m, fullscreen=True, _keys=None):
                 msg = f"Mini map turned over {'left-right' if raw == '[' else 'up-down'} (remembered)"
             elif ch == 'y':
                 m._use_fp = not m._use_fp
-                msg = f"Autofocus by corners {'on' if m._use_fp else 'off'}"
+                msg = ("Z follows the focus points: arrows inside an area and every scan frame" if m._use_fp else
+                       "Z stays as it is: arrows do not change Z; the scan uses one Z")
             elif ch == 'z':
                 zm['z'], zm['c'] = 1.0, None; msg = ''
             elif raw in ('+', '=', '-', '_'):              # зум с клавиатуры (к центру окна)

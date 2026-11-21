@@ -466,6 +466,8 @@ F_k < 0.5\,\mathrm{median}(F_{k-20}, \dots, F_{k-1})
 
 `m.plan()` builds the G-code scan program (it can be read and edited); `m.scan()` runs it. Before planning, the camera checks the axis signs (`m.check_orientation()`: a shift of 20 % of the frame in X and Y and back; with a wrong sign the frames would be stitched in reverse order) and fixes `swap_xy`, `mirror_x`, `mirror_y` if needed; turn off with `m.scan_check = False`. By default frames are saved as JPG in `frames/` (`frame_format = 'jpg'`, quality `jpg_quality` = 90) reduced to `frame_scale` = 0.5: a 0.44 µm pixel at 10x is still 3 times finer than the optical resolution ($\approx 0.61\lambda/\mathrm{NA} \approx 1.3$ µm), so no detail is lost while the volume is about 30 times smaller; lossless — `m.frame_format = 'h5'`, `m.frame_scale = 1`. For each frame: move to the coordinates (in real coordinates, `G53`, so changing the working zero after planning does not shift the shooting), $Z$ from the focus model, pause `photo_pause`, stillness check (two frames must match within 0.25 px), picture. The exposure is fixed for the whole scan. `m.scan()` returns the scan folder path.
 
+**Expected time.** Before a scan MicroControl prints the expected time (also in the mini map label and in the carousel). The first estimate is physical (moves, pauses, exposure, writing); after each finished scan the real time is remembered for this microscope and these settings (objective, focus mode, pauses, checks, frame format) — up to 20 last scans in the instrument memory file — and a line $T = T_0 + t\,N$ ($N$ frames) is fitted to them by least squares. The weight of what is learned grows with the number of scans: $w = n/(n+2)$ (1 scan — 33 %, 10 — 83 %). The "Left" of the progress bar starts from this expectation and moves to the real pace as the scan goes.
+
 ---
 
 ## 11. Data storage
@@ -506,7 +508,7 @@ st.export()                                    # PNG files and TileConfiguration
 
 **Workflow.**
 1. `m.manual()`: sample areas — corners `1`, `2`, one area after another (several samples: section 15).
-2. Focus at the corners: at each corner bring the image into focus (`E`/`Q`) and press `1`/`2` (area corners) and `F` (other corners). The "Autofocus by corners" checkbox (`Y`, on by default): $Z$ of each frame from the 4 nearest points with weights $1/d^2$.
+2. Focus at the corners: at each corner bring the image into focus (`E`/`Q`) and press `1`/`2` (area corners) and `F` (other corners). The "Z follows the focus points" checkbox (`Y`, on by default): $Z$ of each scan frame from the 4 nearest points of its area with weights $1/d^2$; in manual mode, inside an area with at least 2 focus points, every arrow step also sets $Z$ this way (up by at most `max_move_z`). Unchecked — the arrows do not touch $Z$ and the scan keeps one $Z$.
 3. `folder = m.scan()` — frames with 20 % overlap, 25 % at 50x and 100x (`scan_overlap` in `config.py`). Before each picture two consecutive frames are compared by phase correlation: if the picture still moves by more than 1 px (the stage has not settled), the picture is postponed (`m.still_check`). Exposure and white balance are manual for the scan (they do not drift from frame to frame).
 4. `mc.stitch(folder)` — exact frame positions from the overlaps (12.1). Once per objective — `mc.distortion(folder)` (12.5).
 5–7. `mc.view(folder)` — crosses (`G`), level view (`R`), square selection (`S`, `B`, `P`), square numbers (`N`), hints (`Y`) (12.2).
@@ -719,7 +721,7 @@ The camera is read in a separate thread: the window is redrawn at once (pan, zoo
 | `E` / `Q` (PgUp / PgDn) | stage up / down by Step Z (100 µm by default) |
 | `Shift`+`E` / `Shift`+`Q` | the same, by five Steps Z (500 µm by default) |
 | `F` | keep $Z$ here as a focus point (3, 4, …) |
-| `Y` (or the checkbox) | autofocus by corners during the scan: $Z$ of a frame from the focus points |
+| `Y` (or the checkbox) | $Z$ follows the focus points of the area: in the scan (each frame) and with the arrows inside an area |
 | `Shift`+`F` | autofocus |
 | wheel, `+` / `-`; `Z` | zoom (to the cursor / to the centre); whole frame |
 | drag the picture (any button; the left one — not on the fields) | move the zoomed picture |

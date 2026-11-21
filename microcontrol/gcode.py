@@ -324,7 +324,16 @@ def run(m, program, save=None, notes='', folder=None, extra=None):
     rec = _Recorder(m, save, program, notes, area, folder, extra) if save else None
     L.event('GC-001', f"Program of {len(cmds)} commands" + (f", recording to {rec.folder}" if rec else "") + ".")
     absolute, status, done, t0 = True, 'done', 0, time.monotonic()
-    pr = Progress(len(cmds), "Scan" if rec else "G-code") if (rec or len(cmds) > 20) else None
+    import re as _re
+    from . import timing as TM
+    fm = _re.search(r"^; Focus: (\w+)", program if isinstance(program, str) else str(program), _re.M)
+    focus_mode = fm.group(1) if fm else None
+    n_pic = sum(1 for c in cmds if c[1] == 'M240') if rec else 0
+    expect = None
+    if rec and focus_mode and n_pic:
+        expect, src = TM.estimate(m, n_pic, focus_mode)
+        print(f"Expected time {TM.fmt(expect)} for {n_pic} frames ({src})")
+    pr = Progress(len(cmds), "Scan" if rec else "G-code", expect) if (rec or len(cmds) > 20) else None
     report = []
     try:
         for n, c, p in cmds:
@@ -388,8 +397,12 @@ def run(m, program, save=None, notes='', folder=None, extra=None):
             rec.close(status)
             m.last_scan = rec.folder
         L.event('GC-003', f"Program {status}. {done} of {len(cmds)} commands, {time.monotonic() - t0:.1f} s.")
+    if rec and status == 'done' and focus_mode and n_pic:
+        TM.learn(m, focus_mode, n_pic, time.monotonic() - t0)          # учиться: сколько шло на самом деле
     r = Result("Program finished" if status == 'done' else "Program stopped",
                Commands=f"{done} of {len(cmds)}", Time=f"{(time.monotonic() - t0) / 60:.1f} min")
+    if expect:
+        r['Expected'] = f"{expect / 60:.1f} min"
     if status != 'done':
         r['Note'] = "The stage stays where it is."
     if rec:

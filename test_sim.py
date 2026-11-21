@@ -370,3 +370,33 @@ assert len(R[1]['result']['tools']) == 26 and R[3]['result']['content'][1]['type
 print('mcp ok', len(R[1]['result']['tools']), 'tools; asked', len(asked))
 m.close()
 print("Agent: tools, approval, errors, scan, grid, hints, export, MCP: OK")
+
+# ------------------------------------------------------------------ 17. Z по точкам фокуса и время скана
+import io, contextlib, microcontrol.manual as M
+from microcontrol import timing as TM
+m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp())
+m.focus()
+R_, L_, D_, Q_ = 65363, 65361, 65364, ord('q')
+z0 = m.position.z
+# угол 1 на Z0, угол 2 на 3 клетки правее и на 100 мкм ниже
+M.run(m, fullscreen=False, _keys=[ord('1'), -1, R_, -1, R_, -1, R_, -1, Q_, -1, ord('2'), -1, -1])
+z2 = m.position.z
+assert z2 < z0, (z0, z2)
+M.run(m, fullscreen=False, _keys=[L_, -1, -1])                       # шаг внутрь области — Z по точкам
+z1 = m.position.z
+print("Z corner1", z0, "corner2", z2, "after arrow", z1)
+assert z2 < z1 < z0, (z0, z1, z2)
+m._use_fp = False
+M.run(m, fullscreen=False, _keys=[L_, -1, -1])
+assert m.position.z == z1                                           # флажок снят — Z не трогается
+m._use_fp = True
+e0 = TM.estimate(m, 12, 'points'); print("before", e0)
+for i in range(2):
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        r = m.scan(name=f't{i}')
+    print([l for l in buf.getvalue().splitlines() if l.startswith('Expected')])
+e1 = TM.estimate(m, 12, 'points'); print("after", e1)
+assert 'learned from 2 scans' in e1[1]
+m.close(); print("Z follow + timing: OK")
+

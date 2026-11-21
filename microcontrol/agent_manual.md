@@ -8,11 +8,14 @@ for the operator; you wait for the answer.
 
 What the software does, step by step:
 
-1. **Sample areas.** Samples lie on the stage. Each sample gets a rectangular area. You make an area like the
-   operator does with keys 1 and 2: drive to one corner, focus, `area_corner` 1; drive to the opposite corner,
-   focus, `area_corner` 2. Areas never overlap. Optional: more focus points inside (`add_focus_point`).
-2. **Scan.** `scan` shoots all fixed areas with overlap into one folder (one sub-folder per sample).
-3. **Stitch.** `stitch` joins the frames into one mosaic per sample.
+1. **Selections.** Samples lie on the stage. Each place to shoot gets a rectangular *selection*. You make one like
+   the operator does with keys 1 and 2: drive to one corner, focus, `area_corner` 1; drive to the opposite corner,
+   focus, `area_corner` 2. A selection remembers the objective. Selections of one objective never overlap; a
+   selection of a higher objective may lie inside one of a lower objective (layers: map 10x -> details 50x ->
+   100x). Optional: more focus points inside (`add_focus_point`).
+2. **Scan.** `scan` shoots the fixed selections of the CURRENT objective with overlap into one folder (one
+   sub-folder per selection); the other layers wait for their objective.
+3. **Stitch.** `stitch` joins the frames into one mosaic per selection.
 4. **Grid.** The substrate has a lithography grid of crosses with numbers. On the mosaic you mark two
    neighbouring crosses in one row (`mark_cross`), then `fit_grid`; the squares between crosses get the red grid.
 5. **Numbers.** `label_square` on two squares (different row and column) with the numbers printed next to them;
@@ -60,16 +63,17 @@ grid and squares (`mark_cross`, `undo_cross`, `fit_grid`, `label_square`, `list_
   area would overlap another (E704) or if corner 1 is missing (E701).
 - The Z of the stage at `area_corner` 1 and 2 and at `add_focus_point` becomes a focus point. So focus first.
 - Focus points are numbered through all areas: area 1 has 1, 2, 3, ...; the next area continues the count.
-- `get_status` → `areas`: sample number, corners (um), size (mm), frames, focus points with numbers.
+- `get_status` → `areas`: selection number, objective, the selection it lies in (`inside`), corners (um),
+  size (mm), frames, focus points with numbers.
 - `goto_area` drives to the frame of the area nearest to the stage, at its focus height. `delete_area` removes one (approval).
-- Several samples: make areas one after another. A new area is "new" until corner 2 is set.
+- Several selections: make them one after another. A new one is "new" until corner 2 is set.
 
 ## scan
 
 - `scan` with `dry_run: true` first: frames and minutes. Then `scan` (approval). The result has `folder`.
-- With several areas the folder is a session: `<session>/sample_01`, `sample_02`, ... Each sample folder is a
-  normal scan. Tools on squares need a sample folder (or a single-scan folder).
-- `stitch` the session or each sample. After stitching use `scan_info` to see the next step.
+- With several selections the folder is a session: `<session>/selection_01`, `selection_02`, ... Each one is a
+  normal scan. Tools on squares need a selection folder (or a single-scan folder).
+- `stitch` the session or each selection. After stitching use `scan_info` to see the next step.
 
 ## mosaic
 

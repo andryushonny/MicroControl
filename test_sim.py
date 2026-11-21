@@ -1,5 +1,66 @@
-"""Проверка MicroControl на симуляторе: python test_sim.py (для окон OpenCV нужен экран)."""
-import os, subprocess, sys, tempfile, time, numpy as np
+"""Проверка MicroControl на симуляторе (для окон OpenCV нужен экран).
+    python test_sim.py            все разделы, параллельно по процессам (каждый — со своим домом ~/.microcontrol)
+    python test_sim.py --quick    быстрая проверка: основные разделы (~1 мин)
+    python test_sim.py --serial   всё подряд в одном процессе (как раньше)
+    python test_sim.py 14 22      только эти разделы"""
+import os, subprocess, sys, tempfile, time, re
+import numpy as np
+
+QUICK = ('19', '20', '22', '23')
+
+
+def _parts(src):
+    """Разделы файла: [('1-13', текст), ('14', текст) ...]; первые 13 делят одно подключение — один процесс."""
+    lines = src.split("\n")
+    head_end = next(i for i, l in enumerate(lines) if l.startswith("# 1. "))
+    pre = "\n".join(lines[:head_end])
+    i0 = pre.index("\ndef refused(")
+    pre = "import microcontrol as mc\n" + pre[i0:pre.index("\n\n\n", i0)]   # общая часть: refused()
+    starts = [(i, re.match(r"^# (?:-+ )?(\d+)\. ", l).group(1)) for i, l in enumerate(lines)
+              if re.match(r"^# (?:-+ )?(\d+)\. ", l) and int(re.match(r"^# (?:-+ )?(\d+)\. ", l).group(1)) >= 14]
+    out = [("1-13", "\n".join(lines[:starts[0][0]]))]
+    for k, (i, n) in enumerate(starts):
+        j = starts[k + 1][0] if k + 1 < len(starts) else len(lines)
+        out.append((n, "import os, subprocess, sys, tempfile, time, json, numpy as np\nimport cv2\n"
+                       "cv2.getWindowImageRect = lambda w: (0, 0, 1280, 900)   # как после раздела 14 при запуске подряд\n"
+                       + pre + "\n" + "\n".join(lines[i:j])))
+    return out
+
+
+if __name__ == '__main__' and not os.environ.get('MC_PART') and '--serial' not in sys.argv:
+    from concurrent.futures import ThreadPoolExecutor
+    here = os.path.abspath(__file__)
+    parts = _parts(open(here, encoding='utf-8').read())
+    want = [a for a in sys.argv[1:] if not a.startswith('-')]
+    if '--quick' in sys.argv:
+        want = want or list(QUICK)
+    if want:
+        parts = [p for p in parts if p[0] in want or (p[0] == '1-13' and any(w.isdigit() and int(w) < 14 for w in want))]
+    work = tempfile.mkdtemp(prefix='mc_test_')
+
+    def run(part):
+        name, code = part
+        f = os.path.join(work, f"part_{name}.py")
+        open(f, 'w', encoding='utf-8').write(code)
+        home = tempfile.mkdtemp(prefix=f'home_{name}_', dir=work)
+        env = dict(os.environ, MC_PART=name, HOME=home, USERPROFILE=home,
+                   PYTHONPATH=os.pathsep.join([os.path.dirname(here), os.environ.get('PYTHONPATH', '')]))
+        t0 = time.monotonic()
+        r = subprocess.run([sys.executable, f], capture_output=True, text=True, env=env, cwd=os.path.dirname(here))
+        return name, r.returncode, time.monotonic() - t0, r.stdout + r.stderr
+
+    t0 = time.monotonic()
+    bad = []
+    with ThreadPoolExecutor(max_workers=max(2, min(len(parts), (os.cpu_count() or 4)))) as ex:
+        for name, rc, dt, out in ex.map(run, parts):
+            oks = [l for l in out.splitlines() if l.rstrip().endswith(': OK')]
+            print(f"{'ok  ' if rc == 0 else 'FAIL'}  part {name:<6} {dt:6.1f} s   " + "; ".join(l.strip() for l in oks))
+            if rc:
+                bad.append(name)
+                print("\n".join(out.splitlines()[-25:]))
+    print(f"\n{len(parts) - len(bad)} of {len(parts)} parts passed in {time.monotonic() - t0:.0f} s")
+    sys.exit(1 if bad else 0)
+
 import microcontrol as mc
 
 wd = tempfile.mkdtemp()
@@ -259,7 +320,11 @@ fr = Frames(f); size_ = np.array(fr.size, float); fr.close()
 sv = min(Wsc_ / size_[0], 900 / size_[1]) * 0.95
 exp_ = size_ / 2 + (np.array([u0 + 10.5, v0 + 4.5]) - (Wsc_ / 2, 450)) / sv
 assert np.hypot(*(g2.cr.marks[-1] - exp_)) < 0.6 / sv + 0.5, (g2.cr.marks[-1], exp_)
-print("Cross marks: exactly at the click, draggable: OK")
+u1, v1 = view_xy(world(6, 5)); u1, v1 = u1 - 3, v1 + 2
+mc.view(f, _keys=[ord('g'), -1, ('click', u1, v1), -1, ('drag', u1, v1, u1 + 6, v1), -1, 26, -1, 26, -1, 25, -1,
+                  26, -1, ord('l'), -1, ('click', 300, 300), -1, ('click', 420, 380), -1, 27, 27])
+assert len(Grid(f).cr.marks) == n0 + 1, (n0, len(Grid(f).cr.marks))              # крест, сдвиг -> Ctrl+Z x2, Ctrl+Y, Ctrl+Z
+print("Cross marks: exactly at the click, draggable, Ctrl+Z / Ctrl+Y: OK")
 n0 = len(json.load(open(os.path.join(f, 'grid.json')))['selected'])
 mc.view(f, _keys=[ord('s'), -1, ('rclick', 640, 450), -1, 27, 27])      # правый щелчок по зелёному — убрать область
 n1 = len(json.load(open(os.path.join(f, 'grid.json')))['selected'])
@@ -288,14 +353,14 @@ assert not mc.samples.overlap(mc.samples.rect(regs[0], fw_, fh_), mc.samples.rec
 ses = m.scan(name='Two samples')
 m.close()
 subs = mc.samples.samples(ses)
-assert [os.path.basename(x) for x in subs] == ['sample_01', 'sample_02'], subs
+assert [os.path.basename(x) for x in subs] == ['selection_01', 'selection_02'], subs
 assert all(json.load(open(os.path.join(x, 'meta.json')))['sample_index'] == i + 1 for i, x in enumerate(subs))
 r = mc.stitch(ses, verbose=False)
 assert len(r) == 2, r
 Wsc = 1280 - mc.samples.CAR_W
 mc.view(ses, _keys=[-1, ord('.'), -1, -1, ('click', 1280 - 25, 64), -1, ('click', 1280 - 25, 64), -1, -1, 27])
 left = mc.samples.samples(ses)
-assert [os.path.basename(x) for x in left] == ['sample_02'] and os.path.isdir(os.path.join(ses, '_removed', 'sample_01'))   # x у 1-го
+assert [os.path.basename(x) for x in left] == ['selection_02'] and os.path.isdir(os.path.join(ses, '_removed', 'selection_01'))   # x у 1-го
 print("Samples: 2 areas, focus points 1-5, two folders, carousel switch and remove: OK")
 
 # ------------------------------------------------------------------ 16. ИИ-агент
@@ -427,13 +492,13 @@ M.run(m, fullscreen=False, _keys=[R_, -1, R_, -1, ord('1'), -1, R_, -1, ord('2')
 assert [r['num'] for r in m._regions] == [2, 3], [r['num'] for r in m._regions]
 ses = m.scan(name='uid')
 subs = sorted(os.listdir(ses)); print(subs)
-assert 'sample_02' in subs and 'sample_03' in subs and 'sample_01' not in subs
+assert 'selection_02' in subs and 'selection_03' in subs and 'selection_01' not in subs
 info = json.load(open(os.path.join(ses, 'session.json')))
 assert [s['index'] for s in info['samples']] == [2, 3] and all(len(s['uid']) == 32 for s in info['samples'])
-u2 = SM.sample_uid(os.path.join(ses, 'sample_02')); assert u2 == m._regions[0]['uid']
-d1 = SM.remove_sample(os.path.join(ses, 'sample_02'))
-os.makedirs(os.path.join(ses, 'sample_02')); json.dump({'sample_uid': 'x' * 32}, open(os.path.join(ses, 'sample_02', 'meta.json'), 'w'))
-d2 = SM.remove_sample(os.path.join(ses, 'sample_02'))
+u2 = SM.sample_uid(os.path.join(ses, 'selection_02')); assert u2 == m._regions[0]['uid']
+d1 = SM.remove_sample(os.path.join(ses, 'selection_02'))
+os.makedirs(os.path.join(ses, 'selection_02')); json.dump({'sample_uid': 'x' * 32}, open(os.path.join(ses, 'selection_02', 'meta.json'), 'w'))
+d2 = SM.remove_sample(os.path.join(ses, 'selection_02'))
 assert os.path.isdir(d1) and os.path.isdir(d2) and d1 != d2, (d1, d2)   # ранее убранное не стёрто
 m.close(); print("Sample numbers stay, uid, remove without overwrite: OK")
 
@@ -495,3 +560,55 @@ print(f"seam colour/brightness mismatch: before {before:.1f} %, after {after:.1f
 assert after < 0.5 * before and after < 3, (before, after)
 print("Colour flat-field + frame gains: OK")
 
+
+# ------------------------------------------------------------------ 22. Слои: карта 10x, внутри участок 50x; список, удаление, время
+from microcontrol import samples as SM
+m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp())
+m.focus()
+fw, fh = m.frame_size
+SM.corner(m, 1); m.move(dx=2 * fw); m.move(dy=fh); SM.corner(m, 2)               # карта 10x: 3 x 2 кадра
+mapf = m.scan(name='map')
+m.objective = 50
+m.goto(x=fw, y=fh / 2)                                                             # середина карты
+SM.corner(m, 1)
+fw5, fh5 = m.frame_size
+m.move(dx=fw5); SM.corner(m, 2)                                                    # участок 50x внутри карты
+assert [SM.obj(m, r) for r in m._regions] == [10, 50] and SM.parent(m, 1) == 0, [SM.parent(m, 1)]
+assert SM.tree(m) == [(0, 0), (1, 1)]
+m.objective = 10
+try:                                                                               # тот же объектив внутри — нельзя
+    SM.corner(m, 1); raise AssertionError("same objective overlap allowed")
+except mc.MicroControlError as e:
+    assert 'E704' in str(e), e
+m.objective = 50
+det = m.scan(name='detail')                                                        # снимается только 50x
+assert json.load(open(os.path.join(det, 'meta.json')))['parent_uid'] == m._regions[0]['uid']
+m.objective = 20
+try:
+    m.scan(); raise AssertionError("scan without selections of 20x")
+except mc.MicroControlError as e:
+    assert 'E706' in str(e), e
+lst = m.list(); print(lst)
+assert len(lst) == 2 and lst[0]['objective'] == 10 and lst[1]['depth'] == 1 and lst[1]['parent'] is lst[0], lst
+inf = m.info(); txt = repr(inf)
+assert 'Where the time goes' in txt and 'Camera: picture' in inf['Time'] and inf['Time']['Camera: picture']['calls'] > 5
+print(txt.split("\n\n")[1].splitlines()[2])
+r = m.remove(2, confirm=False); print(r)
+assert not os.path.exists(det) and len(m.list()) == 1 and os.path.isdir(mapf)
+m.close(); print("Layers 10x > 50x, list, remove, time report: OK")
+
+# ------------------------------------------------------------------ 23. Ctrl+Z / Ctrl+Y в ручном режиме
+import microcontrol.manual as M
+m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp())
+m.focus()
+p0 = m.position
+R_ = 65363
+M.run(m, fullscreen=False, _keys=[ord('1'), -1, R_, -1, ord('2'), -1, -1, 26, -1, 26, -1, -1, 26, -1, -1, 27])
+assert not m._regions and m._pending is None and m.position == p0, (m._regions, m._pending, m.position, p0)
+M.run(m, fullscreen=False, _keys=[25, -1, 25, -1, -1, 25, -1, -1, 27])                # всё вернуть
+assert len(m._regions) == 1 and m.position != p0, (m._regions, m.position)
+M.run(m, fullscreen=False, _keys=[ord('l'), -1, (600, 300), -1, (700, 300), -1, -1, ord('l'), -1, ord('l'), -1,
+                                  (600, 300), -1, R_, -1, (600, 300), -1, -1])     # линейка; точка 2 — после сдвига
+d_ = np.hypot(*(np.array(m._ruler['pts'][1]) - m._ruler['pts'][0]))
+assert len(m._ruler['pts']) == 2 and abs(d_ - m.frame_size[0]) < 0.1 * m.frame_size[0], (m._ruler, d_, m.frame_size)
+m.close(); print("Undo / redo in manual mode (selections and moves), ruler: OK")

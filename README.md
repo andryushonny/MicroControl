@@ -46,12 +46,14 @@ Both windows close with **Shift+Esc** or the window's ×. A single `Esc` only ca
 
 `m.manual()` opens the live camera. Move with the arrows (one press = one frame), focus with `E` / `Q` (or `Shift+F` — autofocus).
 
-- **Mini map** (top right): one cell = one camera frame; the yellow cell is where you are.
-- **Area:** go to one corner of the sample, focus, press `1`; go to the opposite corner, focus, press `2`. The area appears in its colour; corners snap to whole frames.
+- **Mini map** (top right): one cell = one camera frame; the yellow cell is where you are. It moves with the arrows: arrow up — the cell goes up.
+- **Selection:** go to one corner of the sample, focus, press `1`; go to the opposite corner, focus, press `2`. The selection appears in its colour; corners snap to whole frames. Each selection remembers the objective it was marked with.
 - **Focus points:** the height $Z$ at each corner is remembered; `F` adds more points. During the scan every frame gets its own $Z$ from these points, so a tilted sample stays sharp. With the checkbox "Z follows the focus points" the arrows also follow them.
-- **Several samples:** set areas one after another (`1`, `2`, then `1`, `2` again). They must not overlap. The list on the right shows them: click — choose, **Go** — drive to it, **x** — delete.
+- **Several selections, layers:** set them one after another (`1`, `2`, then `1`, `2` again). Selections of one objective do not overlap, but a selection of a higher objective may lie inside one of a lower objective (see *Layers* below). The list on the right shows them nested: click — choose, **Go** — drive to it, **x** — delete.
+- **Ruler:** `L`, then click two points — the distance in µm (the stage may move between the clicks).
+- **Undo:** `Ctrl+Z` undoes any step (a selection, a focus point, a move — the stage drives back), `Ctrl+Y` redoes it.
 
-`m.scan()` shoots every area frame by frame with 30 % overlap (35 % at 50x, 100x) and saves the frames into a new folder (one sub-folder per sample); `m.scan(name='test')` again writes into the same folder. Samples keep their numbers and colours when one is deleted. It prints the expected time; this estimate learns from the previous scans of your microscope. `mc.stitch(folder)` measures from the overlaps where each frame really is and joins them into one seamless picture.
+`m.scan()` shoots every area frame by frame with 30 % overlap (35 % at 50x, 100x) and saves the frames into a new folder (one sub-folder per selection); `m.scan(name='test')` again writes into the same folder. Selections keep their numbers and colours when one is deleted. Only the selections of the objective in place are shot. It prints the expected time; this estimate learns from the previous scans of your microscope. `mc.stitch(folder)` measures from the overlaps where each frame really is and joins them into one seamless picture.
 
 ### 3. Red grid — find the squares
 
@@ -72,6 +74,21 @@ Both windows close with **Shift+Esc** or the window's ×. A single `Esc` only ca
 `E` in the viewer or `mc.export(folder)` writes `export/` inside the scan folder: a straight PNG of the chosen squares (transparent background), a DXF for AutoCAD in micrometres and a list of the square numbers.
 
 ---
+
+## Layers: a map and the details
+
+1. Mark a large selection with a small objective (10x) and scan it: this is the map.
+2. Look at the map (`mc.view`) and find the interesting places.
+3. Put a larger objective in place (`M` in manual mode, or `m.objective = 50`), mark small selections inside the map and scan again — only the 50x selections are shot. The same again with 100x inside the 50x ones.
+
+The selections nest like Russian dolls: in the list on the right of manual mode every selection lies inside the frame of the one it was marked in, with its objective (`10x`, `50x`, `100x`) next to the name; the frames and the time are counted for that objective.
+
+```python
+m.list()          # all scanned selections as layers, numbered
+m.open(3)         # look at number 3 again (mc.view)
+m.remove(3)       # delete number 3 completely (asks first)
+m.info()          # where the time goes: every action is timed, longest first
+```
 
 ## Ways to control
 
@@ -129,7 +146,7 @@ The whole protocol, step by step: [reference, section 5](docs/reference_en.md#5-
 | **Grid** | Two crosses give the direction and the length of one square side; the grid is square, so that is all it needs. Fitting to all crosses makes it exact. Two labelled squares give the numbering of the whole grid. |
 | **Hints** | Unsupervised anomaly detection: the program learns what the empty substrate looks like and marks the squares with something unlike it (see [Machine learning inside](#machine-learning-inside)). |
 | **Export** | Only the chosen squares, straightened, at full resolution, plus a DXF with the squares in micrometres. |
-| **Several samples** | Each area gets its own colour, focus points and sub-folder; the viewer switches between samples in the list on the right. |
+| **Selections and layers** | Each selection gets its own colour, objective, focus points and sub-folder; a selection of a higher objective inside one of a lower objective is its detail (a layer). |
 | **AI agents** | A local language model can use the whole program through tools; everything that moves the stage needs the operator's "Allow". See below. |
 | **Simulator** | A virtual substrate with crosses, flakes and tilt, so everything can be tried without the instrument. |
 
@@ -189,15 +206,17 @@ Options: train the normal model once on a clean substrate — `mc.train_hints(fo
 | Arrows / `W A S D` | move by one frame (Step X, Y) |
 | `E` / `Q` | stage up / down by Step Z (`Shift` — ×5) |
 | `Shift+F` | autofocus |
-| `1`, `2` | corners of a sample area |
+| `1`, `2` | corners of a selection |
 | `F` | add a focus point here |
 | `Y` | "Z follows the focus points" on / off |
 | `,` `.` · `Enter` | previous / next area · drive to it |
 | `C` | cancel the new area / delete the chosen one (press twice) |
-| `Space` | take a picture |
+| `Space` · `Shift+L` | take a picture · light on / off |
+| `L` | ruler: two clicks — the distance |
+| `Ctrl+Z` · `Ctrl+Y` | undo · redo (moves too: the stage drives back) |
 | `Tab` or click a field | change steps, exposure, objective |
 | `P` | hide / show the left panel |
-| `T` · `O` · `[` `]` | turn the camera picture 180° · check directions with the camera · turn the mini map over (all remembered) |
+| `T` · `O` · `[` `]` | turn the camera picture 180° · check directions with the camera · arrows (and the mini map with them) the other way (all remembered) |
 | `H` · `Shift+Esc` | all keys · exit |
 
 **Viewer** (`mc.view(folder)`)
@@ -211,7 +230,9 @@ Options: train the normal model once on a clean substrate — `mc.train_hints(fo
 | `Y` · `Shift+Y` · `<` `>` | hints · take the hints · sensitivity |
 | `R` | picture level / as shot |
 | `E` | export |
-| `,` `.` | previous / next sample |
+| `,` `.` | previous / next selection |
+| `L` | ruler: two clicks — the distance |
+| `Ctrl+Z` · `Ctrl+Y` | undo · redo any change |
 | `Esc` · `H` · `Shift+Esc` | leave the mode · all keys · exit |
 
 ---
@@ -219,7 +240,7 @@ Options: train the normal model once on a clean substrate — `mc.train_hints(fo
 ## Where things are saved
 
 ```
-scans/<date>_<objective>_<name>/      one scan (several samples: sample_01/, sample_02/ inside)
+scans/<date>_<objective>_<name>/      one scan (several selections: selection_01/, selection_02/ inside)
     frames/        the frames
     join/          the stitched picture
     grid.json      crosses, grid, numbers, chosen squares, hints
@@ -258,6 +279,8 @@ jupyter notebook
 The camera needs the MindVision SDK from the instrument's driver kit. Close the original Optosky program before connecting: only one program can use the port and the camera. Examples: `example.ipynb` and the `demo/` folder.
 
 **First start:** check the link with `python -m microcontrol probe`, then in `m.manual()` check the directions — `Q` must move the stage **down**, the arrow → must move the picture to the left. If not, see the [reference, section 20](docs/reference_en.md#20-first-start-on-the-instrument).
+
+**Self-test on the simulator** (no instrument needed): `python test_sim.py --quick` — about 10 s; `python test_sim.py` — everything, the parts run in parallel (about 2 min on 2 cores).
 
 ## If something goes wrong
 

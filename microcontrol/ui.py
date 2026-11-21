@@ -126,3 +126,23 @@ def plus(img, x, y, color, r=10, gap=4, th=1, halo=True):
         for a, b in segs:
             cv2.line(img, (int(round(a[0])), int(round(a[1]))), (int(round(b[0])), int(round(b[1]))), col, t,
                      cv2.LINE_AA, sh)
+
+
+def ruler(img, a, b, label, color=(0, 220, 255), scale=0.5):
+    """Линейка: отметки «+» в точках a и b (координаты окна, b может быть None), линия между ними и подпись
+    с расстоянием у середины, на тёмной плашке."""
+    if a is None:
+        return
+    if b is not None:
+        p, q = (int(round(a[0] - 0.5)), int(round(a[1] - 0.5))), (int(round(b[0] - 0.5)), int(round(b[1] - 0.5)))
+        cv2.line(img, p, q, (0, 0, 0), 3, cv2.LINE_AA)
+        cv2.line(img, p, q, color, 1, cv2.LINE_AA)
+        plus(img, b[0], b[1], color)
+    plus(img, a[0], a[1], color)
+    if label:
+        mx, my = (a if b is None else ((a[0] + b[0]) / 2, (a[1] + b[1]) / 2))
+        (tw, th), _ = cv2.getTextSize(label, FONT, scale, 1)
+        x0 = int(min(max(4, mx + 12), img.shape[1] - tw - 14))
+        y0 = int(min(max(th + 10, my - 12), img.shape[0] - 6))
+        panel(img, x0 - 6, y0 - th - 7, x0 + tw + 6, y0 + 6, 0.85, color)
+        cv2.putText(img, label, (x0, y0), FONT, scale, (245, 245, 245), 1, cv2.LINE_AA)

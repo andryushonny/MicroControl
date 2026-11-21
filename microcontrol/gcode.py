@@ -26,6 +26,7 @@ import cv2
 from . import log as L, focus as F
 from .errors import GcodeError, SafetyError, CameraError, LimitError, FocusError
 from .util import Result, Progress
+from .stats import timed
 
 SPEC = {   # команда: (разрешённые буквы, смысл)
     'G0': ('XYZ', "Move"), 'G1': ('XYZ', "Move"), 'G4': ('PS', "Dwell"),
@@ -255,23 +256,29 @@ class _Recorder:
         self.m, self.sharp, self.t0, self.n, self.refocused, self.blurry = m, [], time.monotonic(), 0, 0, 0
 
     def picture(self, row, col):
+        with timed("Scan: picture (all of it)"):
+            self._picture(row, col)
+
+    def _picture(self, row, col):
         m = self.m
         img = m.image()
-        if m.still_check:                                       # столик ещё дрожит — два кадра подряд разные
-            for _ in range(3):
-                img2 = m.image(0)
-                a = cv2.resize(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.ndim == 3 else img, None, fx=0.25, fy=0.25,
-                               interpolation=cv2.INTER_AREA).astype(np.float32)
-                b = cv2.resize(cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY) if img2.ndim == 3 else img2, None, fx=0.25, fy=0.25,
-                               interpolation=cv2.INTER_AREA).astype(np.float32)
-                (sx, sy), resp = cv2.phaseCorrelate(a, b)
-                if np.hypot(sx, sy) < 0.25 or resp < 0.05:     # < 1 px полного кадра — стоит
-                    img = img2
-                    break
-                L.event('SCN-003', f"Frame {self.n + 1}: the picture still moves ({np.hypot(sx, sy) * 4:.1f} px), waiting.", 20)
-                time.sleep(max(0.1, m.photo_pause))
-                img = m.image()
-        s = F.sharpness(img, m.focus_method)
+        with timed("Scan: stillness check (2nd picture)"):
+            if m.still_check:                                       # столик ещё дрожит — два кадра подряд разные
+                for _ in range(3):
+                    img2 = m.image(0)
+                    a = cv2.resize(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.ndim == 3 else img, None, fx=0.25, fy=0.25,
+                                   interpolation=cv2.INTER_AREA).astype(np.float32)
+                    b = cv2.resize(cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY) if img2.ndim == 3 else img2, None, fx=0.25, fy=0.25,
+                                   interpolation=cv2.INTER_AREA).astype(np.float32)
+                    (sx, sy), resp = cv2.phaseCorrelate(a, b)
+                    if np.hypot(sx, sy) < 0.25 or resp < 0.05:     # < 1 px полного кадра — стоит
+                        img = img2
+                        break
+                    L.event('SCN-003', f"Frame {self.n + 1}: the picture still moves ({np.hypot(sx, sy) * 4:.1f} px), waiting.", 20)
+                    time.sleep(max(0.1, m.photo_pause))
+                    img = m.image()
+        with timed("Scan: sharpness check"):
+            s = F.sharpness(img, m.focus_method)
         ref = np.median(self.sharp[-20:]) if len(self.sharp) >= 5 else None
         refocused = blurry = 0
         if ref is not None and s < 0.5 * ref:
@@ -284,6 +291,11 @@ class _Recorder:
                 refocused = 1
             blurry = int(s < 0.5 * ref)
         self.sharp.append(s)
+        with timed("Scan: saving frame"):
+            self._save(img, row, col, s, refocused, blurry)
+
+    def _save(self, img, row, col, s, refocused, blurry):
+        m = self.m
         p = m.position
         k = m.frame_scale
         stored = img if k >= 1 else cv2.resize(img, None, fx=k, fy=k, interpolation=cv2.INTER_AREA)
@@ -368,11 +380,13 @@ def run(m, program, save=None, notes='', folder=None, extra=None, reuse=False):
                 axes = {a.lower(): True for a in p} or {'x': True, 'y': True}
                 m.find_limits(x=axes.get('x', False), y=axes.get('y', False), z=axes.get('z', False))
             elif c == 'G4':
-                m._sleep(p.get('S', p.get('P', 0) / 1000))
+                with timed("Scan: pause before picture (photo_pause)"):
+                    m._sleep(p.get('S', p.get('P', 0) / 1000))
             elif c == 'G30':
                 m.focus()
             elif c == 'G29':
-                res_ = focus_plane(m, area)
+                with timed("Scan: focus plane (all of it)"):
+                    res_ = focus_plane(m, area)
                 pr.write(str(res_)) if pr else print(res_)
             elif c == 'M420':
                 if p.get('S', 1) == 0:

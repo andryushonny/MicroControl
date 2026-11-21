@@ -15,12 +15,14 @@ mc.distortion(folder) после разметки крестов в mc.view. З�
 """
 import json, os
 import numpy as np
+from .stats import timed_fn
 import cv2
 
 HOME = os.path.join(os.path.expanduser('~'), '.microcontrol')
 
 
 # ------------------------------------------------------------------ освещение
+@timed_fn('Stitch: light field')
 def flatfield(st, n=60, down=4, verbose=False):
     """Поле освещения скана — отдельно по каждому цвету (края кадра бывают не только темнее, но и другого
     оттенка): медиана до n кадров, каждый сначала поделён на свою медиану (кадры с другой общей яркостью
@@ -54,6 +56,7 @@ def flatfield(st, n=60, down=4, verbose=False):
     return np.clip(F, 0.2, 5).astype(np.float32)
 
 
+@timed_fn('Stitch: frame brightness')
 def frame_gains(st, pos, W, H, down=8, lam=0.05, verbose=False):
     """Выровнять яркость (и оттенок) кадров по перекрытиям, как экспозицию в панорамах: для каждой пары
     соседей медиана общего участка в обоих кадрах; множители кадров a_i — по МНК в логарифмах
@@ -177,6 +180,7 @@ def attach(st, folder):
     return st
 
 
+@timed_fn('Distortion measurement')
 def measure_distortion(folder, save=True):
     """Дисторсия по крестам. Нужны: mc.stitch(folder) и решётка крестов из mc.view (G).
     В каждом кадре кресты ищутся около мест, где их ставит решётка (центр — по симметрии креста);

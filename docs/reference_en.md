@@ -710,6 +710,16 @@ The `F` (feed) parameter is not supported (`E902`): the speed is set by the cont
 
 ## 15. Manual mode and viewer
 
+**Selections and layers.** Keys `1`, `2` mark a *selection* (formerly "sample area"); it remembers the objective it was marked with and the frame size of that objective. Selections of one objective do not overlap; a selection of a higher objective may lie inside one of a lower objective — it is its detail (layer): map 10x → details 50x → details 100x. The parent is the lower-objective selection that contains its centre (the closest layer, the smallest one). `m.scan()` shoots only the selections of the objective in place (error `E706` if there are none); the others wait. Frames and the expected time in the list are counted for each selection's own objective (`timing.estimate(..., objective)`). `meta.json` of a scanned selection holds `selection`, `sample_uid`, `parent_uid`, `parent_selection`, `area_real_um`. `m.list()` shows all scanned selections as a tree (by `parent_uid`, for old scans by position on the stage), `m.open(N)` opens one in `mc.view`, `m.remove(N, confirm=True)` deletes its folder (and the session folder if nothing is left in it).
+
+**Ruler** (`L`, both windows): two clicks — the distance in µm and its projections; the points are placed exactly at the clicks (marked with «+»). In manual mode the points are on the sample (stage coordinates), so the stage may move between the clicks. In manual mode the light is `Shift+L`.
+
+**Undo** (`Ctrl+Z`, `Ctrl+Y` / `Ctrl+Shift+Z` — redo; both windows). After every action the window compares its state with the previous one and keeps the pair (before, after), up to 200 steps. Manual mode: selections, focus points, objective, zero offset and the stage position (undoing a move drives the stage back: down first, then X/Y in legs ≤ `max_jump`, then up in steps ≤ `max_move_z`). Viewer: crosses, grid, squares, numbers, hints, and a selection removed from the list (moved back from `_removed/`).
+
+**Mini map and arrows.** The mini map follows the arrows: arrow up — the stage cell goes up on the map. `[` `]` turn the arrows (and the map with them) the other way (`arrows_flip_x/y`, remembered).
+
+**Where the time goes** — `m.info()`: every action is timed (`stats.timed`): controller commands, stage travel and pauses (X/Y and Z separately), camera pictures, autofocus, stillness and sharpness checks, saving frames, focus plane, stitching stages, export, writing large pictures. Nested actions are subtracted from the outer ones (own time) and shown with them (with inner). `m.info(reset=True)` counts from zero; `m.info()['Time']` gives the numbers as a dict.
+
 ![Manual mode: mini map with three sample areas and focus points 1–7, carousel on the right](img/manual.jpg)
 
 `m.manual()` opens the camera image on the full screen; `m.manual(fullscreen=False)` — in a window. The `manual` and `view` windows have the same size: `WINDOW_SIZE` = 1280 × 900 by default (config), then the last size the window was stretched to.

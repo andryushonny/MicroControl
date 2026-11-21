@@ -10,12 +10,13 @@
 крупный — из нужных кусков кадров. Поэтому окно открывается сразу и на тысячах кадров.
 """
 from .samples import per_sample as _per_sample
-import csv, json, math, os
+import copy, csv, json, math, os
 from collections import OrderedDict
 import cv2
 import numpy as np
 from .storage import ScanData, THUMB, meta_A
 from .util import wheel_delta, open_window, window_size, exit_key, EXIT, set_icon
+from .undo import History, undo_key
 from . import ui as UI
 from . import anomaly as _AD
 from . import config as _cfg
@@ -112,13 +113,14 @@ class _Scene:
         return out
 
 
-HELP_V2 = "Drag: move  Wheel: zoom  0: whole  R: straight  , / .: sample  H: all keys  Shift+Esc: exit"
+HELP_V2 = "Drag: move  Wheel: zoom  0: whole  R: straight  , / .: selection  H: all keys  Shift+Esc: exit"
 HELP_MODE = {
-    'look': "G: mark crosses  F: fit grid  S: select  B: brush (rectangles)  N: number squares  Y: hints  E: export",
+    'look': "L: ruler  G: mark crosses  F: fit grid  S: select  B: brush (rectangles)  N: number squares  Y: hints  E: export",
     'cross': "Click: cross exactly there (2 in a row = tilt)  Shift+click: snap to centre  Drag a mark: move  Right click: remove  C: again  F: fit grid  Esc: done",
     'select': "Click: square  Drag: box  Shift: unselect  Right click: remove green area  A: all  X: none  Esc: done",
     'paint': "Drag a rectangle: select all squares in it  Shift+drag: unselect  Click: one square  A: all  X: none  Esc: done",
     'label': "Click a square, type its number X Y  Enter: set  Esc: done",
+    'ruler': "Click two points: the distance (a third click starts again)  Drag: move  L or Esc: off",
 }
 HELP_HINTS = "Y: hints on / off  Shift+Y: select them  < / >: sensitivity  U: type it"
 HELP_V = ("G: 2 crosses in a row = tilt (right click = remove, C = again)   F: fit grid   S: select (click, box; Shift = "
@@ -126,8 +128,10 @@ HELP_V = ("G: 2 crosses in a row = tilt (right click = remove, C = again)   F: f
           "(yellow), Shift+Y: select them, U, < / >: sensitivity   A / X: all / none   E: export   Esc: exit")
 HELP_ALL = [
     ("Look", "Drag (right / middle in any mode): move   Wheel, + / -: zoom   0: whole   Arrows, W A S D: move"),
-    ("", "R: straight / as shot   , / .: previous / next sample   H: this help   Esc: leave the mode"),
+    ("", "R: straight / as shot   , / .: previous / next selection   H: this help   Esc: leave the mode"),
+    ("Undo", "Ctrl+Z: undo any change (crosses, grid, squares, numbers, hints, removed selection)   Ctrl+Y: redo"),
     ("Exit", "Shift+Esc (or Ctrl+Esc), or close the window"),
+    ("Ruler", "L: click two points -> distance in um (a third click starts again); L or Esc: off"),
     ("Grid", "G: mark crosses: click two neighbouring crosses in one row = tilt; more crosses far apart = more exact"),
     ("", "The mark goes exactly where you click   Shift+click: snap to the cross centre   Drag a mark: move it"),
     ("", "Right click: remove a cross   Backspace: undo   C: start again   F: fit the grid to all crosses"),
@@ -185,7 +189,7 @@ def _car_items(subs, cur, car):
                 pass
         else:
             lines.append("no grid yet (G)")
-        items.append(dict(title=f"Sample {SM.sample_index(f)}", color=SM.sample_color(f),
+        items.append(dict(title=f"Selection {SM.sample_index(f)}", color=SM.sample_color(f),
                           lines=lines, thumbs=[_preview(f, SM.CAR_W - 36)], confirm=car.get('confirm') == f, go=False))
     return items
 
@@ -198,10 +202,10 @@ def view(folder, fullscreen=False, sensitivity=None, _keys=None):
     ses, subs = SM.session_of(folder)
     cur = subs[0] if (ses and os.path.abspath(folder) == ses) else os.path.abspath(folder)
     if not subs:
-        raise FileNotFoundError(f"No samples in {folder}")
+        raise FileNotFoundError(f"No selections in {folder}")
     keys = iter(_keys) if _keys is not None else None
     Wv, Hv = open_window(WIN, fullscreen) or screen_size()
-    car = dict(scroll=0, confirm=None, size=(Wv, Hv))
+    car = dict(scroll=0, confirm=None, size=(Wv, Hv), hist=History())   # история — общая для всех выделений
     while cur:
         cur = _view_one(cur, fullscreen, sensitivity, keys, car)
     if not fullscreen:
@@ -232,8 +236,8 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
     ses, subs = SM.session_of(folder)
     Wv, Hv = car['size']
     st = dict(cx=sc.size[0] / 2, cy=sc.size[1] / 2, s=None, rot=0.0, mode='look', down=None, box=None,
-              poly=[], dirty=True, Wv=Wv - SM.CAR_W, Hv=Hv, straight=False, switch=None,
-              msg=(f"Sample {SM.sample_index(folder)} ({subs.index(folder) + 1} of {len(subs)})" if len(subs) > 1 else "")
+              poly=[], dirty=True, Wv=Wv - SM.CAR_W, Hv=Hv, straight=False, switch=None, ruler=[], mouse=None,
+              msg=(f"Selection {SM.sample_index(folder)} ({subs.index(folder) + 1} of {len(subs)})" if len(subs) > 1 else "")
               + (f"   Crosses moved with the stitched frames ({moved_}); F: fit the grid again" if moved_ else ""))
 
     def car_click(x, y):
@@ -253,12 +257,13 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
                 if f == folder:
                     sc.st.close()
                 dst = SM.remove_sample(f)
+                car['hist'].push(f"remove Selection {SM.sample_index(dst)}", None, None, kind='remove', src=f, dst=dst)
                 rest = [s_ for s_ in subs if s_ != f]
-                st['msg'] = f"Sample {SM.sample_index(dst)} removed to {dst}"
+                st['msg'] = f"Selection {SM.sample_index(dst)} removed to {dst} (Ctrl+Z: bring it back)"
                 st['switch'] = (folder if f != folder else (rest[min(k, len(rest) - 1)] if rest else False))
             else:
                 car['confirm'] = f
-                st['msg'] = f"Click x again to remove sample {SM.sample_index(f)} (its folder goes to _removed/)"
+                st['msg'] = f"Click x again to remove Selection {SM.sample_index(f)} (its folder goes to _removed/)"
         st['dirty'] = True
 
     def R():
@@ -287,6 +292,15 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
             st['rot'] = -(((th + 90) % 180) - 90)
         else:
             st['rot'] = 0.0
+
+    def ruler_text(a=None, b=None):
+        """Подпись линейки: расстояние, мкм, и его проекции по осям картинки."""
+        if a is None:
+            if len(st['ruler']) < 2:
+                return ""
+            a, b = st['ruler']
+        d = (np.asarray(b, float) - np.asarray(a, float)) * px_um
+        return f"{np.hypot(*d):.2f} um   (dx {d[0]:+.2f}, dy {d[1]:+.2f})"
 
     def add_cross(v, snap=False):
         """Крест — ровно там, где щёлкнули (середина пикселя экрана); snap (Shift+щелчок) — к центру креста
@@ -357,6 +371,9 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
             return
         if car.get('hov') is not None:                      # мышь ушла с карусели
             car['hov'], car['hxy'], st['car_dirty'] = None, None, True
+        if ev == cv2.EVENT_MOUSEMOVE and st['mode'] == 'ruler' and len(st['ruler']) == 1:
+            st['mouse'] = (x + 0.5, y + 0.5)               # линейка тянется за мышью до второй точки
+            st['dirty'] = True
         if ev in (cv2.EVENT_LBUTTONDOWN, cv2.EVENT_RBUTTONDOWN, cv2.EVENT_MBUTTONDOWN):
             st['down'] = (x, y, st['cx'], st['cy'], ev, shift, False)
             st['ctrl'] = bool(flags & cv2.EVENT_FLAG_CTRLKEY)
@@ -378,7 +395,7 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
                 st['down'] = (x0, y0, cx, cy, ev0, sh0, True)
                 # сдвиг: правой / средней кнопкой — в любом режиме; левой — везде, кроме рамки (S) и кисти (B),
                 # а там — с Ctrl
-                pan = ev0 != cv2.EVENT_LBUTTONDOWN or st['mode'] in ('look', 'cross', 'label') or st.get('ctrl')
+                pan = ev0 != cv2.EVENT_LBUTTONDOWN or st['mode'] in ('look', 'cross', 'label', 'ruler') or st.get('ctrl')
                 if pan:
                     c = np.array([cx, cy]) - R().T @ (np.array([x - x0, y - y0], float) / st['s'])
                     st['cx'], st['cy'] = c
@@ -416,6 +433,10 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
                     g.selected.symmetric_difference_update({c})
                     g.save(px_um)
                     st['msg'] = f"Square {c} {'selected' if c in g.selected else 'unselected'}, total {len(g.selected)}"
+                elif st['mode'] == 'ruler':                 # линейка: точка ровно там, где щёлкнули
+                    q_ = from_view((x + 0.5, y + 0.5))
+                    st['ruler'] = [q_] if len(st['ruler']) != 1 else st['ruler'] + [q_]
+                    st['msg'] = ruler_text() if len(st['ruler']) == 2 else "Ruler: click the second point"
                 elif st['mode'] == 'label' and g.ready():
                     c = g.cell_at(from_view((x, y)))
                     X, Y = g.labels.get(c, g.name(*c))
@@ -524,10 +545,15 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
         if st['box']:
             bx0, by0, bx1, by1, shb = st['box']
             cv2.rectangle(img, (bx0, by0), (bx1, by1), (0, 140, 255) if shb else yellow, 1)
+        if st['mode'] == 'ruler' and st['ruler']:            # линейка
+            a_ = to_view(st['ruler'][0])
+            b_ = to_view(st['ruler'][1]) if len(st['ruler']) == 2 else st.get('mouse')
+            q2 = st['ruler'][1] if len(st['ruler']) == 2 else (from_view(b_) if b_ is not None else None)
+            UI.ruler(img, a_, b_, ruler_text(st['ruler'][0], q2) if q2 is not None else "")
         mode = {'look': 'Look', 'cross': 'Mark crosses', 'select': 'Select',
-                'paint': 'Brush', 'label': 'Number squares'}[st['mode']]
+                'paint': 'Brush', 'label': 'Number squares', 'ruler': 'Ruler'}[st['mode']]
         mcol = {'look': (170, 170, 178), 'cross': (90, 90, 255), 'select': (90, 210, 90),
-                'paint': (90, 210, 90), 'label': UI.ACCENT}[st['mode']]
+                'paint': (90, 210, 90), 'label': UI.ACCENT, 'ruler': (0, 220, 255)}[st['mode']]
         if st.get('lab'):
             st['msg'] = f"Square number X Y: {st['lab'][1]}_   (Enter = set, Esc = cancel)"
         if st.get('sens') is not None:
@@ -582,11 +608,60 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
 
     def carousel_img():
         pan_, car['hits'], car['content'] = SM.carousel(st['Hv'], _car_items(subs, folder, car), subs.index(folder),
-                                                        car['scroll'], title="Samples", go=False, hover=car.get('hxy'))
+                                                        car['scroll'], title="Selections", go=False, hover=car.get('hxy'))
         return pan_
 
+    # история (Ctrl+Z / Ctrl+Y): после каждого действия разметка (кресты, сетка, квадраты, номера, подсказки)
+    # сравнивается с прежней; изменилась — пара (было, стало) в историю
+    hist = car['hist']
+
+    def g_sig():
+        return (tuple(tuple(np.round(np.asarray(q, float), 3)) for q in g.cr.marks), tuple(g.cr.ij),
+                hash(frozenset(g.selected)), tuple(sorted(g.labels.items())), g.refined is None,
+                hash(frozenset(g.useful)), g.sensitivity)
+
+    def g_snap():
+        return {k_: (v_ if k_ in ('hint_model', 'folder') else copy.deepcopy(v_)) for k_, v_ in g.__dict__.items()}
+
+    def g_label():
+        t_ = (st['msg'] or "change").split(":")[0].split("(")[0].strip()
+        return t_[:60]
+
+    def h_apply(e_, back):
+        """Откатить (back) или повторить действие e_. Разметка другого выделения — открыть его."""
+        if e_.get('kind') == 'remove':
+            import shutil as _sh
+            src, dst = (e_['dst'], e_['src']) if back else (e_['src'], e_['dst'])
+            if os.path.exists(src) and not os.path.exists(dst):
+                os.makedirs(os.path.dirname(dst), exist_ok=True)
+                if not back and os.path.abspath(src) == os.path.abspath(folder):
+                    sc.st.close()
+                _sh.move(src, dst)
+            st['switch'] = e_['src'] if back else (folder if os.path.abspath(e_['src']) != os.path.abspath(folder) else False)
+            return
+        t_ = e_['before'] if back else e_['after']
+        if os.path.abspath(e_['folder']) != os.path.abspath(folder):     # разметка другого выделения
+            gg = Grid(e_['folder'])
+            gg.__dict__.update(copy.deepcopy({k_: v_ for k_, v_ in t_.items() if k_ != 'folder'}))
+            gg.save(e_.get('px', px_um))
+            st['switch'] = e_['folder']
+            return
+        g.__dict__.update({k_: (v_ if k_ in ('hint_model', 'folder') else copy.deepcopy(v_)) for k_, v_ in t_.items()})
+        g.save(px_um)
+        if st['straight'] and g.ready():
+            set_straight(True)
+        elif not g.ready():
+            set_straight(False)
+
+    h_last = [g_sig(), g_snap()]
     cv2.setMouseCallback(WIN, mouse)
     while True:
+        if st['down'] is None and st.get('lab') is None:
+            sg_ = g_sig()
+            if sg_ != h_last[0]:                            # что-то сделано: в историю
+                new_ = g_snap()
+                hist.push(g_label(), h_last[1], new_, folder=folder, px=px_um)
+                h_last[:] = [sg_, new_]
         if st['switch'] is not None:                      # другой образец из карусели
             break
         if not fullscreen:
@@ -628,6 +703,20 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
         if exit_key(key):                                   # Shift+Esc / Ctrl+Esc — выйти из просмотра
             st['switch'] = False
             break
+        ud_ = undo_key(key)
+        if ud_:                                             # Ctrl+Z — отменить, Ctrl+Y / Ctrl+Shift+Z — вернуть
+            e_ = hist.undo() if ud_ == 'undo' else hist.redo()
+            if e_ is None:
+                st['msg'] = "Nothing to undo" if ud_ == 'undo' else "Nothing to redo"
+            else:
+                h_apply(e_, ud_ == 'undo')
+                h_last[:] = [g_sig(), g_snap()]
+                st['msg'] = (f"Undone: {e_['label']}  (Ctrl+Y: redo, {len(hist)} more)" if ud_ == 'undo' else
+                             f"Redone: {e_['label']}")
+            st['dirty'] = True
+            if st['switch'] is not None:
+                break
+            continue
         if st.get('sens') is not None:                      # ввод чувствительности 0…100
             if 48 <= key <= 57 and len(st['sens']) < 3:
                 st['sens'] += chr(key)
@@ -672,7 +761,7 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
             if st.get('help'):
                 st['help'] = False
             elif st['mode'] != 'look':
-                st['mode'] = 'look'
+                st['mode'], st['ruler'] = 'look', []
             else:
                 st['msg'] = "Exit: Shift+Esc or close the window"
             st['dirty'] = True
@@ -681,6 +770,13 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
         elif ch == 'c' and st['mode'] == 'cross':           # кресты заново
             g.cr.clear(); g.refined = None; set_straight(False); g.save(px_um)
             st['msg'] = "Crosses cleared. Click a cross, then its neighbour in the same row"
+        elif ch == 'l':                                      # линейка: две точки -> расстояние
+            if st['mode'] == 'ruler':
+                st['mode'], st['ruler'] = 'look', []
+                st['msg'] = "Ruler off"
+            else:
+                st['mode'], st['ruler'] = 'ruler', []
+                st['msg'] = "Ruler: click two points (a third click starts again). L or Esc: off"
         elif ch == 'g':
             st['mode'] = 'cross'
             st['msg'] = "Click a cross, then its neighbour in the same row: the picture turns level. C: start again"

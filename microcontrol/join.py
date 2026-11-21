@@ -13,6 +13,7 @@ import cv2
 from . import log as L
 from .core import imwrite
 from .errors import StoreError
+from .stats import timed_fn
 from .storage import ScanData, meta_A
 from .util import Result, Progress, save_image
 
@@ -74,6 +75,7 @@ def _by_crosses(st, ids, p, A, W, H, min_score=0.5):
     return corr, f"{found} crosses in {sum(e is not None for e in corr)} of {len(ids)} frames"
 
 
+@timed_fn('Join (all of it)')
 def join(folder, ids=None, x=None, y=None, center=None, scale=None, flatfield=None, blend=True,
          max_mb=3000, min_response=0.08, name=None, crosses='auto', fmt='jpg', flip=''):
     """Склеить кадры скана в одну картинку. Область: ids=[...] | x=(x0,x1), y=(y0,y1) мкм | center=0.3 (центральные 30%).

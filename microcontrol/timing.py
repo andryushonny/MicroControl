@@ -8,17 +8,19 @@ import math
 KEEP = 20                       # сколько последних сканов помнить для одного набора настроек
 
 
-def key(m, focus):
+def key(m, focus, objective=None):
     return "|".join(str(v) for v in (
-        f"{m.objective}x", focus, f"pp{m.photo_pause:g}", f"mp{m.move_pause:g}", f"ex{round(m.exposure)}",
+        f"{objective or m.objective}x", focus, f"pp{m.photo_pause:g}", f"mp{m.move_pause:g}", f"ex{round(m.exposure)}",
         f"sc{int(bool(m.still_check))}", f"rf{int(bool(m.refocus))}", m.frame_format,
         f"jpg{int(bool(getattr(m, 'save_jpg', False)))}"))
 
 
-def prior(m, focus):
-    """Оценка по физике: (подготовка T0, с; секунд на кадр)."""
+def prior(m, focus, objective=None):
+    """Оценка по физике: (подготовка T0, с; секунд на кадр). objective — для выделения другого объектива
+    (кадр на образце меньше во столько раз, во сколько больше увеличение)."""
     from .config import scan_overlap
-    st = m._frame_step(1 - scan_overlap(m.objective))
+    o = objective or m.objective
+    st = m._frame_step((1 - scan_overlap(o)) * m.objective / o)
     travel = st['x'] / max(1.0, m.motor_speed) + m.move_pause
     per = travel + m.photo_pause + 2 * m.exposure / 1000 + 0.3 + (0.15 if m.still_check else 0.0)
     if focus == 'points':
@@ -54,10 +56,11 @@ def _fit(runs):
     return t0, t
 
 
-def estimate(m, frames, focus='points'):
-    """Ожидаемое время скана, с, и откуда оценка: (секунды, текст)."""
-    p0, pt = prior(m, focus)
-    runs = _store(m)[0].get(key(m, focus), [])
+def estimate(m, frames, focus='points', objective=None):
+    """Ожидаемое время скана, с, и откуда оценка: (секунды, текст). objective — объектив выделения
+    (по умолчанию текущий): своя физика и свои прошлые сканы."""
+    p0, pt = prior(m, focus, objective)
+    runs = _store(m)[0].get(key(m, focus, objective), [])
     if not runs:
         return p0 + pt * frames, "estimate (no scans with these settings yet)"
     l0, lt = _fit(runs)

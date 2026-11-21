@@ -12,7 +12,7 @@ Authors: Andrey Lyapeikov, Savely Domenko.
 
 Help: mc.help()
 """
-__version__ = "0.20.0"
+__version__ = "0.21.0"
 AUTHORS = ["Ляпейков Андрей", "Доменко Савелий"]
 
 from .errors import (MicroControlError, SafetyError, LimitError, CommError, CameraError,
@@ -27,6 +27,7 @@ from .mask import export, clean
 from .optics import measure_distortion as distortion
 from .viewer import view, hints, train_hints
 from .agent import Agent
+from .selections import list_selections as selections, remove_selection, open_selection
 from .util import _app_id as _a
 _a()                                     # своя кнопка на панели задач Windows (значок MicroControl)
 from . import agent
@@ -41,7 +42,7 @@ CONNECT
 
 WORKFLOW
   m.manual()                       Live view on the full screen; mark the area with keys 1 and 2
-  folder = m.scan()                Shoot every sample area (each into its own folder sample_01, ...); 30 % overlap
+  folder = m.scan()                Shoot the selections of the current objective (each into selection_01, ...); 30 % overlap
                                    (35 % at 50x, 100x); Z of each area from its own focus points
   mc.stitch(folder)                Exact positions of all frames by their overlaps (like ASHLAR)
   mc.view(folder)                  Mark crosses on the mosaic, straighten it, select the squares you need
@@ -53,6 +54,10 @@ WORKFLOW
   mc.export(folder)                Only the selected squares: PNG/JPG + DXF for AutoCAD
   mc.clean(folder)                 Delete the frames and the rest of the work files (shows first)
   mc.join(folder)                  Simple whole mosaic in one picture (small scans)
+  m.list()                         Scanned selections as layers (map 10x > details 50x > 100x), numbered
+  m.open(N)                        Look at selection N again (mc.view)
+  m.remove(N)                      Delete selection N completely (asks; confirm=False: no question)
+  m.info()                         Device, and where the time goes: every action timed, longest first
 
 MANUAL WINDOW
   Arrows / WASD    Move by Step X / Step Y  Tab     Edit the steps (or click a field)
@@ -60,12 +65,15 @@ MANUAL WINDOW
   G                Steps X, Y = one frame   F       Keep Z here as a focus point (Shift+F: autofocus)
   Y                Autofocus by corners during the scan (on / off)
   M                Next objective (4x, 10x, 20x, 100x)
-  1 / 2            Corners of a sample area, one area after another (areas do not overlap)
-  Carousel, , / .  Choose an area; Go / Enter: drive there; x or C (twice): delete it
-  Space            Picture                  L       Light on / off
+  1 / 2            Corners of a selection, one after another; a higher objective may mark inside
+                   a lower one (layers: map 10x > details 50x > 100x), one objective does not overlap
+  Carousel, , / .  Selections as layers; Go / Enter: drive there; x or C (twice): delete it
+  Space            Picture                  Shift+L Light on / off
+  L                Ruler: click two points -> distance in um (also in mc.view)
   0                Zero here (offset)       R       Real coordinates (remove the offset)
   B                White balance
   Wheel, + / -     Zoom (Z: whole frame)    Drag    Move the zoomed picture (any button)
+  Ctrl+Z / Ctrl+Y  Undo / redo any step (selections, focus points, moves: the stage drives back)
   H                Help on the screen       Esc     Exit
 
 VIEW WINDOW (mc.view)
@@ -132,7 +140,7 @@ EMERGENCY STOP (from any command line, even if the notebook hangs)
 
 INFO
   m                                State of the microscope
-  m.info()                         Model, serial number, device type
+  m.info()                         Model, serial number, device type; time spent per action
   mc.ERRORS                        Error codes
   help(m.scan)                     Help on any command
 """

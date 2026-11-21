@@ -10,6 +10,7 @@ from .errors import SafetyError, LimitError, CommError, CameraError, FocusError,
 from .control import ControlLock, stop_requested_after
 from .device import DeviceMemory
 from .util import Result, Progress, fmt
+from .stats import timed
 
 AXES = ('x', 'y', 'z')
 ORIENTATION = ('map_flip_x', 'map_flip_y', 'arrows_flip_x', 'arrows_flip_y', 'turn_180', 'swap_xy', 'mirror_x', 'mirror_y', 'reverse_x', 'reverse_y', 'reverse_z')   # помнится для прибора
@@ -176,6 +177,17 @@ def _sim0(m, lo):
     return 0.0 if m.port == 'sim' else lo
 
 
+class _Info(Result):
+    """m.info(): прибор + таблица времени (словарь 'Time' печатается таблицей)."""
+    def __repr__(self):
+        from . import stats as ST
+        w = max((len(k) for k in self if k != 'Time'), default=0)
+        head = "\n".join([self.title] + [f"  {k:<{w}}   {fmt(v)}" for k, v in self.items() if k != 'Time'])
+        return head + "\n\n" + ST.report()
+
+    __str__ = __repr__
+
+
 class Microscope:
     """Микроскоп Optosky ATR8300.
 
@@ -263,6 +275,8 @@ class Microscope:
         self._plane = None                     # плоскость фокуса (G29): z = a + b*x + c*y, мкм (машинные)
         self._off = dict.fromkeys(AXES, 0.0)   # смещение нуля (offset), мкм: рабочие = машинные − смещение
         self._t_connect = time.time()
+        from . import stats as _ST
+        _ST.reset()                            # m.info(): время — с подключения
         self._motors_on = False                # штатное ПО включает моторы X/Y (0x24 01) перед первым движением
         self._cooling = cooling
         self._stopped = False
@@ -388,7 +402,8 @@ class Microscope:
         self._cmd(P.LIGHT, int(v).to_bytes(2, 'big'))
         L.event('LGT-001', f"Light level {v}." if v else "Light off.")
         if v and not self._cfg.get('light') and self._cfg.get('light_pause'):
-            time.sleep(self.light_pause)
+            with timed("Light: warm-up pause (light_pause)"):
+                time.sleep(self.light_pause)
 
     def _apply_laser(self, v):
         if v and not self.allow_laser:
@@ -570,9 +585,35 @@ class Microscope:
     def _repr_pretty_(self, p, cycle):
         p.text(repr(self))
 
-    def info(self):
-        """Модель, серийный номер, тип прибора (прочитаны при подключении)."""
-        return self.device
+    def info(self, reset=False):
+        """Прибор (модель, серийный номер, тип) и где проходит время: каждое действие меряется таймером
+        (движение, ожидание мотора, паузы, снимки, фокус, запись кадров, сшивка, экспорт ...), отчёт — по
+        убыванию своего времени. reset=True — считать заново. m.info()['Time'] — те же цифры словарём."""
+        from . import stats as ST
+        if reset:
+            ST.reset()
+            return Result("Timers reset", Since="now")
+        r = _Info("Microscope", **dict(self.device))
+        r['Time'] = ST.data()
+        return r
+
+    # ---------------- отснятые выделения ----------------
+    def list(self):
+        """Все отснятые выделения (папка сканов) деревом слоёв: карта 10x, под ней участки 50x, под ними 100x.
+        Номер слева — для m.open(N) и m.remove(N)."""
+        from .selections import list_selections
+        return list_selections(self.dirs['scans'])
+
+    def open(self, which, **kw):
+        """Открыть отснятое выделение в просмотре: номер из m.list(), папка или часть её имени."""
+        from .selections import open_selection
+        return open_selection(which, self.dirs['scans'], **kw)
+
+    def remove(self, which, confirm=True):
+        """Удалить отснятое выделение совсем (все кадры, сетку, экспорт): номер из m.list(), папка или часть
+        имени. confirm=True — спросить (yes). Выделения внутри него остаются."""
+        from .selections import remove_selection
+        return remove_selection(which, self.dirs['scans'], confirm)
 
     # ---------------- низкий уровень ----------------
     def _u2p(self, um):
@@ -626,7 +667,8 @@ class Microscope:
         if self._ser is None:
             raise SafetyError('E104')
         self._check_stop()
-        return self._raw(cmd, data, timeout)
+        with timed("Controller: command and answer"):
+            return self._raw(cmd, data, timeout)
 
     def _raw(self, cmd, data=b"", timeout=None, _retry=True):
         """Одна команда и ответ. Если порт пропал (USB переподключился или был усыплён Windows),
@@ -735,7 +777,11 @@ class Microscope:
         self._p[ax] += n
         L.debug('MOV-006', f"{ax.upper()} {n:+d} steps, now {self._p[ax]}. Status {st.hex() or '-'}.")
         # контроллер отвечает до окончания движения: ждём путь / скорость + успокоение
-        self._sleep(abs(n) * self.motor_step / self.motor_speed + self.move_pause)
+        grp = 'Z' if ax == 'z' else 'X/Y'
+        with timed(f"Stage {grp}: travel (distance / motor_speed)"):
+            self._sleep(abs(n) * self.motor_step / self.motor_speed)
+        with timed(f"Stage {grp}: pause after move (move_pause)"):
+            self._sleep(self.move_pause)
         self._remember()
         code = st[0] if st else 0
         if code in (P.MOTOR_FAIL, P.MOTOR_MOVING) or code not in P.MOTOR_STATUS:
@@ -1165,6 +1211,10 @@ class Microscope:
         return np.array([[0.0, ky], [kx, 0.0]]) if self.swap_xy else np.diag([kx, ky])
 
     def check_orientation(self, fix=True, distance=None):
+        with timed("Orientation check"):
+            return self._check_orientation(fix, distance)
+
+    def _check_orientation(self, fix=True, distance=None):
         """Проверить камерой, куда идёт картинка при движении X и Y, и исправить swap_xy, mirror_x, mirror_y.
         Столик сдвигается на ~20% кадра по X и по Y и возвращается. От этого зависит сшивка: при неверном знаке
         кадры встают в обратном порядке. Делается сама в начале каждого скана (scan_check = True)."""
@@ -1288,7 +1338,7 @@ class Microscope:
         self._need_cam()
         import threading
         lock = self.__dict__.setdefault('_cam_lock', threading.RLock())   # живой поток manual и остальные — по очереди
-        with lock:
+        with lock, timed("Camera: picture"):
             img = self.cam.grab(FRAME_FLUSH if flush is None else flush)
         if self.turn_180:
             img = cv2.rotate(img, cv2.ROTATE_180)
@@ -1374,7 +1424,7 @@ class Microscope:
         совсем потерян."""
         self._need_cam()
         t0 = time.monotonic()
-        with Progress(10, "Focus", unit='pictures') as pr:     # число снимков уточняется по ходу
+        with timed("Autofocus (all of it)"), Progress(10, "Focus", unit='pictures') as pr:     # число снимков уточняется по ходу
             if wide:
                 r = F.run(self, self.focus_method, self.focus_range, self.focus_step, pr=pr)
             else:
@@ -1420,11 +1470,24 @@ class Microscope:
                'each' — автофокус в каждом кадре. Пересъёмка размытых кадров с фокусом — m.refocus = True.
         overlap — перекрытие соседних кадров 0..0.5; path — 'snake' или 'rows'.
         name, notes — название образца и заметки (пишутся в описание скана).
-        Несколько образцов (области 1, 2, 3… из m.manual()): каждая область снимается в свою папку
-        sample_01, sample_02… внутри одной папки сеанса, Z кадров — по точкам фокуса своей области.
-        Возвращает папку скана (для нескольких образцов — папку сеанса)."""
+        Несколько выделений (1, 2, 3… из m.manual()): снимаются выделения ТЕКУЩЕГО объектива, каждое в свою
+        папку selection_01, selection_02… внутри одной папки сеанса, Z кадров — по точкам фокуса своего выделения.
+        Выделения других объективов (слои: участки 100x внутри карты 10x) ждут, пока поставят их объектив.
+        Возвращает папку скана (для нескольких выделений — папку сеанса)."""
         from .scan import plan
-        regs = getattr(self, '_regions', None) or []
+        from .samples import init_areas, obj as _obj
+        regs_all = getattr(self, '_regions', None) or []
+        if regs_all:
+            init_areas(self)
+        regs = [rg for rg in regs_all if _obj(self, rg) == self.objective]
+        if area is None and regs_all and not regs:
+            objs = sorted({_obj(self, rg) for rg in regs_all})
+            raise SafetyError('E706', f"No selection for {self.objective}x; the selections are for "
+                                      f"{', '.join(f'{o}x' for o in objs)}. Put that objective in place and set it "
+                                      "(m.objective = ..., or M in m.manual()), or mark selections with this one.")
+        if area is None and len(regs) < len(regs_all):
+            print(f"Selections of {self.objective}x: {len(regs)}; the other {len(regs_all) - len(regs)} "
+                  "(other objectives) wait for their objective.")
         pts = None
         if area is None and len(regs) > 1:
             return self._scan_samples(regs, focus, overlap, path, name, notes)
@@ -1433,6 +1496,14 @@ class Microscope:
             rg, off = regs[0], self._off
             area = Area(rg['A'][0] - off['x'], rg['A'][1] - off['y'], rg['B'][0] - off['x'], rg['B'][1] - off['y'])
             pts = rg['pts']
+            from .samples import parent as _par
+            pk = _par(self, self._regions.index(rg))
+            extra = dict(selection=rg['num'], sample_uid=rg['uid'], area_real_um=[*rg['A'], *rg['B']])
+            if pk is not None:
+                extra.update(parent_uid=self._regions[pk]['uid'], parent_selection=self._regions[pk]['num'],
+                             parent_objective=self._regions[pk].get('obj'))
+        else:
+            extra = None
         if self.cam and self.scan_check:                   # знаки осей картинки — до плана (от них зависит сшивка)
             r = self.check_orientation()
             if 'Changed' in r or 'Reason' in r:
@@ -1440,7 +1511,7 @@ class Microscope:
         from .config import scan_overlap
         prog = plan(self, area=area, focus=focus, overlap=scan_overlap(self.objective) if overlap is None else overlap, path=path,
                     pts=pts)
-        r = self.gcode(prog, save=name or 'scan', notes=notes, reuse=bool(name))   # то же имя — та же папка
+        r = self.gcode(prog, save=name or 'scan', notes=notes, reuse=bool(name), extra=extra)   # то же имя — та же папка
         r.title = "Scan finished" if r.title == "Program finished" else "Scan stopped"
         print(r)
         return r['Folder']
@@ -1459,10 +1530,11 @@ class Microscope:
         ov = scan_overlap(self.objective) if overlap is None else overlap
         off = self._off
         from .util import named_folder
-        ses = named_folder(self.dirs['scans'], self.objective, name or 'samples', reuse=bool(name))   # то же имя — та же папка
+        ses = named_folder(self.dirs['scans'], self.objective, name or 'selections', reuse=bool(name))   # то же имя — та же папка
         os.makedirs(ses, exist_ok=True)
         info = dict(project="MicroControl", name=name, notes=notes, objective=self.objective,
                     date=_dt.now().isoformat(timespec='seconds'), samples=[])
+        from .samples import parent as _par
         n0 = 0
         from .samples import init_areas
         init_areas(self)                                      # у каждой области — постоянный номер и uid
@@ -1472,14 +1544,19 @@ class Microscope:
             pts = [dict(p, tag=str(n0 + i + 1)) for i, p in enumerate(reg['pts'])]
             nums = [n0 + 1, n0 + len(pts)]
             n0 += len(pts)
-            info['samples'].append(dict(index=sn, uid=uid, folder=f"sample_{sn:02d}", color_bgr=list(color(sn - 1)),
-                                        area_um=[area.x0, area.y0, area.x1, area.y1], focus_points=nums))
+            kk = self._regions.index(reg)
+            pk = _par(self, kk)
+            par_ = dict(parent_uid=self._regions[pk]['uid'], parent_selection=self._regions[pk]['num'],
+                        parent_objective=self._regions[pk].get('obj')) if pk is not None else {}
+            info['samples'].append(dict(index=sn, uid=uid, folder=f"selection_{sn:02d}", color_bgr=list(color(sn - 1)),
+                                        area_um=[area.x0, area.y0, area.x1, area.y1], focus_points=nums, **par_))
             _json.dump(info, open(os.path.join(ses, 'session.json'), 'w', encoding='utf-8'), indent=1, ensure_ascii=False)
             prog = plan(self, area=area, focus=focus, overlap=ov, path=path, pts=pts)
-            print(f"Sample {sn} ({k + 1} of {len(regs)}): {area}")
-            r = self.gcode(prog, save=f"{name or 'sample'} {sn}", notes=notes,
-                           folder=os.path.join(ses, f"sample_{sn:02d}"),
-                           extra=dict(sample_index=sn, sample_uid=uid, session=os.path.basename(ses), focus_points=nums))
+            print(f"Selection {sn} ({k + 1} of {len(regs)}): {area}")
+            r = self.gcode(prog, save=f"{name or 'selection'} {sn}", notes=notes,
+                           folder=os.path.join(ses, f"selection_{sn:02d}"),
+                           extra=dict(sample_index=sn, sample_uid=uid, selection=sn, session=os.path.basename(ses),
+                                      focus_points=nums, area_real_um=[*reg['A'], *reg['B']], **par_))
             print(r)
             if r.title != "Program finished":
                 break

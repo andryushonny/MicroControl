@@ -389,7 +389,7 @@ def _manual(ag, topic='overview'):
 
 
 @tool('get_status', "Current state: connection, objective, stage position (um), limits, light, exposure, "
-                    "sample areas with focus points, last scan. Call it first and after anything goes wrong.")
+                    "selections (with objective and the selection they lie in) and focus points, last scan. Call it first and after anything goes wrong.")
 def _status(ag):
     m = ag.m
     if m is None:
@@ -442,7 +442,7 @@ def _change(ag, name, value, reason):
               "target='camera': the live camera frame now (no movement). target='mosaic': a part of a stitched scan "
               "with the red square grid, square names, selection (green) and hints (yellow); the border ruler is in "
               "mosaic pixels — use those numbers for mark_cross and label_square. target='map': the stage map with "
-              "sample areas, focus points and the current position.",
+              "selections, focus points and the current position.",
       {'target': {'type': 'string', 'enum': ['camera', 'mosaic', 'map']}, 'folder': FOLDER,
        'x0': {'type': 'number', 'description': "mosaic: left edge, px (default: whole mosaic)"},
        'y0': {'type': 'number', 'description': "mosaic: top edge, px"},
@@ -559,7 +559,7 @@ def _map_image(ag):
         B = rg.get('B') or rg['A']
         r = SM.rect(dict(A=rg['A'], B=B), fw, fh)
         cv2.rectangle(img, to(r[0], r[1]), to(r[2], r[3]), c, 2 if 'B' in rg else 1)
-        cv2.putText(img, f"Sample {SM.num(m, k)}", (to(r[0], r[1])[0] + 4, to(r[0], r[1])[1] + 18),
+        cv2.putText(img, f"Selection {SM.num(m, k)}", (to(r[0], r[1])[0] + 4, to(r[0], r[1])[1] + 18),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.55, c, 1, cv2.LINE_AA)
     for n, k, p in SM.numbered(m):
         q = to(p['x'], p['y'])
@@ -648,8 +648,8 @@ def _photo(ag, name=None):
     return dict(file=m.last_photo)
 
 
-# ------------------------------------------------------------------ tools: sample areas
-@tool('area_corner', "Sample areas, exactly like keys 1 and 2 in manual mode: corner=1 starts a NEW area at the "
+# ------------------------------------------------------------------ tools: selections
+@tool('area_corner', "Selections, exactly like keys 1 and 2 in manual mode (a selection of a higher objective may lie inside one of a lower objective): corner=1 starts a NEW area at the "
                      "current stage position, corner=2 at the opposite corner fixes it (snapped to the frame grid). "
                      "Z at that moment becomes a focus point, so focus first. Areas must not overlap.",
       {'corner': {'type': 'integer', 'enum': [1, 2]}}, ('corner',), risk='work')
@@ -666,39 +666,43 @@ def _point(ag):
     return dict(message=SM.add_point(m), areas=SM.areas_info(m))
 
 
-@tool('goto_area', "Drive to the frame of sample area N nearest to the stage, at its focus height (safe order: down, X/Y, up).",
-      {'sample': {'type': 'integer', 'minimum': 1}, 'reason': REASON}, ('sample', 'reason'), risk='act',
-      ask=lambda ag, a: f"Drive to the nearest frame of sample area {a['sample']}.")
-def _goto_area(ag, sample, reason):
+@tool('goto_area', "Drive to the frame of selection N nearest to the stage, at its focus height (safe order: down, X/Y, up).",
+      {'selection': {'type': 'integer', 'minimum': 1}, 'reason': REASON}, ('selection', 'reason'), risk='act',
+      ask=lambda ag, a: f"Drive to the nearest frame of Selection {a['selection']}.")
+def _goto_area(ag, selection, reason):
+    sample = selection
     m = ag.need_m()
     k = SM.index_of(m, sample)
     if k is None:
-        raise AgentError('BAD_ARGS', f"No sample {sample}.", "Sample numbers are in get_status -> areas.")
+        raise AgentError('BAD_ARGS', f"No selection {sample}.", "Selection numbers are in get_status -> areas.")
     msg = SM.goto_area(m, k)
     p = m.position
     return dict(message=msg, position_um=dict(x=p.x, y=p.y, z=p.z))
 
 
-@tool('delete_area', "Delete sample area N (the numbers of the others stay). N of the new area (corner 2 not "
+@tool('delete_area', "Delete selection N (the numbers of the others stay). N of the new area (corner 2 not "
                      "set) cancels it.",
-      {'sample': {'type': 'integer', 'minimum': 1}, 'reason': REASON}, ('sample', 'reason'), risk='act',
-      ask=lambda ag, a: f"Delete sample area {a['sample']} (made by the operator or the agent).")
-def _del_area(ag, sample, reason):
+      {'selection': {'type': 'integer', 'minimum': 1}, 'reason': REASON}, ('selection', 'reason'), risk='act',
+      ask=lambda ag, a: f"Delete Selection {a['selection']} (made by the operator or the agent).")
+def _del_area(ag, selection, reason):
+    sample = selection
     m = ag.need_m()
     k = SM.index_of(m, sample)
     if k is None:
-        raise AgentError('BAD_ARGS', f"No sample {sample}.", "Sample numbers are in get_status -> areas.")
+        raise AgentError('BAD_ARGS', f"No selection {sample}.", "Selection numbers are in get_status -> areas.")
     return dict(message=SM.delete_area(m, k), areas=SM.areas_info(m))
 
 
 def _ask_scan(ag, a):
     info = SM.areas_info(ag.m)
-    fixed = [x for x in info if x['state'] == 'fixed']
+    fixed = [x for x in info if x['state'] == 'fixed' and x['objective'] == ag.m.objective]
     n = sum(x['frames'] for x in fixed)
-    return f"Scan {len(fixed)} sample area(s), {n} frames in total. The stage will move by itself for a while."
+    return (f"Scan {len(fixed)} selection(s) of {ag.m.objective}x, {n} frames in total. "
+            "The stage will move by itself for a while.")
 
 
-@tool('scan', "Shoot all fixed sample areas (each with Z from its own focus points) into one new folder. "
+@tool('scan', "Shoot all fixed selections of the CURRENT objective (each with Z from its own focus points) into one "
+              "new folder; selections of other objectives (layers) are left for when that objective is in place. "
               "dry_run=true only counts frames and time, no approval needed.",
       {'dry_run': {'type': 'boolean'}, 'name': {'type': 'string', 'description': "Short name for the folder."},
        'reason': REASON}, ('reason',), risk='work')
@@ -706,9 +710,10 @@ def _scan(ag, reason, dry_run=False, name=''):
     m = ag.need_m()
     SM.init_areas(m)
     info = SM.areas_info(m)
-    fixed = [x for x in info if x['state'] == 'fixed']
+    fixed = [x for x in info if x['state'] == 'fixed' and x['objective'] == m.objective]
     if not fixed:
-        raise AgentError('NO_AREA', "No fixed sample area.", "Make one with area_corner 1 and 2 (focus at each corner).")
+        raise AgentError('NO_AREA', f"No fixed selection of {m.objective}x.",
+                         "Make one with area_corner 1 and 2 (focus at each corner), or switch the objective.")
     n = sum(x['frames'] for x in fixed)
     from . import timing as TM
     fm_ = 'points' if getattr(m, '_use_fp', True) else 'off'

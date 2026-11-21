@@ -176,6 +176,12 @@ class Progress:
 
 
 def save_image(path, img, params=None, title="Saving", pr=None):
+    from .stats import timed
+    with timed("Saving large pictures"):
+        return _save_image(path, img, params, title, pr)
+
+
+def _save_image(path, img, params=None, title="Saving", pr=None):
     """Записать (большую) картинку с полосой прогресса. Кодирование PNG/JPG идёт одним вызовом OpenCV,
     поэтому доля — оценка: сначала кодируется полоса ~1/50 высоты и по её времени считается всё; полоса
     дойдёт до 100 % только когда файл записан. pr — уже открытая полоса: тогда пишется в её подпись."""

@@ -14,6 +14,7 @@ from . import log as L
 from .crosses import Crosses, fit_square
 from .storage import ScanData
 from .util import Result, Progress, save_image
+from .stats import timed_fn
 
 
 # ------------------------------------------------------------------ состояние разметки
@@ -484,6 +485,7 @@ class Frames:
 
 
 @_per_sample
+@timed_fn('Export (all of it)')
 def export(folder, fmt='png', scale=1.0, cells=False, dxf=True, max_mb=2000, margin=0, blend='multiband'):
     """Вывести только выделенные квадраты: ровно (поворот подложки снят), стык строго по крестам.
     fmt='png' — фон прозрачный, 'jpg' — белый. cells=True — ещё и каждый квадрат отдельным файлом.

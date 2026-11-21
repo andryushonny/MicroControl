@@ -20,6 +20,7 @@ import cv2
 from . import log as L
 from .storage import ScanData, meta_A, _thumb
 from .util import Result, Progress, save_image
+from .stats import timed_fn
 
 
 def _gray(a):
@@ -69,6 +70,7 @@ def _pair(st, ia, ib, d, W, H, pad, sigma, max_shift, other=None):
 
 
 @_per_sample
+@timed_fn('Stitch (all of it)')
 def stitch(folder, engine='builtin', max_shift_um=40.0, sigma=None, alpha=0.01, preview=True, verbose=True,
            flat=True):
     """Сшить скан: найти точные положения кадров. engine='auto' | 'builtin' | 'ashlar'.
@@ -172,6 +174,7 @@ def stitch(folder, engine='builtin', max_shift_um=40.0, sigma=None, alpha=0.01, 
     return r
 
 
+@timed_fn('Stitch: seams')
 def _builtin(st, pred, p, W, H, max_shift, sigma, alpha, verbose):
     n = len(pred)
     pad = int(max_shift)
@@ -318,6 +321,7 @@ def _write_levels(img, i, W, H, lvdir):
         buf.tofile(os.path.join(lvdir, f"{i:05d}_{lv}.jpg"))
 
 
+@timed_fn('Stitch: preview and small copies')
 def make_preview(folder, pos=None, max_side=4000, levels=True, verbose=False):
     """Уменьшенная мозаика (JPG) для быстрого взгляда: кадры уменьшаются и кладутся по положениям.
     Заодно (levels=True) каждый кадр пишется уменьшенным в 2, 4, 8 раз в viewer/levels/ — просмотр больших

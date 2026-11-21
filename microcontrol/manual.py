@@ -50,7 +50,8 @@ HELP = ["Shift+Esc: Exit (or close the window)", "P: Hide / show the left panel"
         "V: Open the last scan in the view (crosses, squares, export); closing it brings you back here",
         "L: Light on / off   I: Laser on / off   W: White balance (aim at an empty place)   Space: Picture",
         "R: Ruler: click two points (distance, um)   0: Zero here   Shift+0: Real coordinates",
-        "Wheel: zoom   Middle button or Shift+drag: move the zoomed picture   Z: whole frame",
+        "Wheel: zoom   Drag (middle button too): move the zoomed picture   Z: whole frame",
+        "Shift+drag over a mask (chosen squares): move the mask if it sits off the real crosses (Ctrl+Z undoes)",
         "T: Turn the camera picture by 180 degrees (remembered)",
         "[ / ]: Arrows left-right / up-down the other way; the mini map always follows the arrows (remembered)",
         "O: check with the camera which way the picture moves",
@@ -372,7 +373,7 @@ def minimap(img, m, A, B, size=MAP_W, zcolor=None, others=(), right=0):
     if polys:
         ovm = sub.copy()
         gx1m, gy1m = gx0 + gw, gy0 + gh
-        for q, sn in polys:                                              # цвет своего выделения, темнее
+        for q, sn, _f in polys:                                          # цвет своего выделения, темнее
             pts = np.int32([to(*f(x_ - m._off['x'], y_ - m._off['y'])) for x_, y_ in q])
             if pts[:, 0].max() < gx0 or pts[:, 0].min() > gx1m or pts[:, 1].max() < gy0 or pts[:, 1].min() > gy1m:
                 continue
@@ -531,6 +532,8 @@ def _run(m, fullscreen=False, _keys=None):
     show_help, msg, msg_t, sharp, n = False, "H: Help.  Tab or click a field to edit it", time.monotonic(), 0.0, 0
     SM.init_areas(m)                                     # области образцов (настоящие мкм)
     car = dict(scroll=0, hits=[], confirm=None, t=0.0)   # карусель справа
+    mdr = dict(on=False)                                 # Shift + тянуть: сдвиг маски (папка съёмки, начало, сдвиг)
+    mshift, mshift0 = {}, {}                             # сдвиги масок за сеанс (для Ctrl+Z) и исходные
     A = B = None
     if not getattr(m, '_manual_steps', None):
         m._manual_steps = default_steps(m)
@@ -583,6 +586,17 @@ def _run(m, fullscreen=False, _keys=None):
                 clicks.append(('car', x, y))
             elif ev == cv2.EVENT_MOUSEWHEEL:
                 clicks.append(('carw', x, y, wheel_delta(flags)))
+            return
+        if mdr['on']:                                    # тянут маску (Shift + левая кнопка)
+            if ev == cv2.EVENT_MOUSEMOVE and flags & cv2.EVENT_FLAG_LBUTTON:
+                clicks.append(('mdrag', x, y))
+            elif ev == cv2.EVENT_LBUTTONUP or (ev == cv2.EVENT_MOUSEMOVE and not flags & cv2.EVENT_FLAG_LBUTTON):
+                mdr['on'] = False
+                clicks.append(('mdrag1', x, y))
+            return
+        if ev == cv2.EVENT_LBUTTONDOWN and flags & cv2.EVENT_FLAG_SHIFTKEY and not on_field(x, y):
+            mdr['on'] = True
+            clicks.append(('mdrag0', x, y))
             return
         if ev == cv2.EVENT_MOUSEWHEEL:
             clicks.append(('wheel', x, y, wheel_delta(flags)))
@@ -939,13 +953,15 @@ def _run(m, fullscreen=False, _keys=None):
     def h_sig():
         strip = lambda r: None if r is None else {k_: v_ for k_, v_ in r.items() if k_ != 'thumbs'}
         return json.dumps([[strip(r) for r in m._regions], strip(m._pending), m._sel, getattr(m, '_area_seq', 0),
-                           m._p, m.objective, m._off], sort_keys=True, default=str)
+                           m._p, m.objective, m._off, mshift], sort_keys=True, default=str)
 
     def h_snap():
         return dict(regions=copy.deepcopy(m._regions), pending=copy.deepcopy(m._pending), sel=m._sel,
-                    seq=getattr(m, '_area_seq', 0), p=dict(m._p), obj=m.objective, off=dict(m._off))
+                    seq=getattr(m, '_area_seq', 0), p=dict(m._p), obj=m.objective, off=dict(m._off), ms=dict(mshift))
 
     def h_label(a_, b_):
+        if a_.get('ms') != b_.get('ms'):
+            return "move a mask"
         if a_['p'] != b_['p'] and json.dumps(a_['regions'], default=str) == json.dumps(b_['regions'], default=str):
             s_ = m.motor_step
             return f"move to X {b_['p']['x'] * s_ - b_['off']['x']:.0f}, Y {b_['p']['y'] * s_ - b_['off']['y']:.0f}, " \
@@ -959,6 +975,16 @@ def _run(m, fullscreen=False, _keys=None):
         что Go: сначала вниз, потом X/Y отрезками, потом вверх)."""
         m._regions[:] = copy.deepcopy(t['regions'])
         m._pending, m._sel, m._area_seq = copy.deepcopy(t['pending']), t['sel'], t['seq']
+        for fd_, sh0_ in mshift0.items():                   # сдвиги масок
+            to_ = t.get('ms', {}).get(fd_, sh0_)
+            if mshift.get(fd_, sh0_) != to_:
+                from .selections import shift_mask
+                shift_mask(fd_, to=to_)
+                SM._MASKS.pop(fd_, None)
+            if fd_ in t.get('ms', {}):
+                mshift[fd_] = to_
+            else:
+                mshift.pop(fd_, None)
         if t['obj'] != m.objective:
             m.objective = t['obj']
             d0 = default_steps(m)
@@ -1015,7 +1041,9 @@ def _run(m, fullscreen=False, _keys=None):
                 rp_ = np.array([m.real_position.x, m.real_position.y])
                 rad_ = 1.5 * max(m.frame_size) / max(1.0, zm['z']) + 2 * max(m.frame_size)
                 ov_ = None
-                for q, sn in polys_:                        # цвет своего выделения, темнее
+                for q, sn, fd in polys_:                    # цвет своего выделения, темнее
+                    if mdr.get('fd') == fd:                 # маску сейчас тянут
+                        q = q + mdr['d']
                     if np.abs(q.mean(0) - rp_).max() > rad_:
                         continue
                     pts = np.int32([to_v(S_) for S_ in q])
@@ -1262,6 +1290,41 @@ def _run(m, fullscreen=False, _keys=None):
                 if it_:
                     menu_do(it_)
                 continue
+            if c_[0] in ('mdrag0', 'mdrag', 'mdrag1'):             # Shift + тянуть: сдвинуть маску
+                if back_v is None:
+                    continue
+                q_ = np.array(back_v((c_[1] + 0.5, c_[2] + 0.5)), float)
+                if c_[0] == 'mdrag0':
+                    from .selections import marked_all
+                    fd_ = next((fd for q, sn, fd in marked_all(m.dirs['scans'], every=0)
+                                if cv2.pointPolygonTest(np.float32(q), (float(q_[0]), float(q_[1])), False) >= 0), None)
+                    if fd_ is None and car.get('mask') is not None and car['mask'] < len(m._regions):
+                        mk_ = SM.mask_of(m, car['mask'])
+                        fd_ = mk_['folder'] if mk_ else None
+                    if fd_ is None:                                 # не над маской — как обычно, сдвиг картинки
+                        mdr.update(fd=None)
+                        zm['pan'] = (np.array(c_[1:3], float), np.array(zm['c'], float))
+                    else:
+                        mdr.update(fd=fd_, p0=q_, d=np.zeros(2))
+                elif not mdr.get('fd'):
+                    if zm['pan']:
+                        zm['c'] = zm['pan'][1] - (np.array(c_[1:3], float) - zm['pan'][0]) / kz
+                    if c_[0] == 'mdrag1':
+                        zm['pan'] = None
+                else:
+                    mdr['d'] = q_ - mdr['p0']
+                    if c_[0] == 'mdrag1':
+                        fd_, d_ = mdr.pop('fd'), mdr.pop('d')
+                        if np.hypot(*d_) > 0.05:
+                            from .selections import marked_squares, shift_mask
+                            if fd_ not in mshift0:
+                                mk_ = marked_squares(fd_)
+                                mshift0[fd_] = tuple(mk_['shift_um']) if mk_ else (0.0, 0.0)
+                            mshift[fd_] = tuple(map(float, shift_mask(fd_, d_)))
+                            SM._MASKS.pop(fd_, None)
+                            msg, msg_t = (f"Mask moved by {d_[0]:+.1f}, {d_[1]:+.1f} um (total {mshift[fd_][0]:+.1f}, "
+                                          f"{mshift[fd_][1]:+.1f}); Ctrl+Z undoes"), time.monotonic()
+                continue
             if c_[0] == 'carw':                                     # прокрутка карусели
                 car['scroll'] = car_clamp(car['scroll'] - 60 * np.sign(c_[3]))
                 continue
@@ -1306,7 +1369,9 @@ def _run(m, fullscreen=False, _keys=None):
                         km, kp = k[1], k[2]
                         if act == 'sel':
                             car['confirm'] = None
-                            msg = f"Mask {SM.num(m, km)}.{kp + 1}: Go drives to its nearest square, x deletes only it"
+                            car['mask'] = km
+                            msg = (f"Mask {SM.num(m, km)}.{kp + 1}: Go drives to its nearest square, x deletes only it, "
+                                   "Shift + drag on the picture moves the whole mask")
                         elif act == 'del':
                             if car['confirm'] == k:
                                 msg = SM.delete_mask(m, km, kp)

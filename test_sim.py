@@ -707,3 +707,34 @@ M.cv2.imwrite('/tmp/car_drag.png', shots[3]); M.cv2.imwrite('/tmp/car_scroll.png
 order = [m._regions[k]['num'] for k, d in SM.tree(m)]
 assert order[0] != 3 and 3 in order[1:5], order                     # карточка Selection 3 переехала вниз
 m.close(); print("Drag and drop order of selections, carousel scroll (wheel, bar): OK", order[:5])
+
+# ------------------------------------------------------------------ 26. Сдвиг маски (Shift + тянуть), Ctrl+Z
+import microcontrol.manual as M
+from microcontrol import samples as SM
+from microcontrol import selections as _s_
+SEL = sys.modules['microcontrol.selections']
+from microcontrol.mask import Grid
+m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp()); m.focus()
+fw, fh = m.frame_size
+m.area = mc.Area(0, 0, 3 * fw, 2 * fh)
+f = m.scan(); mc.stitch(f, verbose=False)
+px_um = json.load(open(os.path.join(f, 'meta.json')))['pixel_size_um']
+g = Grid(f); p0 = np.array([150.0, 120.0]); a_ = 100 / px_um
+g.cr.add(p0); g.cr.add(p0 + (a_, 0)); g.cr.add(p0 + (0, a_))
+g.selected |= {(0, 0), (1, 0)}; g.save(px_um)
+c0 = SEL.marked_squares(f)['center_um'].copy()
+SEL.shift_mask(f, (5, -3))
+assert np.allclose(SEL.marked_squares(f)['center_um'] - c0, (5, -3))
+g = Grid(f); g.save(px_um)                                          # просмотр сохраняет сетку — сдвиг остаётся
+assert np.allclose(SEL.marked_squares(f)['center_um'] - c0, (5, -3))
+SEL.shift_mask(f, to=(0, 0))
+X = 1280 - mc.samples.CAR_W + 60
+M.run(m, fullscreen=False, _keys=[-1, ('car', X, 160), -1, ('mdrag0', 400, 400), ('mdrag', 440, 380), -1,
+                                  ('mdrag1', 440, 380), -1, -1])
+d1 = SEL.marked_squares(f)['center_um'] - c0
+assert np.hypot(*d1) > 1, d1
+M.run(m, fullscreen=False, _keys=[-1, ('car', X, 160), -1, ('mdrag0', 400, 400), ('mdrag', 440, 380), -1,
+                                  ('mdrag1', 440, 380), -1, 26, -1, -1])                 # Ctrl+Z — назад
+d2 = SEL.marked_squares(f)['center_um'] - c0
+assert np.allclose(d2, d1, atol=0.01), (d1, d2)
+m.close(); print("Mask shift: Shift+drag, kept by the viewer, Ctrl+Z: OK", d1)

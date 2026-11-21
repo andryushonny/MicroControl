@@ -46,6 +46,8 @@ def _stage_layout(folder, P):
         return None
 
 
+KEEP = ('shift_um', 'selected_removed')                 # ключи grid.json, которые пишет не просмотр
+
 class Grid:
     def __init__(self, folder):
         self.folder = folder
@@ -130,7 +132,13 @@ class Grid:
                      turn_deg=self.cr.angle())
             if px_um:
                 d['pitch_um'] = [float(np.hypot(*v1) * px_um), float(np.hypot(*v2) * px_um)]
-        with open(os.path.join(self.folder, 'grid.json'), 'w', encoding='utf-8') as f:
+        gp_ = os.path.join(self.folder, 'grid.json')
+        try:                                                # записи окна микроскопа: сдвиг маски, снятые части
+            old_ = json.load(open(gp_, encoding='utf-8'))
+            d.update({k_: old_[k_] for k_ in KEEP if k_ in old_})
+        except (OSError, ValueError):
+            pass
+        with open(gp_, 'w', encoding='utf-8') as f:
             json.dump(d, f, indent=1)
 
     def refine(self, render, size, px_um, min_resp=0.1):

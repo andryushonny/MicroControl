@@ -706,6 +706,8 @@ I' = \frac{I - D}{E - D}\,\langle E - D \rangle,
 
 ## 15. 手动模式与查看器
 
+**项目与样品。** `mc.Project(名称, 描述)` 和 `project.sample(名称, 描述)` 打开或创建 `projects/<项目>/project.json` 与 `projects/<项目>/samples/<样品>/sample.json`。样品保存其选区（载物台真实 µm 角点、物镜、帧大小、对焦点、编号、已发出的最大编号）及角点图片；`m.sample = s` 保存原样品的选区并载入新样品的选区；连接时打开上次打开的样品。选区的每次拍摄写入 `selections/Sxx_NNx/scans/<日期_时间>[_名称]/` —— 每次都是新版本，地图和查看器列表使用最新一次。类：`Project`（`samples`、`sample()`）、`Sample`（`selections`、`selection(n)`、`scans(latest)`）、`Selection`（`scans`、`latest`、`view()`）、`Scan`（`stitch()`、`view()`、`export()`）。窗口顶部有菜单（Open、New project、New sample、Info、Scans、View、Help；对话框用 tkinter）。
+
 **选区与图层。** 按键 `1`、`2` 标记一个*选区*（原「样品区域」）；它记住标记时所用的物镜以及该物镜的帧大小。同一物镜的选区不能重叠；高倍物镜的选区可以位于低倍物镜的选区之内 —— 它是后者的细节（一个图层）：地图 10x → 细节 50x → 细节 100x。父选区是包含新选区中心的低倍选区（最近的图层、面积最小者）。`m.scan()` 只拍摄当前物镜的选区（没有则报错 `E706`）；其他选区等待其物镜。列表中的帧数和预计时间按选区自身的物镜计算（`timing.estimate(..., objective)`）。已拍摄选区的 `meta.json` 中有 `selection`、`sample_uid`、`parent_uid`、`parent_selection`、`area_real_um`。`m.list()` —— 以树形显示所有已拍摄选区（按 `parent_uid`，旧扫描按载物台位置），`m.open(N)` —— 在 `mc.view` 中打开，`m.remove(N, confirm=True)` —— 删除其文件夹（若会话文件夹已空，也一并删除）。
 
 **在查看器中拼接**（`S`）：在后台线程中对打开的选区运行 `mc.stitch`；窗口显示当前步骤（共 4 步：照明场、接缝、帧亮度、保存）、该步骤的百分比进度条和时间；完成后查看器以拼接结果重新打开（十字随帧一起移动）。

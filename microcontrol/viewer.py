@@ -252,6 +252,7 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
         g.save(px_um)
     ses, subs = SM.session_of(folder)
     Wv, Hv = car['size']
+    Hv -= UI.MENU_H                                         # сверху — строка меню
     st = dict(cx=sc.size[0] / 2, cy=sc.size[1] / 2, s=None, rot=0.0, mode='look', down=None, box=None,
               poly=[], dirty=True, Wv=Wv - SM.CAR_W, Hv=Hv, straight=False, switch=None, ruler=[], mouse=None,
               msg=car.pop('msg', None) or (f"Selection {SM.sample_index(folder)} ({subs.index(folder) + 1} of {len(subs)})" if len(subs) > 1 else "")
@@ -315,6 +316,58 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
               'export: squares': "cutting the squares", 'export: saving': "writing the selection picture",
               'export: drawing': "drawing: pictures of the squares in micrometres (DXF / DWG)"}
 
+    menu = dict(hover=None, hits=[])
+    from . import project as P_
+    smp = P_.sample_obj(folder)                             # образец этой съёмки (если она в проекте)
+
+    def show(img):
+        ttl = (smp.title + (f"  —  {smp.description}" if smp.description else "")) if smp else os.path.basename(folder)
+        bar, menu['hits'] = UI.menu_bar(img.shape[1], ttl, ["Open", "Scans", "Info", "Help"], menu['hover'])
+        cv2.imshow(WIN, np.vstack([bar, img]))
+
+    def menu_do(item):
+        """Меню просмотра: открыть образец (последние съёмки), выбрать съёмку, сведения, подсказка."""
+        from . import dialogs as D
+        from .selections import list_selections
+        base_ = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(smp.folder)))) if smp else '.'
+        try:
+            if item == "Open":
+                ss = P_.all_samples(base_)
+                rows = [f"{x.title:<44} {len(P_.all_scans(x.folder)):>3} scans   {x.description}" for x in ss]
+                r_ = D.choose("Open a sample (its latest scans)", rows,
+                              next((i for i, x in enumerate(ss) if x == smp), None), ("Open",))
+                if r_:
+                    ls = P_.latest_scans(ss[r_[1]].folder)
+                    if ls:
+                        g.save(px_um)
+                        st['switch'] = ls[0]
+                    else:
+                        st['msg'] = f"{ss[r_[1]].title}: nothing scanned yet"
+            elif item == "Scans":
+                lst = list_selections(smp.folder if smp else os.path.dirname(folder))
+                rows = repr(lst).split("\n")[2:-1:2]
+                cur = next((i for i, it in enumerate(lst) if os.path.abspath(it['folder']) == os.path.abspath(folder)), None)
+                r_ = D.choose("Scans (every scan of every selection)", rows, cur, ("Open",))
+                if r_ and os.path.abspath(lst[r_[1]]['folder']) != os.path.abspath(folder):
+                    g.save(px_um)
+                    st['switch'] = lst[r_[1]]['folder']
+            elif item == "Info":
+                if smp is None:
+                    st['msg'] = f"Scan {folder} (not in a project)"
+                    return
+                lines = [f"Project    {smp.project.name}", f"Sample     {smp.name}",
+                         f"This scan  {os.path.relpath(folder, smp.folder)}",
+                         f"Frames     {len(sc.st)}", f"Scans      {len(P_.all_scans(smp.folder))}"]
+                r_ = D.describe(smp.title, lines, [("Project description", smp.project.description),
+                                                  ("Sample description", smp.description)])
+                if r_:
+                    smp.project.description, smp.description = r_
+                    st['msg'] = "Descriptions saved"
+            elif item == "Help":
+                st['help'] = not st.get('help')
+        except Exception as e:
+            st['msg'] = f"{item}: {e}"
+
     def busy(title, fn, close_scene=False, footer=""):
         """Долгая работа прямо в окне: fn() в фоновом потоке, в окне — этап, полоса 0-100 %, время.
         Возвращает (результат, ошибка или None)."""
@@ -352,7 +405,7 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
                 order_ = ['light', 'seams', 'brightness', 'saving']
                 stage = (f"Step {order_.index(nm_) + 1} of 4:  " if nm_ in order_ else "") + STAGES.get(nm_, prog['title'])
                 UI.progress_panel(img, title, stage, prog['f'], prog['text'], _t.monotonic() - t0, prog['eta'], footer)
-                cv2.imshow(WIN, np.hstack([img, pan]) if pan.shape[0] == img.shape[0] else img)
+                show(np.hstack([img, pan]) if pan.shape[0] == img.shape[0] else img)
                 cv2.waitKey(60)
         finally:
             Progress.hook = None
@@ -648,11 +701,11 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
         x_ = UI.chip(img, mode, 10, bh - 11, fs, mcol) + 14
         it = [f"{len(sc.st)} frames", f"{um:.2f} um / px"]
         if not os.path.exists(os.path.join(folder, 'join', 'positions_all.csv')):
-            it += ["not stitched: J"]
+            it += ["not stitched: S"]
         if g.ready():
             it += [f"pitch {np.hypot(*g.cr.vectors()[0]) * px_um:.1f} um", f"tilt {g.cr.angle():+.2f} deg"]
         else:
-            it += ["no grid yet: G"]
+            it += ["no grid yet: C"]
         it += [f"selected {len(g.selected)}"]
         if g.useful and st.get('hints', _cfg.AUTO_HINTS):
             it += [f"hints {len(g.useful)} (sensitivity {g.sensitivity:g})"]
@@ -738,7 +791,19 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
             set_straight(False)
 
     h_last = [g_sig(), g_snap()]
-    cv2.setMouseCallback(WIN, mouse)
+    def mouse_cb(ev, x, y, flags, _=None):                 # окно: сверху меню, ниже — картинка и список
+        if y < UI.MENU_H and st['down'] is None:
+            menu['hover'] = x if ev == cv2.EVENT_MOUSEMOVE else menu['hover']
+            if ev == cv2.EVENT_LBUTTONDOWN:
+                st['menu_click'] = x
+            if ev == cv2.EVENT_MOUSEMOVE:
+                st['car_dirty'] = True
+            return
+        if menu['hover'] is not None:
+            menu['hover'], st['car_dirty'] = None, True
+        mouse(ev, x, y - UI.MENU_H, flags)
+
+    cv2.setMouseCallback(WIN, mouse_cb)
     while True:
         if st['down'] is None and st.get('lab') is None:
             sg_ = g_sig()
@@ -749,20 +814,29 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
         if st['switch'] is not None:                      # другой образец из карусели
             break
         if not fullscreen:
-            W_, H_ = window_size(WIN, (st['Wv'] + SM.CAR_W, st['Hv']))
+            W_, H_ = window_size(WIN, (st['Wv'] + SM.CAR_W, st['Hv'] + UI.MENU_H))
+            H_ -= UI.MENU_H
             if W_ >= 100 + SM.CAR_W and H_ >= 100 and (W_ - SM.CAR_W, H_) != (st['Wv'], st['Hv']):
                 st['Wv'], st['Hv'], st['dirty'] = W_ - SM.CAR_W, H_, True
-                car['size'] = (W_, H_)
+                car['size'] = (W_, H_ + UI.MENU_H)
         if st['s'] is None:
             fit()
+        if st.get('menu_click') is not None:                # строка меню: Open, Scans, Info, Help
+            mx_, st['menu_click'] = st['menu_click'], None
+            it_ = next((t_ for x0_, x1_, t_ in menu['hits'] if x0_ <= mx_ <= x1_), None)
+            if it_:
+                menu_do(it_)
+                st['dirty'] = True
+                if st['switch'] is not None:
+                    break
         if st['dirty']:
-            cv2.imshow(WIN, render())
+            show(render())
             st['dirty'] = st['car_dirty'] = False
             if not st.get('icon'):                          # окно уже на экране: значок программы (Windows)
                 st['icon'] = True
                 set_icon(WIN)
         elif st.get('car_dirty') and st.get('scene') is not None:   # только карусель (наведение мыши)
-            cv2.imshow(WIN, np.hstack([st['scene'], carousel_img()]))
+            show(np.hstack([st['scene'], carousel_img()]))
             st['car_dirty'] = False
         key = next(keys, EXIT) if keys is not None else cv2.waitKeyEx(8 if st['down'] else 20)
         if keys is not None:
@@ -894,7 +968,7 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
         elif ch == 'y' and g.ready():                       # Y: подсказка вкл. / выкл. (первый раз — посчитать)
             if not st.get('hints', _cfg.AUTO_HINTS) and not getattr(g, 'scores', None):
                 st['msg'] = "Looking for squares with something in them..."
-                cv2.imshow(WIN, render()); cv2.waitKey(1)
+                show(render()); cv2.waitKey(1)
                 hints(); g.save(px_um)
             else:
                 st['hints'] = not st.get('hints', _cfg.AUTO_HINTS)

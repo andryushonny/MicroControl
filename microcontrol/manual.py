@@ -508,7 +508,7 @@ def draw_fields(view, steps, edit, scale, top, m=None):
     return rects, y
 
 
-def run(m, fullscreen=True, _keys=None):
+def run(m, fullscreen=False, _keys=None):
     m._need_cam()
     WH0 = open_window(WIN, fullscreen)
     if fullscreen:
@@ -545,8 +545,17 @@ def run(m, fullscreen=True, _keys=None):
     def on_field(x, y):
         return any(x0 <= x <= x1 and y0 <= y <= y1 for (x0, y0, x1, y1) in rects.values())
 
+    menu = dict(hover=None, hits=[])                     # строка меню сверху: проект, образец, Open, New ...
+
     def on_mouse(ev, x, y, flags, *_):
         # тянуть любой кнопкой по картинке (левой — не по полям) — сдвиг увеличенной картинки; колесо, + / - — зум
+        if y < UI.MENU_H and not zm['pan']:                 # строка меню
+            menu['hover'] = x if ev == cv2.EVENT_MOUSEMOVE else menu['hover']
+            if ev == cv2.EVENT_LBUTTONDOWN:
+                clicks.append(('menu', x))
+            return
+        menu['hover'] = None
+        y -= UI.MENU_H
         if ev == cv2.EVENT_MOUSEMOVE:
             hover[0], hover[1] = (x, y), time.monotonic()
         if x >= W - SM.CAR_W and not zm['pan']:          # карусель образцов справа
@@ -626,6 +635,85 @@ def run(m, fullscreen=True, _keys=None):
         car['order'] = order
         return items
 
+    MENU = ["Open", "New project", "New sample", "Info", "Scans", "View", "Help"]
+
+    def menu_img(W_):
+        sm_ = m.sample
+        img_, menu['hits'] = UI.menu_bar(W_, f"{sm_.title}" + (f"  —  {sm_.description}" if sm_.description else ""),
+                                         MENU, menu['hover'])
+        return img_
+
+    def menu_do(item):
+        """Пункт меню: открыть / создать проект и образец, сведения, съёмки, просмотр, подсказка."""
+        nonlocal msg, msg_t, show_help
+        from . import dialogs as D
+        from . import project as P_
+        msg_t = time.monotonic()
+        if live is not None:
+            live.paused = True
+        try:
+            if item == "Open":
+                ss = P_.all_samples(m.folder)
+                rows = [f"{x.title:<44} {len(x.data.get('selections', [])):>3} sel  {len(P_.all_scans(x.folder)):>3} scans   "
+                        f"{x.description}" for x in ss]
+                cur = next((i for i, x in enumerate(ss) if x == m.sample), None)
+                r_ = D.choose("Open a sample (project / sample)", rows, cur, ("Open", "New project...", "New sample..."))
+                if r_ is None:
+                    return
+                if r_[0] == "Open":
+                    m.sample = ss[r_[1]]
+                    msg = f"Opened {m.sample.title}: {len(m._regions)} selections"
+                else:
+                    return menu_do(r_[0].rstrip('.'))
+            elif item == "New project":
+                a_ = D.new_project("New project", "Project name", "What the project is about")
+                if not a_:
+                    return
+                pj = P_.Project(a_[0], a_[1], folder=m.folder)
+                b_ = D.new_project(f"First sample of {pj.name}", "Sample name (the substrate on the stage)",
+                                   "Short description of the sample") or ("Sample 1", "")
+                m.sample = pj.sample(*b_)
+                msg = f"New project {m.sample.title}"
+            elif item == "New sample":
+                a_ = D.new_project(f"New sample in {m.project.name}", "Sample name (the substrate on the stage)",
+                                   "Short description of the sample")
+                if not a_:
+                    return
+                m.sample = m.project.sample(*a_)
+                msg = f"New sample {m.sample.title}: mark selections with 1 and 2"
+            elif item == "Info":
+                sm_ = m.sample
+                from collections import Counter
+                objs = Counter(r.get('obj') for r in m._regions)
+                lines = [f"Project    {sm_.project.name}", f"Sample     {sm_.name}",
+                         "Selections " + (", ".join(f"{n} x {o}x" for o, n in sorted(objs.items())) or "none"),
+                         f"Scans      {len(P_.all_scans(sm_.folder))}", f"Created    {sm_.data.get('created', '')}",
+                         f"Folder     {sm_.folder}"]
+                r_ = D.describe(sm_.title, lines, [("Project description", sm_.project.description),
+                                                   ("Sample description", sm_.description)])
+                if r_:
+                    sm_.project.description, sm_.description = r_
+                    msg = "Descriptions saved"
+            elif item == "Scans":
+                lst = m.list()
+                if not lst:
+                    msg = "No scans of this sample yet: mark a selection (1, 2) and press S"
+                    return
+                rows = [l_ for l_ in repr(lst).split("\n")[2:-1:2]]
+                r_ = D.choose(f"Scans of {m.sample.title}", rows, len(rows) - 1, ("View",))
+                if r_:
+                    m._last_view = lst[r_[1]]['folder']
+                    open_view()
+            elif item == "View":
+                open_view()
+            elif item == "Help":
+                show_help = not show_help
+        except Exception as e:
+            msg = f"{item}: {e}"
+        finally:
+            if live is not None:
+                live.paused = False
+
     def scan_here():
         """S (дважды): снять выделения текущего объектива и сшить их, не выходя из окна. Полоса прогресса —
         в окне поверх кадра камеры; Esc — остановить после текущего кадра. Потом V — открыть в просмотре."""
@@ -687,7 +775,7 @@ def run(m, fullscreen=True, _keys=None):
                 frame_ = np.zeros((H, W, 3), np.uint8)
                 frame_[:, :Wl_] = pic
                 frame_[:, Wl_:] = view[:, Wl_:] if view.shape[:2] == (H, W) else 30
-                cv2.imshow(WIN, frame_)
+                cv2.imshow(WIN, np.vstack([menu_img(W), frame_]))
                 k__ = cv2.waitKeyEx(60) if keys is None else -1
                 if (k__ == 27 or exit_key(k__)) and not res.get('stitch'):
                     m._abort, res['stop'] = True, True
@@ -843,7 +931,8 @@ def run(m, fullscreen=True, _keys=None):
             if n % 4 == 0:                                     # резкость по тому же кадру (не дёргаем камеру ещё раз)
                 sharp = round(F_.sharpness(img, m.focus_method), 1)
             n += 1
-            W, H = (SW, SH) if fullscreen else window_size(WIN, (W, H))
+            W, H = (SW, SH) if fullscreen else window_size(WIN, (W, H + UI.MENU_H))
+            H -= UI.MENU_H                                     # сверху — строка меню
             rot = 0.0
             Wl = W - SM.CAR_W                                  # картинка — слева от карусели, по центру
             to_v, back_v, i2v, v2i, cimg, kz, zm['c'] = live_map(m, img.shape, Wl, H, zm['z'], zm['c'], rot)
@@ -1070,7 +1159,7 @@ def run(m, fullscreen=True, _keys=None):
             pan_, hits_, cont_ = SM.carousel(H, items, sel_, car['scroll'], title="Selections", hover=hv_)
             car['hits'], car['content'] = hits_, cont_
             view[:, W - SM.CAR_W:] = pan_
-            cv2.imshow(WIN, view)
+            cv2.imshow(WIN, np.vstack([menu_img(W), view]))
             if n == 1:                                    # окно уже на экране: значок программы (Windows)
                 set_icon(WIN)
         key = next(keys, EXIT) if keys is not None else cv2.waitKeyEx(8 if live is not None else 30)
@@ -1086,6 +1175,11 @@ def run(m, fullscreen=True, _keys=None):
                 Wl_ = W - SM.CAR_W
                 k2 = min(Wl_ / img.shape[1], H / img.shape[0]) * zm['z']
                 zm['c'] = pix - (np.array(c_[1:3], float) - (Wl_ / 2, H / 2)) / k2
+                continue
+            if c_[0] == 'menu':                                     # строка меню
+                it_ = next((t_ for x0_, x1_, t_ in menu['hits'] if x0_ <= c_[1] <= x1_), None)
+                if it_:
+                    menu_do(it_)
                 continue
             if c_[0] == 'carw':                                     # прокрутка карусели
                 car['scroll'] = int(max(0, min(car.get('content', 0) - H + 20, car['scroll'] - 60 * np.sign(c_[3]))))

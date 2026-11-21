@@ -26,6 +26,7 @@ CODES = {
     'E214': "Move smaller than one motor step",
     'E215': "Home is already set",
     'E216': "Home is not set",
+    'E220': "Project already exists",
     'E301': "No reply from the controller",
     'E302': "Malformed reply",
     'E303': "Checksum error",

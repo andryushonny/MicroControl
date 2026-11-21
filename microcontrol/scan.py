@@ -62,7 +62,7 @@ def plan(m, area=None, focus='auto', overlap=None, path='snake', pts=None):
     if focus not in ('plane', 'each', 'off', 'points'):
         raise SafetyError('E703', f"focus = {focus!r}. Allowed: 'auto', 'points', 'plane', 'each', 'off'.")
     if focus == 'points' and not pts:
-        raise SafetyError('E703', "No focus points: in m.manual() keys 1, 2 (corners) and F keep Z.")
+        raise SafetyError('E703', "No focus points: in m.manual() keys 1, 2 (corners) and K keep Z.")
     if overlap is None:
         from .config import scan_overlap
         overlap = scan_overlap(m.objective)

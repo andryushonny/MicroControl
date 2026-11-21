@@ -1,0 +1,342 @@
+"""Проекты, образцы, выделения, съёмки — объекты поверх папок (всё хранится на диске, объекты лёгкие).
+
+    Проект (Project)        работа: несколько образцов, описание
+      Образец (Sample)      одна подложка на столике: свои выделения и координаты, описание
+        Выделение (Selection)   область скана на одном объективе; слои: карта 10x > участки 50x > 100x
+          Съёмка (Scan)     каждая съёмка выделения — новая версия (кадры, сшивка, сетка, чертёж)
+
+    <папка>/projects/<Проект>/project.json
+    <папка>/projects/<Проект>/samples/<Образец>/sample.json          выделения образца, описание
+    <папка>/projects/<Проект>/samples/<Образец>/selections/S01_10x/scans/<дата>/   съёмки
+    <папка>/projects/<Проект>/samples/<Образец>/photos/              отдельные снимки (Пробел)
+
+    p = mc.Project("Graphene", "flakes on SiO2")    # открыть или создать
+    s = p.sample("Chip 1", "285 nm oxide")          # образец проекта: открыть или создать
+    m = mc.Microscope(objective=10, sample=s)        # или потом: m.sample = s
+    s.selections, s.scans(), s.selections[0].latest.view()
+"""
+import os
+import re
+import json
+import glob
+from datetime import datetime
+
+import cv2
+import numpy as np
+
+ROOT = 'projects'
+
+
+def safe(name, default='Untitled'):
+    s = re.sub(r'[^\w\- ]+', '_', str(name or '')).strip(' _')
+    return s or default
+
+
+def root(base='.'):
+    return os.path.join(os.path.abspath(base), ROOT)
+
+
+def _now():
+    return datetime.now().isoformat(timespec='seconds')
+
+
+class _Node:
+    """Папка с json-описанием (имя, описание, когда создана)."""
+    FILE = 'node.json'
+
+    def __init__(self, folder, name, description=None, create=True):
+        self.folder = os.path.abspath(folder)
+        self.file = os.path.join(self.folder, self.FILE)
+        if os.path.exists(self.file):
+            self.data = json.load(open(self.file, encoding='utf-8'))
+        elif create:
+            self.data = dict(name=name, description=description or '', created=_now())
+            os.makedirs(self.folder, exist_ok=True)
+            self.save()
+        else:
+            raise FileNotFoundError(f"No {type(self).__name__.lower()} '{name}' in {os.path.dirname(self.folder)}")
+        if description is not None and description != self.data.get('description'):
+            self.description = description
+
+    name = property(lambda s: s.data.get('name') or os.path.basename(s.folder))
+
+    @property
+    def description(self):
+        return self.data.get('description', '')
+
+    @description.setter
+    def description(self, text):
+        self.data['description'] = str(text or '')
+        self.save()
+
+    def save(self):
+        self.data['updated'] = _now()
+        tmp = self.file + '.tmp'
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump(self.data, f, indent=1, ensure_ascii=False, default=float)
+        os.replace(tmp, self.file)
+
+    def __eq__(self, o):
+        return isinstance(o, _Node) and o.folder == self.folder
+
+    def __hash__(self):
+        return hash(self.folder)
+
+    def __repr__(self):
+        return f"{type(self).__name__} '{self.name}'" + (f" — {self.description}" if self.description else "")
+
+
+class Project(_Node):
+    """Проект: Project("Имя", "описание") — открыть или создать в <folder>/projects/."""
+    FILE = 'project.json'
+
+    def __init__(self, name, description=None, folder='.', create=True):
+        super().__init__(os.path.join(root(folder), safe(name)), name, description, create)
+        self.base = os.path.abspath(folder)
+
+    @property
+    def samples(self):
+        """Образцы проекта (по времени создания)."""
+        out = []
+        for f in sorted(glob.glob(os.path.join(self.folder, 'samples', '*', Sample.FILE))):
+            out.append(Sample(self, os.path.basename(os.path.dirname(f))))
+        return sorted(out, key=lambda s: s.data.get('created', ''))
+
+    def sample(self, name, description=None, create=True):
+        """Образец проекта: открыть или создать."""
+        return Sample(self, name, description, create)
+
+    def __repr__(self):
+        n = len(self.samples)
+        return super().__repr__() + f"  ({n} sample{'s' if n != 1 else ''})"
+
+
+class Sample(_Node):
+    """Образец (подложка) проекта: свои выделения (sample.json), съёмки, снимки."""
+    FILE = 'sample.json'
+
+    def __init__(self, project, name, description=None, create=True):
+        if isinstance(project, str):
+            project = Project(project)
+        self.project = project
+        super().__init__(os.path.join(project.folder, 'samples', safe(name)), name, description, create)
+        self.data.setdefault('selections', [])
+        self.data.setdefault('seq', 0)
+
+    photos = property(lambda s: os.path.join(s.folder, 'photos'))
+    title = property(lambda s: f"{s.project.name} / {s.name}")
+
+    @property
+    def selections(self):
+        """Выделения образца (как записаны: номер, объектив, углы, точки фокуса)."""
+        return [Selection(self, d) for d in self.data.get('selections', [])]
+
+    def selection(self, num):
+        return next((s for s in self.selections if s.num == num), None)
+
+    def scans(self, latest=False):
+        """Съёмки образца: все версии (latest=True — последняя каждого выделения)."""
+        return [Scan(f) for f in (latest_scans(self.folder) if latest else all_scans(self.folder))]
+
+    def __repr__(self):
+        return f"Sample '{self.title}'" + (f" — {self.description}" if self.description else "") + \
+            f"  ({len(self.data.get('selections', []))} selections, {len(all_scans(self.folder))} scans)"
+
+
+class Selection:
+    """Выделение образца: номер, объектив, прямоугольник (настоящие мкм столика), съёмки (версии)."""
+
+    def __init__(self, sample, data):
+        self.sample, self.data = sample, data
+
+    num = property(lambda s: s.data.get('num'))
+    objective = property(lambda s: s.data.get('obj'))
+    uid = property(lambda s: s.data.get('uid'))
+    folder = property(lambda s: sel_folder(s.sample.folder, s.data))
+
+    @property
+    def scans(self):
+        """Все съёмки выделения (старые -> новые)."""
+        d = os.path.join(self.folder, 'scans')
+        return [Scan(f) for f in sorted(glob.glob(os.path.join(d, '*'))) if is_scan(f)]
+
+    @property
+    def latest(self):
+        s = self.scans
+        return s[-1] if s else None
+
+    def view(self):
+        """Открыть последнюю съёмку в просмотре."""
+        if self.latest is None:
+            raise FileNotFoundError(f"Selection {self.num} is not scanned yet.")
+        return self.latest.view()
+
+    def __repr__(self):
+        return f"Selection {self.num} ({self.objective}x, {len(self.scans)} scans)"
+
+
+class Scan:
+    """Съёмка выделения (папка с кадрами): stitch(), view(), export()."""
+
+    def __init__(self, folder):
+        self.folder = os.path.abspath(folder)
+
+    @property
+    def meta(self):
+        return json.load(open(os.path.join(self.folder, 'meta.json'), encoding='utf-8'))
+
+    def stitch(self, **kw):
+        from .stitch import stitch
+        return stitch(self.folder, **kw)
+
+    def view(self, **kw):
+        from .viewer import view
+        return view(self.folder, **kw)
+
+    def export(self, **kw):
+        from .mask import export
+        return export(self.folder, **kw)
+
+    def __fspath__(self):
+        return self.folder
+
+    def __repr__(self):
+        return f"Scan {os.path.basename(self.folder)}"
+
+
+def projects(folder='.'):
+    """Все проекты: [Project], новые сверху."""
+    out = [Project(os.path.basename(os.path.dirname(f)), folder=folder)
+           for f in glob.glob(os.path.join(root(folder), '*', Project.FILE))]
+    return sorted(out, key=lambda p: p.data.get('updated', ''), reverse=True)
+
+
+def all_samples(folder='.'):
+    """Все образцы всех проектов: [Sample], недавние сверху."""
+    out = [s for p in projects(folder) for s in p.samples]
+    return sorted(out, key=lambda s: s.data.get('updated', ''), reverse=True)
+
+
+def last(folder='.'):
+    """(проект, образец) последнего открытого образца или None."""
+    try:
+        pj, sm = open(os.path.join(root(folder), '.last'), encoding='utf-8').read().strip().split('\n')[:2]
+        if os.path.exists(os.path.join(root(folder), pj, 'samples', sm, Sample.FILE)):
+            return pj, sm
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def remember(sample):
+    os.makedirs(root(sample.project.base), exist_ok=True)
+    with open(os.path.join(root(sample.project.base), '.last'), 'w', encoding='utf-8') as f:
+        f.write(f"{os.path.basename(sample.project.folder)}\n{os.path.basename(sample.folder)}\n")
+
+
+# ------------------------------------------------------------------ выделения микроскопа <-> sample.json
+def sel_folder(sample_folder, reg):
+    return os.path.join(sample_folder, 'selections', f"S{reg['num']:02d}_{reg.get('obj', 0)}x")
+
+
+_KEYS = ('num', 'uid', 'obj', 'fw', 'fh', 'A', 'B', 'pts')
+
+
+def save_regions(m):
+    """Выделения микроскопа -> sample.json открытого образца (и картинки углов). Пишет, только если изменилось."""
+    sm = getattr(m, '_sample', None)
+    if sm is None or getattr(m, '_regions', None) is None:
+        return
+    sels = [{k: r[k] for k in _KEYS if k in r} for r in m._regions]
+    pend = {k: m._pending[k] for k in _KEYS if k in m._pending} if getattr(m, '_pending', None) else None
+    new = json.loads(json.dumps(dict(selections=sels, pending=pend, seq=getattr(m, '_area_seq', 0)), default=float))
+    if all(sm.data.get(k) == v for k, v in new.items()):
+        return
+    sm.data.update(new)
+    sm.save()
+    for r in m._regions:                                   # картинки углов — один раз
+        th = r.get('thumbs') or []
+        d = os.path.join(sel_folder(sm.folder, r), 'thumbs')
+        if th and not os.path.isdir(d):
+            os.makedirs(d, exist_ok=True)
+            for i, t in enumerate(th):
+                ok, buf = cv2.imencode('.jpg', t, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                buf.tofile(os.path.join(d, f"{i}.jpg"))
+
+
+def load_regions(m):
+    """sample.json -> выделения микроскопа (с картинками углов)."""
+    sm = m._sample
+
+    def fix(r):
+        r = dict(r)
+        r['A'] = tuple(r['A'])
+        if 'B' in r:
+            r['B'] = tuple(r['B'])
+        d = os.path.join(sel_folder(sm.folder, r), 'thumbs')
+        r['thumbs'] = [cv2.imdecode(np.fromfile(p, np.uint8), cv2.IMREAD_COLOR)
+                       for p in sorted(glob.glob(os.path.join(d, '*.jpg')))]
+        return r
+    m._regions = [fix(r) for r in sm.data.get('selections', [])]
+    p = sm.data.get('pending')
+    m._pending = fix(p) if p else None
+    m._area_seq = int(sm.data.get('seq', 0))
+    m._sel = len(m._regions) - 1 if m._regions else None
+
+
+# ------------------------------------------------------------------ съёмки на диске
+def is_scan(f):
+    return os.path.exists(os.path.join(f, 'meta.json'))
+
+
+def sample_of(folder):
+    """Папка образца, к которому относится папка (сам образец, выделение или съёмка), или None."""
+    f = os.path.abspath(folder)
+    for _ in range(6):
+        if os.path.exists(os.path.join(f, Sample.FILE)):
+            return f
+        f2 = os.path.dirname(f)
+        if f2 == f:
+            break
+        f = f2
+    return None
+
+
+def sample_obj(folder):
+    """Объект Sample по папке внутри образца (или None)."""
+    sf = sample_of(folder)
+    if not sf:
+        return None
+    pf = os.path.dirname(os.path.dirname(sf))
+    return Sample(Project(os.path.basename(pf), folder=os.path.dirname(os.path.dirname(pf))), os.path.basename(sf))
+
+
+def all_scans(sample_folder):
+    """Все съёмки образца: по выделениям, внутри — по времени."""
+    out = []
+    for sd in sorted(glob.glob(os.path.join(sample_folder, 'selections', 'S*'))):
+        out += [s for s in sorted(glob.glob(os.path.join(sd, 'scans', '*'))) if is_scan(s)]
+    return out
+
+
+def latest_scans(sample_folder):
+    """Последняя съёмка каждого выделения образца."""
+    out = []
+    for sd in sorted(glob.glob(os.path.join(sample_folder, 'selections', 'S*'))):
+        v = [s for s in sorted(glob.glob(os.path.join(sd, 'scans', '*'))) if is_scan(s)]
+        if v:
+            out.append(v[-1])
+    return out
+
+
+def scan_folder(sample_folder, reg, name=''):
+    """Новая папка съёмки выделения: selections/Sxx_NNx/scans/<дата>_<время>[_имя]."""
+    t = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+    nm = re.sub(r'[^\w\-]+', '_', name or '').strip('_')
+    base = os.path.join(sel_folder(sample_folder, reg), 'scans')
+    f = os.path.join(base, t + (f"_{nm}" if nm else ""))
+    k = 1
+    while os.path.exists(f):
+        k += 1
+        f = os.path.join(base, t + f"_{k}")
+    return f

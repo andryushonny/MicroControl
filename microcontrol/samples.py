@@ -82,12 +82,13 @@ def init_areas(m):
     """m._regions (зафиксированные области, настоящие мкм), m._pending (новая: есть угол 1), m._sel (выбранная)."""
     if getattr(m, '_regions', None) is None:
         m._regions = []
-        if getattr(m, 'area', None) is not None:          # зона, заданная раньше одной парой углов, — область 1
-            off_ = (m._off['x'], m._off['y'])
-            m._regions.append(dict(A=(m.area.x0 + off_[0], m.area.y0 + off_[1]),
-                                   B=(m.area.x1 + off_[0], m.area.y1 + off_[1]),
-                                   pts=[dict(x=f_['x'], y=f_['y'], z=f_['z'])
-                                        for f_ in (getattr(m, '_focus_pts', None) or [])], thumbs=[]))
+    if not m._regions and getattr(m, 'area', None) is not None:   # зона m.area = Area(...) без выделений — выделение 1
+        off_ = (m._off['x'], m._off['y'])
+        fw_, fh_ = m.frame_size
+        m._regions.append(dict(A=(m.area.x0 + off_[0], m.area.y0 + off_[1]),
+                               B=(m.area.x1 + off_[0], m.area.y1 + off_[1]), obj=m.objective, fw=fw_, fh=fh_,
+                               pts=[dict(x=f_['x'], y=f_['y'], z=f_['z'])
+                                    for f_ in (getattr(m, '_focus_pts', None) or [])], thumbs=[]))
     if not hasattr(m, '_pending'):
         m._pending = None
     seq = getattr(m, '_area_seq', 0)
@@ -100,6 +101,15 @@ def init_areas(m):
     m._area_seq = seq
     if getattr(m, '_sel', None) is None or m._sel >= len(m._regions):
         m._sel = len(m._regions) - 1 if m._regions else None
+
+
+def persist(m):
+    """Выделения -> project.json открытого проекта (переживают перезапуск)."""
+    try:
+        from .project import save_regions
+        save_regions(m)
+    except Exception:
+        pass
 
 
 def num(m, k):
@@ -233,6 +243,7 @@ def corner(m, which, img=None):
             m._pending = dict(A=(rp.x, rp.y), pts=[fpt], thumbs=th, num=getattr(m, '_area_seq', 0) + 1,
                               uid=uuid.uuid4().hex, obj=m.objective, fw=fw_, fh=fh_)
         k = len(m._regions)
+        persist(m)
         return (f"Selection {num(m, k)} ({m.objective}x): corner 1 at X {p.x:.0f}, Y {p.y:.0f} um, focus point "
                 f"{len(numbered(m)) - len(m._pending['pts']) + 1}. Go to the other corner, press 2")
     if which != 2:
@@ -255,6 +266,7 @@ def corner(m, which, img=None):
     m._regions.append(new)
     m._area_seq = max(getattr(m, '_area_seq', 0), new['num'])         # номер больше не выдаётся
     m._pending, m._sel = None, len(m._regions) - 1
+    persist(m)
     nx_, ny_ = _area(m, new).size(m._frame_step(1 - scan_overlap(m.objective)))
     p_ = parent(m, len(m._regions) - 1)
     inn = f", inside Selection {m._regions[p_]['num']} ({obj(m, m._regions[p_])}x)" if p_ is not None else ""
@@ -278,6 +290,7 @@ def add_point(m):
     else:
         raise MicroControlError('E701', f"Mark a selection with {m.objective}x first: keys 1 and 2")
     fpn = len(numbered(m)) if k is None else [n_ for n_, kk, _p in numbered(m) if kk == k][-1]
+    persist(m)
     who = f"Selection {num(m, k if k is not None else len(m._regions))}"
     return f"Focus point {fpn} ({who}): Z {p.z:.1f} um at X {p.x:.0f}, Y {p.y:.0f}"
 
@@ -310,11 +323,13 @@ def delete_area(m, k):
     init_areas(m)
     if k == len(m._regions) and m._pending:
         m._pending = None
+        persist(m)
         return "New selection cancelled"
     if not 0 <= k < len(m._regions):
         raise MicroControlError('E703', "No such selection")
     n_ = m._regions.pop(k)['num']
     m._sel = min(k, len(m._regions) - 1) if m._regions else None
+    persist(m)
     return f"Selection {n_} deleted (the numbers of the others stay)"
 
 
@@ -383,8 +398,19 @@ def is_sample(folder):
 
 
 def session_of(folder):
-    """(папка сеанса или None, список папок образцов). Для обычного скана без сеанса — (None, [folder])."""
+    """(папка группы или None, список съёмок). Проект: последняя съёмка каждого выделения (открытая версия —
+    вместо последней своего выделения). Старый сеанс (session.json): его образцы. Один скан — (None, [скан])."""
+    from . import project as P_
     folder = os.path.abspath(folder)
+    pf = P_.sample_of(folder)
+    if pf:
+        subs = P_.latest_scans(pf)
+        if is_sample(folder):                              # открыли конкретную (может быть старую) версию
+            sel = os.path.dirname(os.path.dirname(folder))
+            subs = [folder if os.path.dirname(os.path.dirname(x)) == sel else x for x in subs]
+            if folder not in subs:
+                subs.append(folder)
+        return pf, subs
     if os.path.exists(os.path.join(folder, 'session.json')):
         ses = folder
     elif is_sample(folder) and os.path.exists(os.path.join(os.path.dirname(folder), 'session.json')):
@@ -593,7 +619,8 @@ def per_sample(fn):
 
     @functools.wraps(fn)
     def wrap(folder, *a, **kw):
-        if folder and os.path.exists(os.path.join(folder, 'session.json')):
+        if folder and (os.path.exists(os.path.join(folder, 'session.json')) or
+                       os.path.exists(os.path.join(folder, 'sample.json'))):
             from .util import Result
             out = Result(f"{fn.__name__}: {len(samples(folder))} samples")
             for f in samples(folder):

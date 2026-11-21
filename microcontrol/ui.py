@@ -173,3 +173,29 @@ def progress_panel(img, title, stage, frac, text="", passed=0.0, left=None, foot
     tm = lambda s: f"{int(s // 60):02d}:{int(s % 60):02d}"
     put(img, f"{tm(passed)} passed" + (f", this step {tm(left)} left" if left else "") + (f"   {footer}" if footer else ""),
         x0 + 22, y0 + 176, 0.45, DIM, 1)
+
+
+MENU_H = 30
+
+
+def menu_bar(W, title, items, hover=None, active=None):
+    """Строка меню сверху окна: слева — открытый проект, дальше пункты (New, Open, ...). hover — x мыши
+    в строке (подсветка). Возвращает (картинка MENU_H x W, [(x0, x1, пункт)])."""
+    img = np.full((MENU_H, W, 3), (34, 34, 38), np.uint8)
+    cv2.line(img, (0, MENU_H - 1), (W, MENU_H - 1), (62, 62, 70), 1)
+    x = 10
+    hits = []
+    for it in items:
+        tw = size(it, 0.5)[0]
+        x0, x1 = x - 8, x + tw + 8
+        if (hover is not None and x0 <= hover <= x1) or it == active:
+            cv2.rectangle(img, (x0, 3), (x1, MENU_H - 4), (66, 66, 74), -1)
+        put(img, it, x, MENU_H - 10, 0.5, TEXT, 1)
+        hits.append((x0, x1, it))
+        x = x1 + 12
+    t = title
+    while t and size(t, 0.5)[0] > W - x - 20:
+        t = t[:-2]
+    if t:
+        put(img, t, W - 12 - size(t, 0.5)[0], MENU_H - 10, 0.5, ACCENT, 1)
+    return img, hits

@@ -17,15 +17,16 @@
 ```python
 import microcontrol as mc
 
-m = mc.Microscope()          # 1. 连接显微镜   （mc.Microscope('sim') —— 模拟器）
+s = mc.Project("Graphene", "flakes for transport").sample("Chip 1", "SiO2 285 nm")   # 0. 项目和样品
+m = mc.Microscope(objective=10, sample=s)   # 1. 连接   （mc.Microscope('sim', objective=10) —— 模拟器）
 
-m.manual()                   # 2. 绿色区域：在两个对角按 1 和 2，每个角点先对焦
-folder = m.scan()            #    逐帧拍摄该区域
+m.manual()                   # 2. 绿色区域：在两个对角按 1 和 2，每处对焦
+folder = m.scan()            #    逐帧拍摄（或在窗口内按两次 S）
 mc.stitch(folder)            #    把各帧拼接成一张图（或在 mc.view 中按 S）
 
 mc.view(folder)              # 3. 按 C：点击两个相邻的十字 -> 红色网格
                              # 4. 按 M / B：选择方格（绿色）；Y —— 提示，Shift+Y —— 采纳提示
-mc.export(folder)            # 5. 选中的方格：校正后的 PNG + 以微米为单位的 DXF
+mc.export(folder)            # 5. 选中的方格：图片 + 以微米为单位的图纸（DXF / DWG）
 
 m.close()
 ```
@@ -78,6 +79,20 @@ m.close()
 所有扫描中选中的方格会以深绿色、按真实形状和比例显示在手动模式的小地图和实时画面上，以及查看器列表的预览中 —— 便于在更高倍物镜下重新找到这些位置（不会自动创建选区）。
 
 ---
+
+## 项目与样品
+
+工作按以下方式分组：**项目**（一项工作，带描述）→ **样品**（载物台上的一块基底：有自己的选区和坐标、描述）→ **选区**（某一物镜下的区域；图层：地图 10x > 细节 50x > 100x）→ **拍摄**（每次拍摄选区都是新版本）→ 网格、选中的方格、图纸。选区保存在样品中，再次打开样品时会恢复；地图上的选中方格、`m.list()` 和查看器只显示当前打开的样品。
+
+```python
+p = mc.Project("Graphene", "flakes for transport")   # 打开或创建
+s = p.sample("Chip 1", "SiO2 285 nm")                # 项目中的样品：打开或创建
+m.sample = s                                        # 使用该样品（其选区会恢复）
+p.samples, s.selections, s.selections[0].scans, s.selections[0].latest.view()
+mc.projects(), mc.all_samples()
+```
+
+两个窗口顶部都有菜单：**Open**（任意项目的样品）、**New project**、**New sample**、**Info**（描述）、**Scans**（所有版本）、**View**、**Help**。窗口以普通窗口打开；`m.manual(fullscreen=True)` —— 全屏。
 
 ## 图层：地图与细节
 
@@ -251,13 +266,12 @@ z = \frac{\min_k \sqrt{(\mathbf f-\boldsymbol\mu_k)^{\mathsf T}\Sigma_k^{-1}(\ma
 ## 文件保存位置
 
 ```
-scans/<日期>_<物镜>_<名称>/      一次扫描（多个选区：其中有 selection_01/、selection_02/）
-    frames/        图像帧
-    join/          拼接后的图
-    grid.json      十字、网格、编号、选中的方格、提示
-    export/        选中方格的 PNG + DXF
-photos/            单张照片（Space）
-logs/              每个会话的日志
+projects/<项目>/project.json                          名称、描述
+projects/<项目>/samples/<样品>/sample.json            该样品的选区（图层、对焦点）、描述
+    selections/S01_10x/scans/<日期>/                  每次拍摄选区都是一个新版本：
+        frames/  join/  grid.json  export/            各帧、拼接图、十字和方格、图纸
+    photos/                                           单张照片（空格）
+logs/                                                 每次会话的日志
 ```
 
 ---

@@ -277,8 +277,8 @@ def mos_xy(S):
 def view_xy(S):
     M = mos_xy(S)
     Wsc = 1280 - mc.samples.CAR_W                                   # справа — карусель образцов
-    s = min(Wsc / fr.size[0], 900 / fr.size[1]) * 0.95
-    v = np.array([Wsc / 2, 450]) + s * (M - fr.size / 2)
+    s = min(Wsc / fr.size[0], (900 - mc.ui.MENU_H) / fr.size[1]) * 0.95
+    v = np.array([Wsc / 2, (900 - mc.ui.MENU_H) / 2]) + s * (M - fr.size / 2)
     return int(v[0]) + 3, int(v[1]) - 2
 sq = {n: mos_xy(world(*ij)) for n, ij in (('a', (2.5, 2.5)), ('b', (4.5, 3.5)), ('c', (3.5, 2.5)), ('e', (2.5, 4.5)))}
 fr.close()
@@ -320,8 +320,8 @@ mc.view(f, _keys=[ord('c'), -1, ('click', u0, v0), -1, ('drag', u0, v0, u0 + 10,
 g2 = Grid(f)
 assert len(g2.cr.marks) == n0 + 1, (n0, len(g2.cr.marks))
 fr = Frames(f); size_ = np.array(fr.size, float); fr.close()
-sv = min(Wsc_ / size_[0], 900 / size_[1]) * 0.95
-exp_ = size_ / 2 + (np.array([u0 + 10.5, v0 + 4.5]) - (Wsc_ / 2, 450)) / sv
+sv = min(Wsc_ / size_[0], (900 - mc.ui.MENU_H) / size_[1]) * 0.95
+exp_ = size_ / 2 + (np.array([u0 + 10.5, v0 + 4.5]) - (Wsc_ / 2, (900 - mc.ui.MENU_H) / 2)) / sv
 assert np.hypot(*(g2.cr.marks[-1] - exp_)) < 0.6 / sv + 0.5, (g2.cr.marks[-1], exp_)
 u1, v1 = view_xy(world(6, 5)); u1, v1 = u1 - 3, v1 + 2
 mc.view(f, _keys=[ord('c'), -1, ('click', u1, v1), -1, ('drag', u1, v1, u1 + 6, v1), -1, 26, -1, 26, -1, 25, -1,
@@ -355,15 +355,16 @@ fw_, fh_ = m.frame_size
 assert not mc.samples.overlap(mc.samples.rect(regs[0], fw_, fh_), mc.samples.rect(regs[1], fw_, fh_))
 ses = m.scan(name='Two samples')
 m.close()
-subs = mc.samples.samples(ses)
-assert [os.path.basename(x) for x in subs] == ['selection_01', 'selection_02'], subs
+subs = mc.samples.samples(ses)                                       # образец: последняя съёмка каждого выделения
+assert [x.split(os.sep)[-3] for x in subs] == ['S01_10x', 'S02_10x'], subs
 assert all(json.load(open(os.path.join(x, 'meta.json')))['sample_index'] == i + 1 for i, x in enumerate(subs))
 r = mc.stitch(ses, verbose=False)
 assert len(r) == 2, r
 Wsc = 1280 - mc.samples.CAR_W
 mc.view(ses, _keys=[-1, ord('.'), -1, -1, ('click', 1280 - 25, 64), -1, ('click', 1280 - 25, 64), -1, -1, 27])
 left = mc.samples.samples(ses)
-assert [os.path.basename(x) for x in left] == ['selection_02'] and os.path.isdir(os.path.join(ses, '_removed', 'selection_01'))   # x у 1-го
+assert [x.split(os.sep)[-3] for x in left] == ['S02_10x'] and \
+    os.path.isdir(os.path.join(os.path.dirname(subs[0]), '_removed', os.path.basename(subs[0])))   # x у 1-го
 print("Samples: 2 areas, focus points 1-5, two folders, carousel switch and remove: OK")
 
 # ------------------------------------------------------------------ 16. ИИ-агент
@@ -480,42 +481,50 @@ e1 = TM.estimate(m, 12, 'points'); print("after", e1)
 assert 'learned from 2 scans' in e1[1]
 m.close(); print("Z follow + timing: OK")
 
-# ------------------------------------------------------------------ 18. Постоянные номера образцов, uid
+# ------------------------------------------------------------------ 18. Постоянные номера выделений, uid; проекты и образцы
 import json, microcontrol.manual as M
 from microcontrol import samples as SM
-m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp())
+d18 = tempfile.mkdtemp()
+m = mc.Microscope('sim', objective=10, folder=d18)
 m.focus()
 R_, D_ = 65363, 65364
 k = [ord('1'), -1, R_, -1, ord('2'), -1, R_, -1, R_, -1, ord('1'), -1, R_, -1, ord('2'), -1, -1]
 M.run(m, fullscreen=False, _keys=k)
 assert [r['num'] for r in m._regions] == [1, 2] and len({r['uid'] for r in m._regions}) == 2
-SM.delete_area(m, 0)                                   # удалить образец 1: у второго номер остаётся 2
+SM.delete_area(m, 0)                                   # удалить выделение 1: у второго номер остаётся 2
 assert [r['num'] for r in m._regions] == [2]
 M.run(m, fullscreen=False, _keys=[R_, -1, R_, -1, ord('1'), -1, R_, -1, ord('2'), -1, -1])
 assert [r['num'] for r in m._regions] == [2, 3], [r['num'] for r in m._regions]
-ses = m.scan(name='uid')
-subs = sorted(os.listdir(ses)); print(subs)
-assert 'selection_02' in subs and 'selection_03' in subs and 'selection_01' not in subs
-info = json.load(open(os.path.join(ses, 'session.json')))
-assert [s['index'] for s in info['samples']] == [2, 3] and all(len(s['uid']) == 32 for s in info['samples'])
-u2 = SM.sample_uid(os.path.join(ses, 'selection_02')); assert u2 == m._regions[0]['uid']
-d1 = SM.remove_sample(os.path.join(ses, 'selection_02'))
-os.makedirs(os.path.join(ses, 'selection_02')); json.dump({'sample_uid': 'x' * 32}, open(os.path.join(ses, 'selection_02', 'meta.json'), 'w'))
-d2 = SM.remove_sample(os.path.join(ses, 'selection_02'))
-assert os.path.isdir(d1) and os.path.isdir(d2) and d1 != d2, (d1, d2)   # ранее убранное не стёрто
-m.close(); print("Sample numbers stay, uid, remove without overwrite: OK")
+sf = m.scan(name='uid')
+sels = [x.split(os.sep)[-3] for x in mc.project.latest_scans(sf)]; print(sels)
+assert sels == ['S02_10x', 'S03_10x'], sels
+u2 = SM.sample_uid(m.sample.selections[0].latest.folder); assert u2 == m._regions[0]['uid']
+# проекты и образцы: у каждого образца — свои выделения; переживают перезапуск
+p2 = mc.Project("Graphene", "flakes on SiO2", folder=d18)
+s2 = p2.sample("Chip B", "285 nm")
+s1 = m.sample
+m.sample = s2
+assert m._regions == [] and m.sample.title == "Graphene / Chip B"
+m.sample = s1
+assert [r['num'] for r in m._regions] == [2, 3]
+m.close()
+m = mc.Microscope('sim', objective=10, folder=d18)              # снова: открыт последний образец, выделения на месте
+assert m.sample == s1 and [r['num'] for r in m._regions] == [2, 3]
+assert {p.name for p in mc.projects(d18)} == {"Project 1", "Graphene"} and len(mc.all_samples(d18)) == 2
+m.close(); print("Selection numbers stay, uid, projects and samples: OK")
 
-# ------------------------------------------------------------------ 19. То же имя скана — та же папка
+# ------------------------------------------------------------------ 19. Каждая съёмка выделения — новая версия
 m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp())
 m.focus()
 fw, fh = m.frame_size
 m.area = mc.Area(0, 0, fw, fh)
 f1 = m.scan(name='Same')
 f2 = m.scan(name='Same')
-f3 = m.scan()
-print(os.path.basename(f1), os.path.basename(f2), os.path.basename(f3))
-assert f1 == f2 and f3 != f1 and len(os.listdir(m.dirs['scans'])) == 2
-m.close(); print("Same name -> same folder: OK")
+sel = m.sample.selections[0]
+assert f1 != f2 and [x.folder for x in sel.scans] == [f1, f2] and sel.latest.folder == f2 and len(m.sample.selections) == 1
+lst = m.list(); print(lst)
+assert len(lst) == 2 and lst[1]['version'] == (2, 2)
+m.close(); print("Every scan of a selection is a new version: OK")
 
 # ------------------------------------------------------------------ 20. Кресты переезжают вместе с кадрами при сшивке
 from microcontrol.mask import Grid

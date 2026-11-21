@@ -23,8 +23,12 @@ def _is_sel(d):
     return os.path.exists(os.path.join(d, 'meta.json'))
 
 
-def _folders(root):
-    """Папки выделений: обычные сканы и выделения внутри папок сеансов (кроме _removed)."""
+def _folders(root, latest=False):
+    """Съёмки: в проекте — все версии всех выделений (latest — только последние); в старой папке сканов —
+    сканы и образцы сеансов (кроме _removed)."""
+    from . import project as P_
+    if os.path.exists(os.path.join(root, 'sample.json')):
+        return P_.latest_scans(root) if latest else P_.all_scans(root)
     out = []
     if not os.path.isdir(root):
         return out
@@ -77,7 +81,12 @@ def _info(f, root):
         state.append(f"{len(grid['selected'])} squares")
     if os.path.exists(os.path.join(f, 'export')):
         state.append("exported")
-    return dict(folder=f, rel=os.path.relpath(f, root), objective=obj, frames=meta.get('frames', len(rows)),
+    ver = None
+    sd = os.path.dirname(f)
+    if os.path.basename(sd) == 'scans':                       # проект: версии съёмки выделения
+        vs = sorted(d for d in os.listdir(sd) if _is_sel(os.path.join(sd, d)))
+        ver = (vs.index(os.path.basename(f)) + 1, len(vs))
+    return dict(folder=f, rel=os.path.relpath(f, root), objective=obj, frames=meta.get('frames', len(rows)), version=ver,
                 date=(meta.get('date') or '')[:16].replace('T', ' '), name=meta.get('sample') or '',
                 selection=n_sel, uid=meta.get('sample_uid') or f, parent_uid=meta.get('parent_uid'),
                 box=box, state=", ".join(state), session=ses)
@@ -138,9 +147,11 @@ class Selections(list):
             t = f"Selection {it['selection']}" if it['selection'] else (it['name'] or "Scan")
             if it['selection'] and it['name'] and not it['name'].endswith(f" {it['selection']}"):
                 t += f" ({it['name']})"
+            if it.get('version') and it['version'][1] > 1:
+                t += f", scan {it['version'][0]} of {it['version'][1]}" + (" (latest)" if it['version'][0] == it['version'][1] else "")
             lab.append(("    " * (it['depth'] - 1) + "  └ " if it['depth'] else "") + t)
         w = max(14, max(len(t) for t in lab) + 2)
-        lines = [f"Scanned selections in {self.root}  (layers: a map and the details inside it)",
+        lines = [f"Scanned selections of {os.path.basename(self.root)}  (layers: a map and the details inside it)",
                  f"  {'#':>3}  {'Selection':<{w}}{'Obj':>5}{'Frames':>8}  {'Size, mm':<13}{'Date':<18}State"]
         for k, (it, t) in enumerate(zip(self, lab)):
             b = it['box']
@@ -295,7 +306,7 @@ def marked_all(root, every=3.0):
     if c and now - c[0] < every:
         return c[1]
     polys = []
-    for f in _folders(root):
+    for f in _folders(root, latest=True):                    # на картах — последняя съёмка выделения
         r = marked_squares(f)
         if r:
             polys += r['um']

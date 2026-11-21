@@ -11,6 +11,7 @@ from .control import ControlLock, stop_requested_after
 from .device import DeviceMemory
 from .util import Result, Progress, fmt
 from .stats import timed
+from . import project as P_
 
 AXES = ('x', 'y', 'z')
 ORIENTATION = ('map_flip_x', 'map_flip_y', 'arrows_flip_x', 'arrows_flip_y', 'turn_180', 'swap_xy', 'mirror_x', 'mirror_y', 'reverse_x', 'reverse_y', 'reverse_z')   # помнится для прибора
@@ -251,7 +252,7 @@ class Microscope:
     log_bytes = Setting('bool', doc="Write raw controller bytes to the log")
 
     def __init__(self, port='auto', objective=None, camera=True, allow_laser=False, allow_homing=False, cooling=True,
-                 folder='.', sdk_folder=None, force=False, **settings):
+                 folder='.', sdk_folder=None, force=False, project=None, sample=None, **settings):
         object.__setattr__(self, '_cfg', {})
         self._lock = None
         self.port = port
@@ -340,8 +341,18 @@ class Microscope:
             self.close()
             raise
         atexit.register(self.close)
+        if isinstance(sample, P_.Sample):
+            sm = sample
+        else:
+            lp = P_.last(self.folder)
+            pj = project if isinstance(project, P_.Project) else \
+                P_.Project(project or (lp[0] if lp else "Project 1"), folder=self.folder)
+            sm = pj.sample(sample or (lp[1] if lp and not project and lp[0] == os.path.basename(pj.folder) else "Sample 1"))
+        self._use(sm)
         r = Result("Connected", Port=self.port, Objective=f"{objective}x",
-                   Camera="Yes" if self.cam else "No", Log=self.log_file)
+                   Camera="Yes" if self.cam else "No", Log=self.log_file,
+                   Sample=f"{self._sample.title}" + (f" — {self._sample.description}" if self._sample.description else "")
+                   + f"   ({len(self._regions)} selections)")
         if self._mem.home:
             r['Home'] = f"set {self._mem.home['time']}"
         if restored:
@@ -352,7 +363,36 @@ class Microscope:
         print(r)
 
     _PUBLIC = {'port', 'folder', 'dirs', 'log_file', 'allow_laser', 'allow_homing', 'area', 'last_scan',
-               'last_photo', 'references', 'cam', 'device'}
+               'last_photo', 'references', 'cam', 'device', 'last_scans'}
+
+    # ---------------- проект и образец ----------------
+    @property
+    def project(self):
+        """Проект открытого образца (mc.Project): имя, описание, образцы."""
+        return self._sample.project
+
+    @property
+    def sample(self):
+        """Открытый образец (mc.Sample): его выделения, съёмки, описание. m.sample = s — открыть другой."""
+        return self._sample
+
+    @sample.setter
+    def sample(self, s):
+        self._use(s if isinstance(s, P_.Sample) else self.project.sample(s))
+
+    def _use(self, sm):
+        """Сделать образец открытым: выделения прежнего сохраняются в нём, выделения нового — загружаются."""
+        from . import samples as SM
+        if getattr(self, '_sample', None) is not None:
+            P_.save_regions(self)
+        object.__setattr__(self, '_sample', sm)
+        self.dirs['scans'] = sm.folder
+        self.dirs['photos'] = sm.photos
+        P_.load_regions(self)
+        P_.remember(sm)
+        self.area = None
+        SM.init_areas(self)
+        L.event('PRJ-001', f"Sample {sm.title} opened: {len(self._regions)} selections.")
 
     def __setattr__(self, k, v):
         """Только известные имена: опечатка (m.photo_paus = 1) — сразу ошибка, а не новая переменная."""
@@ -363,6 +403,8 @@ class Microscope:
                 raise SafetyError('E208', f"area = {v!r}. Use mc.Area(x0, y0, x1, y1) or None.")
             return object.__setattr__(self, k, v)
         if isinstance(getattr(type(self), k, None), property):
+            if getattr(type(self), k).fset is not None:       # свойство с записью (m.sample = ...)
+                return object.__setattr__(self, k, v)
             raise SafetyError('E208', f"{k} is read-only.")
         if k in RENAMED:
             raise SafetyError('E105', f"{k!r} is now called {RENAMED[k]!r}.")
@@ -1448,7 +1490,7 @@ class Microscope:
         return res
 
     # ---------------- сценарий ----------------
-    def manual(self, fullscreen=True, _keys=None):
+    def manual(self, fullscreen=False, _keys=None):
         """Ручной режим: живая картинка на весь экран.
         Стрелки или WASD — на кадр в сторону, [ ] — шаг мельче/крупнее, Q / E — столик вниз/вверх,
         F — автофокус, 1 и 2 — углы зоны, Пробел — снимок, L — свет, H — подсказка, Esc — выход.
@@ -1463,106 +1505,83 @@ class Microscope:
         return plan(self, area=area, focus=focus, overlap=scan_overlap(self.objective) if overlap is None else overlap, path=path)
 
     def scan(self, area=None, focus='auto', overlap=None, path='snake', name='', notes=''):
-        """Снять зону. Для каждого кадра: встать на координаты, фокус, пауза (photo_pause), снимок, сдвиг.
-        focus: 'auto' — по умолчанию: есть точки фокуса из m.manual() (углы 1, 2 и клавиша F) — Z каждого кадра
-               по 4 ближайшим (веса 1/d²), иначе 'off'; 'points' — то же, но точки обязательны;
-               'off' — Z не меняется (фокус ставится один раз в m.manual(); смена Z сдвигает
-               картинку по X и Y и портит сшивку); 'plane' — плоскость фокуса по точкам через focus_every кадров;
-               'each' — автофокус в каждом кадре. Пересъёмка размытых кадров с фокусом — m.refocus = True.
-        overlap — перекрытие соседних кадров 0..0.5; path — 'snake' или 'rows'.
-        name, notes — название образца и заметки (пишутся в описание скана).
-        Несколько выделений (1, 2, 3… из m.manual()): снимаются выделения ТЕКУЩЕГО объектива, каждое в свою
-        папку selection_01, selection_02… внутри одной папки сеанса, Z кадров — по точкам фокуса своего выделения.
-        Выделения других объективов (слои: участки 100x внутри карты 10x) ждут, пока поставят их объектив.
-        Возвращает папку скана (для нескольких выделений — папку сеанса)."""
-        from .scan import plan
-        from .samples import init_areas, obj as _obj
-        regs_all = getattr(self, '_regions', None) or []
-        if regs_all:
-            init_areas(self)
-        regs = [rg for rg in regs_all if _obj(self, rg) == self.objective]
-        if area is None and regs_all and not regs:
-            objs = sorted({_obj(self, rg) for rg in regs_all})
-            raise SafetyError('E706', f"No selection for {self.objective}x; the selections are for "
-                                      f"{', '.join(f'{o}x' for o in objs)}. Put that objective in place and set it "
-                                      "(m.objective = ..., or M in m.manual()), or mark selections with this one.")
-        if area is None and len(regs) < len(regs_all):
-            print(f"Selections of {self.objective}x: {len(regs)}; the other {len(regs_all) - len(regs)} "
-                  "(other objectives) wait for their objective.")
-        pts = None
-        if area is None and len(regs) > 1:
-            return self._scan_samples(regs, focus, overlap, path, name, notes)
-        if area is None and len(regs) == 1:                # одна область — обычный скан в одну папку
-            from .scan import Area
-            rg, off = regs[0], self._off
-            area = Area(rg['A'][0] - off['x'], rg['A'][1] - off['y'], rg['B'][0] - off['x'], rg['B'][1] - off['y'])
-            pts = rg['pts']
-            from .samples import parent as _par
-            pk = _par(self, self._regions.index(rg))
-            extra = dict(selection=rg['num'], sample_uid=rg['uid'], area_real_um=[*rg['A'], *rg['B']])
-            if pk is not None:
-                extra.update(parent_uid=self._regions[pk]['uid'], parent_selection=self._regions[pk]['num'],
-                             parent_objective=self._regions[pk].get('obj'))
+        """Снять выделения ТЕКУЩЕГО объектива. Для каждого кадра: встать на координаты, Z, пауза, снимок.
+        Каждая съёмка — новая версия в папке своего выделения: projects/<проект>/selections/Sxx_NNx/scans/<дата>/
+        (прежние съёмки остаются; на картах и в списке — последняя). Выделения других объективов (слои: участки
+        100x внутри карты 10x) ждут, пока поставят их объектив.
+        focus: 'auto' — Z каждого кадра по точкам фокуса выделения (4 ближайшие, веса 1/d²), без точек — 'off';
+               'points', 'off', 'plane', 'each' — см. справку. overlap — перекрытие 0..0.5; path — 'snake' / 'rows'.
+        area=Area(...) — снять эту зону: она становится новым выделением проекта.
+        name, notes — подпись съёмки (в имени папки и в meta.json).
+        Возвращает папку съёмки (одно выделение) или папку проекта (несколько); все — в m.last_scans."""
+        from .scan import plan, Area
+        from .config import scan_overlap
+        from .samples import init_areas, obj as _obj, parent as _par
+        import uuid as _uuid
+        init_areas(self)
+        if area is None and self.area is not None:         # m.area = Area(...) руками (не из выделения) — как area=
+            a_ = self.area
+            o_ = self._off
+            known = any(abs(min(r['A'][0], r['B'][0]) - o_['x'] - min(a_.x0, a_.x1)) < 1e-6 and
+                        abs(min(r['A'][1], r['B'][1]) - o_['y'] - min(a_.y0, a_.y1)) < 1e-6 and
+                        abs(max(r['A'][0], r['B'][0]) - o_['x'] - max(a_.x0, a_.x1)) < 1e-6
+                        for r in self._regions if 'B' in r)
+            if not known:
+                area = a_
+        if area is not None:                               # зона руками -> новое выделение проекта
+            fw_, fh_ = self.frame_size
+            off = self._off
+            self._area_seq = getattr(self, '_area_seq', 0) + 1
+            self._regions.append(dict(A=(area.x0 + off['x'], area.y0 + off['y']), B=(area.x1 + off['x'], area.y1 + off['y']),
+                                      pts=[], thumbs=[], num=self._area_seq, uid=_uuid.uuid4().hex,
+                                      obj=self.objective, fw=fw_, fh=fh_))
+            regs = [self._regions[-1]]
         else:
-            extra = None
+            regs_all = self._regions
+            regs = [rg for rg in regs_all if _obj(self, rg) == self.objective]
+            if not regs_all:
+                raise SafetyError('E701', "No selection: mark one in m.manual() (keys 1 and 2) or set m.area.")
+            if not regs:
+                objs = sorted({_obj(self, rg) for rg in regs_all})
+                raise SafetyError('E706', f"No selection for {self.objective}x; the selections are for "
+                                          f"{', '.join(f'{o}x' for o in objs)}. Put that objective in place and set it "
+                                          "(m.objective = ..., or M in m.manual()), or mark selections with this one.")
+            if len(regs) < len(regs_all):
+                print(f"Selections of {self.objective}x: {len(regs)}; the other {len(regs_all) - len(regs)} "
+                      "(other objectives) wait for their objective.")
+        P_.save_regions(self)
         if self.cam and self.scan_check:                   # знаки осей картинки — до плана (от них зависит сшивка)
             r = self.check_orientation()
             if 'Changed' in r or 'Reason' in r:
                 print(r)
-        from .config import scan_overlap
-        prog = plan(self, area=area, focus=focus, overlap=scan_overlap(self.objective) if overlap is None else overlap, path=path,
-                    pts=pts)
-        r = self.gcode(prog, save=name or 'scan', notes=notes, reuse=bool(name), extra=extra)   # то же имя — та же папка
-        r.title = "Scan finished" if r.title == "Program finished" else "Scan stopped"
-        print(r)
-        return r['Folder']
-
-    def _scan_samples(self, regs, focus, overlap, path, name, notes):
-        """Скан нескольких областей: папка сеанса, в ней по обычной папке скана на образец."""
-        import json as _json
-        from datetime import datetime as _dt
-        from .scan import plan, Area
-        from .config import scan_overlap
-        from .samples import color
-        if self.cam and self.scan_check:
-            r = self.check_orientation()
-            if 'Changed' in r or 'Reason' in r:
-                print(r)
         ov = scan_overlap(self.objective) if overlap is None else overlap
-        off = self._off
-        from .util import named_folder
-        ses = named_folder(self.dirs['scans'], self.objective, name or 'selections', reuse=bool(name))   # то же имя — та же папка
-        os.makedirs(ses, exist_ok=True)
-        info = dict(project="MicroControl", name=name, notes=notes, objective=self.objective,
-                    date=_dt.now().isoformat(timespec='seconds'), samples=[])
-        from .samples import parent as _par
+        off, pf, done = self._off, self._sample.folder, []
         n0 = 0
-        from .samples import init_areas
-        init_areas(self)                                      # у каждой области — постоянный номер и uid
         for k, reg in enumerate(regs):
-            sn, uid = reg['num'], reg['uid']
-            area = Area(reg['A'][0] - off['x'], reg['A'][1] - off['y'], reg['B'][0] - off['x'], reg['B'][1] - off['y'])
+            area_ = Area(reg['A'][0] - off['x'], reg['A'][1] - off['y'], reg['B'][0] - off['x'], reg['B'][1] - off['y'])
             pts = [dict(p, tag=str(n0 + i + 1)) for i, p in enumerate(reg['pts'])]
             nums = [n0 + 1, n0 + len(pts)]
             n0 += len(pts)
             kk = self._regions.index(reg)
             pk = _par(self, kk)
-            par_ = dict(parent_uid=self._regions[pk]['uid'], parent_selection=self._regions[pk]['num'],
-                        parent_objective=self._regions[pk].get('obj')) if pk is not None else {}
-            info['samples'].append(dict(index=sn, uid=uid, folder=f"selection_{sn:02d}", color_bgr=list(color(sn - 1)),
-                                        area_um=[area.x0, area.y0, area.x1, area.y1], focus_points=nums, **par_))
-            _json.dump(info, open(os.path.join(ses, 'session.json'), 'w', encoding='utf-8'), indent=1, ensure_ascii=False)
-            prog = plan(self, area=area, focus=focus, overlap=ov, path=path, pts=pts)
-            print(f"Selection {sn} ({k + 1} of {len(regs)}): {area}")
-            r = self.gcode(prog, save=f"{name or 'selection'} {sn}", notes=notes,
-                           folder=os.path.join(ses, f"selection_{sn:02d}"),
-                           extra=dict(sample_index=sn, sample_uid=uid, selection=sn, session=os.path.basename(ses),
-                                      focus_points=nums, area_real_um=[*reg['A'], *reg['B']], **par_))
+            extra = dict(sample_index=reg['num'], selection=reg['num'], sample_uid=reg['uid'], project_name=self.project.name, sample_name=self._sample.name,
+                         focus_points=nums, area_real_um=[*reg['A'], *reg['B']])
+            if pk is not None:
+                extra.update(parent_uid=self._regions[pk]['uid'], parent_selection=self._regions[pk]['num'],
+                             parent_objective=self._regions[pk].get('obj'))
+            folder = P_.scan_folder(pf, reg, name)
+            prog = plan(self, area=area_, focus=focus, overlap=ov, path=path, pts=pts)
+            if len(regs) > 1:
+                print(f"Selection {reg['num']} ({k + 1} of {len(regs)}): {area_}")
+            r = self.gcode(prog, save=name or f"Selection {reg['num']}", notes=notes, folder=folder, extra=extra)
+            r.title = "Scan finished" if r.title == "Program finished" else "Scan stopped"
             print(r)
-            if r.title != "Program finished":
+            done.append(folder)
+            if r.title != "Scan finished":
                 break
-        print(f"Session: {ses}")
-        return ses
+        self.last_scans = done
+        self.last_scan = done[-1] if done else None
+        return done[0] if len(regs) == 1 else pf
 
     def gcode(self, program, save=None, notes='', folder=None, extra=None, reuse=False):
         """Выполнить G-код (строка или путь к файлу .gcode). Единицы — мкм.

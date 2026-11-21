@@ -17,15 +17,16 @@ Five steps, from a sample on the stage to a drawing for AutoCAD:
 ```python
 import microcontrol as mc
 
-m = mc.Microscope()          # 1. connect to the microscope   (mc.Microscope('sim') — simulator)
+s = mc.Project("Graphene", "flakes for transport").sample("Chip 1", "SiO2 285 nm")   # 0. project and sample
+m = mc.Microscope(objective=10, sample=s)   # 1. connect   (mc.Microscope('sim', objective=10) — simulator)
 
 m.manual()                   # 2. green area: keys 1 and 2 at two opposite corners, focus at each
-folder = m.scan()            #    shoot the area frame by frame
+folder = m.scan()            #    shoot the area frame by frame (or S twice right in the window)
 mc.stitch(folder)            #    join the frames into one picture (or S in mc.view)
 
 mc.view(folder)              # 3. key C: click two neighbouring crosses -> the red grid
                              # 4. keys M / B: choose squares (green); Y shows hints, Shift+Y takes them
-mc.export(folder)            # 5. the chosen squares: straight PNG + DXF in micrometres
+mc.export(folder)            # 5. the chosen squares: pictures + a drawing in micrometres (DXF / DWG)
 
 m.close()
 ```
@@ -78,6 +79,20 @@ The final result is the drawing `export/drawing.dwg`: every chosen square is its
 Chosen squares of every scan also appear dark green on the mini map and on the live picture in manual mode, and on the previews in the viewer list, in their real shape and size — handy for finding the same places again under a larger objective (no selection is made automatically).
 
 ---
+
+## Projects and samples
+
+Work is grouped like this: **Project** (a piece of work, with a description) → **Sample** (one substrate on the stage: its own selections and coordinates, a description) → **Selection** (an area on one objective; layers: map 10x > details 50x > 100x) → **Scan** (every scan of a selection is a new version) → grid, chosen squares, drawing. Selections are saved in the sample and come back when it is opened again; the chosen squares on the maps, `m.list()` and the viewer show only the open sample.
+
+```python
+p = mc.Project("Graphene", "flakes for transport")   # open or create
+s = p.sample("Chip 1", "SiO2 285 nm")                # a sample of the project: open or create
+m.sample = s                                        # work with it (its selections come back)
+p.samples, s.selections, s.selections[0].scans, s.selections[0].latest.view()
+mc.projects(), mc.all_samples()
+```
+
+Both windows have a menu on top: **Open** (a sample of any project), **New project**, **New sample**, **Info** (descriptions), **Scans** (every version), **View**, **Help**. Windows open as normal windows; `m.manual(fullscreen=True)` — the whole screen.
 
 ## Layers: a map and the details
 
@@ -251,13 +266,12 @@ Arrows move; letters do things. As much as possible is done right in the window.
 ## Where things are saved
 
 ```
-scans/<date>_<objective>_<name>/      one scan (several selections: selection_01/, selection_02/ inside)
-    frames/        the frames
-    join/          the stitched picture
-    grid.json      crosses, grid, numbers, chosen squares, hints
-    export/        PNG + DXF of the chosen squares
-photos/            single pictures (Space)
-logs/              log of every session
+projects/<project>/project.json                       name, description
+projects/<project>/samples/<sample>/sample.json       its selections (layers, focus points), description
+    selections/S01_10x/scans/<date>/                  every scan of a selection is a new version:
+        frames/  join/  grid.json  export/            frames, stitched picture, crosses and squares, drawing
+    photos/                                           single pictures (Space)
+logs/                                                 log of every session
 ```
 
 ---

@@ -205,7 +205,7 @@ class Agent:
             or os.path.join(os.path.dirname(os.path.abspath(self.root)), 'logs')
         os.makedirs(logs, exist_ok=True)
         self.log = log or os.path.join(logs, f"agent_{_dt.date.today().isoformat()}.jsonl")
-        self.out = os.path.join(os.path.dirname(os.path.abspath(self.root)), 'agent')
+        self.out = os.path.join(m.folder if m is not None else os.path.dirname(os.path.abspath(self.root)), 'agent')
         os.makedirs(self.out, exist_ok=True)
         self.images = []                               # pictures made by the last call (for MCP / Ollama)
 
@@ -324,6 +324,9 @@ class Agent:
     def _scan_names(self):
         if not os.path.isdir(self.root):
             return []
+        if os.path.exists(os.path.join(self.root, 'sample.json')):      # образец: все съёмки всех выделений
+            from . import project as P_
+            return [os.path.relpath(f, self.root) for f in P_.all_scans(self.root)]
         return sorted(d for d in os.listdir(self.root) if os.path.isdir(os.path.join(self.root, d)))
 
     def grid(self, folder):
@@ -731,12 +734,16 @@ def _scan(ag, reason, dry_run=False, name=''):
 
 
 # ------------------------------------------------------------------ tools: scans on disk
-@tool('list_scans', "Scan folders on disk: name, samples, stitched or not, grid, selection, hints.")
+@tool('list_scans', "Scans of the open project (every scan of every selection, a new scan of a selection is a new "
+                    "version): folder, frames, stitched or not, grid, chosen squares, hints.")
 def _list(ag):
     out = []
     for d in ag._scan_names():
         f = os.path.join(ag.root, d)
         if d.startswith('_'):
+            continue
+        if os.path.exists(os.path.join(f, 'meta.json')):
+            out.append(dict(_brief(ag, f), kind='scan'))
             continue
         ses, subs = SM.session_of(f)
         if ses:

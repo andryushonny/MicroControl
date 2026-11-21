@@ -2,7 +2,8 @@
 Authors: Andrey Lyapeikov, Savely Domenko.
 
     import microcontrol as mc
-    m = mc.Microscope()        # connect ('sim' — simulator)
+    s = mc.Project("Graphene").sample("Chip 1")    # project and sample: open or create
+    m = mc.Microscope(objective=10, sample=s)      # connect ('sim' — simulator)
     m.manual()                 # look at the sample, mark the area with keys 1 and 2
     folder = m.scan()          # shoot the area
     m.close()
@@ -12,7 +13,7 @@ Authors: Andrey Lyapeikov, Savely Domenko.
 
 Help: mc.help()
 """
-__version__ = "0.22.0"
+__version__ = "0.23.0"
 AUTHORS = ["Ляпейков Андрей", "Доменко Савелий"]
 
 from .errors import (MicroControlError, SafetyError, LimitError, CommError, CameraError,
@@ -28,6 +29,7 @@ from .optics import measure_distortion as distortion
 from .viewer import view, hints, train_hints
 from .agent import Agent
 from .selections import list_selections as selections, remove_selection, open_selection
+from .project import Project, Sample, projects, all_samples
 from .util import _app_id as _a
 _a()                                     # своя кнопка на панели задач Windows (значок MicroControl)
 from . import agent
@@ -39,6 +41,14 @@ CONNECT
   m = mc.Microscope('COM3')        Connect to a given port
   m = mc.Microscope('sim')         Simulator, no device needed
   m.close()                        Disconnect (light and laser go off)
+
+PROJECTS (Project > Sample > Selection > Scan)
+  p = mc.Project("Graphene", "about")   Open or create a project (projects/<name>/)
+  s = p.sample("Chip 1", "about")      A sample of it (one substrate): open or create
+  m = mc.Microscope(sample=s)          Work with it (or m.sample = s); its selections come back
+  mc.projects(), mc.all_samples()      What is there;  p.samples, s.selections, s.scans()
+  s.selections[0].latest.view()        The last scan of a selection; .scans — every version
+  Menu in both windows                 Open, New project, New sample, Info, Scans, View, Help
 
 WORKFLOW
   m.manual()                       Live view on the full screen; mark the area with keys 1 and 2

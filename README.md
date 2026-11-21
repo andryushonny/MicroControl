@@ -1059,3 +1059,9 @@ On the instrument, do not raise the stage "blindly" with commands like `m.move(d
 - Z travel per step (assumed equal to $\delta$, as in the Optosky UI); with $\delta = 5.56$ µm, reachability of focus at 20x and 100x (section 9.3): at 100x press `E`/`Q` several times and check whether a position with a sharp image exists.
 - Laser: the command format is taken from the stock program code.
 - Illumination levels above 5.
+
+---
+
+## Contact
+
+Questions and bug reports: [andrey.quant@yandex.ru](mailto:andrey.quant@yandex.ru)

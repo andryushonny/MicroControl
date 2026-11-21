@@ -73,6 +73,10 @@ Both windows close with **Shift+Esc** or the window's ×. A single `Esc` only ca
 
 `E` in the viewer or `mc.export(folder)` writes `export/` inside the scan folder: a straight PNG of the chosen squares (transparent background), a DXF for AutoCAD in micrometres and a list of the square numbers.
 
+The final result is the drawing `export/drawing.dwg`: every chosen square is its own picture (`export/squares/*.png`, cut exactly along the grid) placed at its real position in micrometres, with the square outlines and numbers on separate layers and an empty `BONDS` layer for drawing bonds. The DWG is written by the free ODA File Converter if it is installed; otherwise there is `drawing.dxf` (AutoCAD: Save As → DWG). Keep the `export/` folder together: pictures in DWG are always separate files. The progress is shown right in the window.
+
+Chosen squares of every scan also appear dark green on the mini map and on the live picture in manual mode, and on the previews in the viewer list, in their real shape and size — handy for finding the same places again under a larger objective (no selection is made automatically).
+
 ---
 
 ## Layers: a map and the details
@@ -237,7 +241,7 @@ Arrows move; letters do things. As much as possible is done right in the window.
 | `Y` · `Shift+Y` · `<` `>` | hints · take the hints · sensitivity |
 | `T` | picture level / as shot |
 | `R` or `L` | ruler: two clicks — the distance |
-| `E` | export |
+| `E` | export: square pictures + the drawing (DWG / DXF), progress in the window |
 | `,` `.` | previous / next selection |
 | `Ctrl+Z` · `Ctrl+Y` | undo · redo any change |
 | `Esc` · `H` · `Shift+Esc` | leave the mode · all keys · exit |

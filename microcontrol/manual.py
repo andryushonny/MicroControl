@@ -364,6 +364,21 @@ def minimap(img, m, A, B, size=MAP_W, zcolor=None, others=(), right=0):
             cv2.rectangle(sub, (int(cu0), int(cv0)), (int(cu1), int(cv1)), oc, 2 if not olab else 1)
             if olab and cu1 - cu0 > 26 and cv1 - cv0 > 14:              # другой объектив (слой): подпись
                 cv2.putText(sub, olab, (int(cu0) + 3, int(cv0) + 12), font, 0.36, oc, 1, cv2.LINE_AA)
+    try:                                                                 # выбранные в просмотре квадраты всех сканов:
+        from .selections import marked_all                               # тёмно-зелёные, своей формы и масштаба
+        polys = marked_all(m.dirs['scans'])
+    except Exception:
+        polys = []
+    if polys:
+        ovm = sub.copy()
+        gx1m, gy1m = gx0 + gw, gy0 + gh
+        for q in polys:
+            pts = np.int32([to(*f(x_ - m._off['x'], y_ - m._off['y'])) for x_, y_ in q])
+            if pts[:, 0].max() < gx0 or pts[:, 0].min() > gx1m or pts[:, 1].max() < gy0 or pts[:, 1].min() > gy1m:
+                continue
+            cv2.fillPoly(ovm, [pts], (40, 105, 40))
+            cv2.polylines(ovm, [pts], True, (70, 160, 70), 1, cv2.LINE_AA)
+        sub[gy0:int(gy1m), gx0:int(gx1m)] = cv2.addWeighted(ovm, 0.75, sub, 0.25, 0)[gy0:int(gy1m), gx0:int(gx1m)]
     a_, b_ = to(px - sx / 2, py - sy / 2), to(px + sx / 2, py + sy / 2)  # жёлтое — кадр = клетка карты
     ov_ = sub.copy()
     cv2.rectangle(ov_, (int(max(a_[0], gx0)), int(max(a_[1], gy0))),
@@ -393,7 +408,7 @@ def minimap(img, m, A, B, size=MAP_W, zcolor=None, others=(), right=0):
                 TM.fmt(TM.estimate(m, fx_ * fy_, 'points' if getattr(m, '_use_fp', True) else 'off')[0])
         except Exception:
             nfr = ""
-        label(f"{'Area' if fixed else 'Preview'} {nx_} x {ny_}{nfr}" + (f"    hidden {hid}" if hid else ""),
+        label(f"{'Area' if fixed else 'Preview'} {nx_} x {ny_}{nfr}",
               (W / 2, H - 12), line, 0.45)
     else:
         label(f"Frame: row {cj + 1}, column {ci + 1}    Key 1: corner of a new area", (W / 2, H - 12), (170, 170, 170), 0.45)
@@ -835,6 +850,25 @@ def run(m, fullscreen=True, _keys=None):
             base = render(img, Wl, H, kz, zm['c'], rot)
             view = np.zeros((H, W, 3), np.uint8)
             view[:, :Wl] = base
+            try:                                           # выбранные в просмотре квадраты — тёмно-зелёным на кадре
+                from .selections import marked_all
+                polys_ = marked_all(m.dirs['scans'])
+            except Exception:
+                polys_ = []
+            if polys_:
+                rp_ = np.array([m.real_position.x, m.real_position.y])
+                rad_ = 1.5 * max(m.frame_size) / max(1.0, zm['z']) + 2 * max(m.frame_size)
+                ov_ = None
+                for q in polys_:
+                    if np.abs(q.mean(0) - rp_).max() > rad_:
+                        continue
+                    pts = np.int32([to_v(S_) for S_ in q])
+                    if ov_ is None:
+                        ov_ = view[:, :Wl].copy()
+                    cv2.fillPoly(ov_, [pts], (30, 90, 30))
+                    cv2.polylines(view[:, :Wl], [pts], True, (60, 170, 60), 1, cv2.LINE_AA)
+                if ov_ is not None:
+                    view[:, :Wl] = cv2.addWeighted(ov_, 0.3, view[:, :Wl], 0.7, 0)
             if rul['on'] and rul['pts']:                    # линейка (точки — на образце: едут вместе с ним)
                 a_ = to_v(rul['pts'][0])
                 if len(rul['pts']) == 2:

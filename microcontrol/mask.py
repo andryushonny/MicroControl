@@ -486,10 +486,14 @@ class Frames:
 
 @_per_sample
 @timed_fn('Export (all of it)')
-def export(folder, fmt='png', scale=1.0, cells=False, dxf=True, max_mb=2000, margin=0, blend='multiband'):
+def export(folder, fmt='png', scale=1.0, cells=False, dxf=True, max_mb=2000, margin=0, blend='multiband', dwg=True):
     """Вывести только выделенные квадраты: ровно (поворот подложки снят), стык строго по крестам.
     fmt='png' — фон прозрачный, 'jpg' — белый. cells=True — ещё и каждый квадрат отдельным файлом.
-    dxf=True — export/selection.dxf: квадраты в мкм (AutoCAD). Возвращает папку export/."""
+    dxf=True — export/selection.dxf: квадраты в мкм (AutoCAD).
+    dwg=True — итоговый чертёж: export/drawing.dwg (и drawing.dxf) — каждый квадрат отдельной картинкой
+    (export/squares/*.png) на своём месте в мкм, контуры квадратов и номера по слоям; поверх рисуют бонды.
+    DWG пишет бесплатный ODA File Converter (если установлен), иначе — drawing.dxf (AutoCAD: «Сохранить как» DWG).
+    Возвращает Result."""
     g = Grid(folder)
     if not g.ready() or not g.selected:
         raise ValueError("Nothing to export: in mc.view(folder) mark the crosses (C) and select squares (M).")
@@ -513,8 +517,10 @@ def export(folder, fmt='png', scale=1.0, cells=False, dxf=True, max_mb=2000, mar
     canvas = np.full((Hc, Wc, 3 if jpg else 4), 255 if jpg else 0, np.uint8)
     out = os.path.join(folder, 'export')
     os.makedirs(out, exist_ok=True)
+    cells = cells or dwg                                      # для чертежа нужен каждый квадрат отдельно
     if cells:
         os.makedirs(os.path.join(out, 'squares'), exist_ok=True)
+    sq_files = {}
     num = g.numbering()
     pr = Progress(len(sel), "Export: squares", unit='squares')
     for i, j in sel:
@@ -536,7 +542,8 @@ def export(folder, fmt='png', scale=1.0, cells=False, dxf=True, max_mb=2000, mar
         if cells:
             ok_, buf = cv2.imencode('.png', img)
             X, Y = g.name(i, j, num)
-            buf.tofile(os.path.join(out, 'squares', f"square_X{X:+04d}_Y{Y:+04d}.png"))
+            sq_files[(i, j)] = f"square_X{X:+04d}_Y{Y:+04d}.png"
+            buf.tofile(os.path.join(out, 'squares', sq_files[(i, j)]))
     pr.close()
     path = os.path.join(out, 'selection.' + ('jpg' if jpg else 'png'))
     save_image(path, canvas, [cv2.IMWRITE_JPEG_QUALITY, 95] if jpg else [cv2.IMWRITE_PNG_COMPRESSION, 6],
@@ -552,9 +559,85 @@ def export(folder, fmt='png', scale=1.0, cells=False, dxf=True, max_mb=2000, mar
         write_dxf(os.path.join(out, 'selection.dxf'), [(cols[i] - c0, rows[j] - r0, *g.name(i, j, num)) for i, j in sel],
                   pitch)
     fr.close()
+    r = Result("Exported", Squares=len(sel), **{"Image, px": f"{Wc} x {Hc}", "Pitch, um": f"{pitch[0]:.2f} x {pitch[1]:.2f}"},
+               File=path, DXF=os.path.join(out, 'selection.dxf') if dxf else '-')
+    if dwg:
+        with Progress(3, "Export: drawing", unit='steps') as pr2:
+            pr2.stage("drawing.dxf: square pictures, outlines, numbers")
+            cells_ = [(cols[i] - c0, rows[j] - r0, *g.name(i, j, num), sq_files[(i, j)]) for i, j in sel]
+            dp = write_drawing(os.path.join(out, 'drawing.dxf'), cells_, pitch, (cw, ch))
+            pr2.stage("drawing.dwg (ODA File Converter)", 1)
+            if dp:
+                r['Drawing'] = dp
+                dw = dxf_to_dwg(dp)
+                r['DWG'] = dw or ("not made: install the free ODA File Converter (opendesign.com), or open "
+                                  "drawing.dxf in AutoCAD and save as DWG")
+            else:
+                r['Drawing'] = "not made: pip install ezdxf"
+            pr2.stage("done", 2)
     L.event('MSK-001', f"Export {path}: {len(sel)} squares, {Wc}x{Hc} px.")
-    return Result("Exported", Squares=len(sel), **{"Image, px": f"{Wc} x {Hc}", "Pitch, um": f"{pitch[0]:.2f} x {pitch[1]:.2f}"},
-                  File=path, DXF=os.path.join(out, 'selection.dxf') if dxf else '-')
+    return r
+
+
+def write_drawing(path, cells, pitch, px):
+    """Итоговый чертёж (DXF 2010, единицы — мкм, Y вверх): каждый квадрат — своя картинка (слой IMAGES,
+    файл рядом: squares/...), контур (SQUARES / OUTLINE — внешний край выделения) и номер (LABELS).
+    cells: [(столбец, строка, X, Y, файл)], pitch — шаг квадрата, мкм; px — размер картинки квадрата, px.
+    Картинки в DWG всегда внешние файлы: папку export/ переносить целиком."""
+    try:
+        import ezdxf
+    except ImportError:
+        return None
+    a, b = pitch
+    doc = ezdxf.new('R2010', setup=True)
+    doc.units = 13                                            # микрометры
+    doc.header['$INSUNITS'] = 13
+    for name, color in (('IMAGES', 7), ('SQUARES', 3), ('OUTLINE', 1), ('LABELS', 2), ('BONDS', 6)):
+        if name not in doc.layers:
+            doc.layers.add(name, color=color)
+    msp = doc.modelspace()
+    have = {(c, r) for c, r, *_ in cells}
+    for c, r, X, Y, fn in cells:
+        x0, y1 = c * a, -r * b                                # верх квадрата; строки идут вниз
+        y0 = y1 - b
+        idef = doc.add_image_def(filename=os.path.join('squares', fn), size_in_pixel=px)
+        msp.add_image(idef, insert=(x0, y0), size_in_units=(a, b), dxfattribs={'layer': 'IMAGES'})
+        for (xa, ya, xb, yb), nb in (((x0, y1, x0 + a, y1), (c, r - 1)), ((x0, y0, x0 + a, y0), (c, r + 1)),
+                                     ((x0, y0, x0, y1), (c - 1, r)), ((x0 + a, y0, x0 + a, y1), (c + 1, r))):
+            msp.add_line((xa, ya), (xb, yb), dxfattribs={'layer': 'OUTLINE' if nb not in have else 'SQUARES'})
+        msp.add_text(f"{X},{Y}", height=0.06 * b,
+                     dxfattribs={'layer': 'LABELS', 'insert': (x0 + 0.04 * a, y1 - 0.1 * b)})
+    doc.saveas(path)
+    return path
+
+
+def dxf_to_dwg(path):
+    """DXF -> DWG бесплатным ODA File Converter (если установлен; путь можно задать в MC_ODA). DWG или None."""
+    import glob
+    import shutil
+    import subprocess
+    import tempfile
+    exe = os.environ.get('MC_ODA') or shutil.which('ODAFileConverter')
+    if not exe:
+        for pat in (r"C:\Program Files\ODA\ODAFileConverter*\ODAFileConverter.exe",
+                    r"C:\Program Files (x86)\ODA\ODAFileConverter*\ODAFileConverter.exe",
+                    "/usr/bin/ODAFileConverter*", "/opt/ODAFileConverter*/ODAFileConverter"):
+            hits = sorted(glob.glob(pat))
+            if hits:
+                exe = hits[-1]
+                break
+    if not exe:
+        return None
+    src = tempfile.mkdtemp()
+    shutil.copy(path, src)
+    dst = os.path.dirname(os.path.abspath(path))
+    try:
+        subprocess.run([exe, src, dst, "ACAD2013", "DWG", "0", "1", "*.DXF"], check=True, timeout=300,
+                       capture_output=True)
+    except Exception:
+        return None
+    dw = os.path.splitext(os.path.abspath(path))[0] + '.dwg'
+    return dw if os.path.exists(dw) else None
 
 
 def write_dxf(path, cells, pitch):

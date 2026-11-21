@@ -556,7 +556,7 @@ Result: `join/positions_all.csv`, `join/stitch.json`, `join/preview_all.jpg` (re
 | `Y` · `Shift+Y` · `<` `>` | hints · take the hints · sensitivity |
 | `T` | picture level / as shot |
 | `R` or `L` | ruler: two clicks — the distance |
-| `E` | export |
+| `E` | export: square pictures + the drawing (DWG / DXF), progress in the window |
 | `,` `.` | previous / next selection |
 | `Ctrl+Z` · `Ctrl+Y` | undo · redo any change |
 | `Esc` · `H` · `Shift+Esc` | leave the mode · all keys · exit |
@@ -708,6 +708,10 @@ The `F` (feed) parameter is not supported (`E902`): the speed is set by the cont
 **Selections and layers.** Keys `1`, `2` mark a *selection* (formerly "sample area"); it remembers the objective it was marked with and the frame size of that objective. Selections of one objective do not overlap; a selection of a higher objective may lie inside one of a lower objective — it is its detail (layer): map 10x → details 50x → details 100x. The parent is the lower-objective selection that contains its centre (the closest layer, the smallest one). `m.scan()` shoots only the selections of the objective in place (error `E706` if there are none); the others wait. Frames and the expected time in the list are counted for each selection's own objective (`timing.estimate(..., objective)`). `meta.json` of a scanned selection holds `selection`, `sample_uid`, `parent_uid`, `parent_selection`, `area_real_um`. `m.list()` shows all scanned selections as a tree (by `parent_uid`, for old scans by position on the stage), `m.open(N)` opens one in `mc.view`, `m.remove(N, confirm=True)` deletes its folder (and the session folder if nothing is left in it).
 
 **Stitch in the viewer** (`S`): `mc.stitch` of the open selection in a background thread; the window shows the step (1 of 4: light field, seams, frame brightness, saving), its progress bar in % and the time; then the viewer reopens with the stitched picture (crosses moved with the frames).
+
+**Final drawing** (`E` / `mc.export`): besides `selection.png` / `selection.dxf`, every chosen square is saved as its own picture `export/squares/square_X±NNN_Y±NNN.png` (cut along the lattice, level), and `export/drawing.dxf` (DXF 2010, units µm, Y up; `ezdxf`) places each picture at its square (layer `IMAGES`), with the outlines (`SQUARES`, the outer edge `OUTLINE`), the numbers (`LABELS`) and an empty `BONDS` layer. If the free ODA File Converter is installed (or its path is in `MC_ODA`), `export/drawing.dwg` is written too. Pictures are external files in DWG as well: move the whole `export/` folder.
+
+**Chosen squares on the maps.** Lattice corners of the chosen squares are mapped from mosaic pixels to stage micrometres by an affine fit over the frame positions (frame centre = where the stage stood; one row of frames — by the camera matrix `A`); in manual mode they are drawn dark green on the mini map and on the live picture (`selections.marked_all`, refreshed every 3 s), in the viewer — on the previews in the list.
 
 **Ruler** (`R` or `L`, both windows): two clicks — the distance in µm and its projections; the points are placed exactly at the clicks (marked with «+»). In manual mode the points are on the sample (stage coordinates), so the stage may move between the clicks. In manual mode: `F` — light, `W` — white balance, `I` — laser; `S` (twice) scans the selections of the objective in place and stitches them in the window (`Esc` stops after the current frame), `V` opens the result in the viewer.
 

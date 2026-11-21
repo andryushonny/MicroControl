@@ -295,6 +295,9 @@ grid = json.load(open(os.path.join(f, 'grid.json')))
 assert abs(grid['pitch_um'][0] - 100) < 1 and abs(grid['pitch_um'][1] - 100) < 1, grid['pitch_um']
 assert abs(grid["turn_deg"] - 3.5) < 0.2 and grid['selected'], grid
 assert {'selection.png', 'selection.dxf', 'selection.json'} <= set(os.listdir(os.path.join(f, 'export')))
+import ezdxf                                                       # итоговый чертёж: картинка на каждый квадрат
+assert len(ezdxf.readfile(os.path.join(f, 'export', 'drawing.dxf')).modelspace().query('IMAGE')) == \
+    len(os.listdir(os.path.join(f, 'export', 'squares')))
 from microcontrol.mask import Grid
 gg = Grid(f)
 assert len(gg.labels) == 2 and 'fixed' in gg.numbering()[2], (gg.labels, gg.numbering())

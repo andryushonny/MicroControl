@@ -3,3 +3,4 @@ numpy
 opencv-python
 h5py
 psutil
+ezdxf>=1.1          # итоговый чертёж (drawing.dxf / .dwg с картинками квадратов)

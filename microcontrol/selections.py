@@ -236,3 +236,68 @@ def _is_child(lst, it, me):
         if it is me:
             return True
     return False
+
+
+# ------------------------------------------------------------------ выбранные квадраты (зелёные) на картах
+_SQ = {}
+_ALL = {}
+
+
+def marked_squares(folder):
+    """Выбранные в mc.view квадраты скана: dict(px=[4x2 мозаика], um=[4x2 настоящие мкм столика], size=(W, H)
+    мозаики) или None. Мозаика -> столик: аффинно по положениям кадров (центр кадра = где стоял столик);
+    скан в один ряд — по матрице камеры A. Форма и масштаб квадратов сохраняются."""
+    gp = os.path.join(folder, 'grid.json')
+    if not os.path.exists(gp):
+        return None
+    jp = os.path.join(folder, 'join', 'positions_all.csv')
+    key = (os.path.getmtime(gp), os.path.getmtime(jp) if os.path.exists(jp) else 0)
+    if folder in _SQ and _SQ[folder][0] == key:
+        return _SQ[folder][1]
+    out = None
+    try:
+        from .mask import Grid
+        g = Grid(folder)
+        if g.ready() and g.selected:
+            from .storage import ScanData, meta_A
+            from .stitch import load_positions
+            st = ScanData(folder)
+            try:
+                H, W = st.shape[:2]
+                P = load_positions(folder, st)
+                Pm = P - P.min(0)
+                ms = st.meta.get('motor_step_um') or 1.0
+                S = np.array([[float(r['x_p']), float(r['y_p'])] for r in st.index]) * ms
+                A = meta_A(st.meta, W, H)
+            finally:
+                st.close()
+            Pc = Pm + (W / 2, H / 2)
+            if len(Pc) >= 3 and np.linalg.matrix_rank(Pc - Pc.mean(0), tol=1.0) == 2:
+                M = np.linalg.lstsq(np.c_[Pc, np.ones(len(Pc))], S, rcond=None)[0]          # 3 x 2
+            else:
+                Lin = -np.linalg.inv(A) * ms                                                # px -> мкм
+                M = np.vstack([Lin.T, S.mean(0) - Pc.mean(0) @ Lin.T])
+            px = [np.array([g.cr.point(i, j), g.cr.point(i + 1, j), g.cr.point(i + 1, j + 1), g.cr.point(i, j + 1)],
+                           float) for i, j in sorted(g.selected)]
+            out = dict(px=px, um=[np.c_[q, np.ones(4)] @ M for q in px], size=Pm.max(0) + (W, H))
+    except Exception:
+        out = None
+    _SQ[folder] = (key, out)
+    return out
+
+
+def marked_all(root, every=3.0):
+    """Все выбранные квадраты всех сканов в папке сканов (настоящие мкм столика): [4x2]. Обновляется не чаще
+    раза в every секунд."""
+    import time
+    now = time.monotonic()
+    c = _ALL.get(root)
+    if c and now - c[0] < every:
+        return c[1]
+    polys = []
+    for f in _folders(root):
+        r = marked_squares(f)
+        if r:
+            polys += r['um']
+    _ALL[root] = (now, polys)
+    return polys

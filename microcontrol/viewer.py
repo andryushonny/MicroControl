@@ -152,7 +152,9 @@ def _preview(folder, w):
     """Картинка образца для карусели: обзорная мозаика (после сшивки) или первый кадр."""
     pv = os.path.join(folder, 'join', 'preview_all.jpg')
     from . import samples as _SM
-    key = (folder, _SM.sample_uid(folder), os.path.getmtime(pv) if os.path.exists(pv) else 0, w)   # uid: не путать
+    gp_ = os.path.join(folder, 'grid.json')
+    key = (folder, _SM.sample_uid(folder), os.path.getmtime(pv) if os.path.exists(pv) else 0, w,   # uid: не путать
+           os.path.getmtime(gp_) if os.path.exists(gp_) else 0)
                                                                                                    # с убранным
     if key not in _PREV:
         img = cv2.imdecode(np.fromfile(pv, np.uint8), cv2.IMREAD_COLOR) if os.path.exists(pv) else None
@@ -166,8 +168,21 @@ def _preview(folder, w):
         if img is None:
             img = np.full((60, w, 3), 40, np.uint8)
         k = min(w / img.shape[1], 130 / img.shape[0])
-        _PREV[key] = cv2.resize(img, (max(1, int(img.shape[1] * k)), max(1, int(img.shape[0] * k))),
-                                interpolation=cv2.INTER_AREA)
+        small = cv2.resize(img, (max(1, int(img.shape[1] * k)), max(1, int(img.shape[0] * k))),
+                           interpolation=cv2.INTER_AREA)
+        if os.path.exists(pv):                              # выбранные квадраты — тёмно-зелёным, своей формы
+            try:
+                from .selections import marked_squares
+                ms_ = marked_squares(folder)
+                if ms_:
+                    kk = (img.shape[1] - 2) / ms_['size'][0] * k
+                    ov = small.copy()
+                    for q in ms_['px']:
+                        cv2.fillPoly(ov, [np.int32(np.round(q * kk))], (40, 120, 40))
+                    small = cv2.addWeighted(ov, 0.7, small, 0.3, 0)
+            except Exception:
+                pass
+        _PREV[key] = small
     return _PREV[key]
 
 
@@ -295,31 +310,35 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
         else:
             st['rot'] = 0.0
 
-    def stitch_here():
-        """J: сшить это выделение (mc.stitch) прямо из просмотра. Полоса прогресса — в окне, по этапам сшивки;
-        затем окно открывается заново уже со сшитой картинкой (кресты переезжают вместе с кадрами)."""
+    STAGES = {'light': "light field (uneven lighting)", 'seams': "seams (where each frame really is)",
+              'brightness': "frame brightness", 'saving': "saving the preview and small copies",
+              'export: squares': "cutting the squares", 'export: saving': "writing the selection picture",
+              'export: drawing': "drawing: pictures of the squares in micrometres (DXF / DWG)"}
+
+    def busy(title, fn, close_scene=False, footer=""):
+        """Долгая работа прямо в окне: fn() в фоновом потоке, в окне — этап, полоса 0-100 %, время.
+        Возвращает (результат, ошибка или None)."""
         import threading
-        from .stitch import stitch as _stitch
         from .util import Progress
-        g.save(px_um)
         base = st.get('scene')
         if base is None:
             base = render()[:, :st['Wv']]
         base = (base.astype(np.float32) * 0.35).astype(np.uint8)
         pan = carousel_img()
-        sc.st.close()
-        sc.thumbs, sc.over = None, None
-        sc.cache.clear()
-        prog = dict(title="Stitch", f=0.0, text="starting", el=0.0, eta=None)
+        if close_scene:                                     # файлы скана перепишутся (Windows не даст при открытых)
+            sc.st.close()
+            sc.thumbs, sc.over = None, None
+            sc.cache.clear()
+        prog = dict(title=title, f=0.0, text="starting", eta=None)
         res = {}
 
         def hook(t, f, txt, el, eta):
-            prog.update(title=t, f=f, text=txt, el=el, eta=eta)
+            prog.update(title=t, f=f, text=txt, eta=eta)
 
         def work():
             try:
-                res['r'] = _stitch(folder, verbose=True)
-            except Exception as e:                          # покажем в окне после сшивки
+                res['r'] = fn()
+            except Exception as e:                          # покажем в окне
                 res['e'] = e
 
         t0 = _t.monotonic()
@@ -331,23 +350,28 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
                 img = base.copy()
                 nm_ = prog['title'].replace("Stitch: ", "").lower()
                 order_ = ['light', 'seams', 'brightness', 'saving']
-                stage = (f"Step {order_.index(nm_) + 1} of 4:  " if nm_ in order_ else "") + \
-                    {'light': "light field (uneven lighting)", 'seams': "seams (where each frame really is)",
-                     'brightness': "frame brightness", 'saving': "saving the preview and small copies"}.get(nm_, nm_)
-                UI.progress_panel(img, f"Stitching Selection {SM.sample_index(folder)}" if len(subs) > 1 else "Stitching",
-                                  stage, prog['f'], prog['text'], _t.monotonic() - t0, prog['eta'],
-                                  "(the view reopens by itself)")
+                stage = (f"Step {order_.index(nm_) + 1} of 4:  " if nm_ in order_ else "") + STAGES.get(nm_, prog['title'])
+                UI.progress_panel(img, title, stage, prog['f'], prog['text'], _t.monotonic() - t0, prog['eta'], footer)
                 cv2.imshow(WIN, np.hstack([img, pan]) if pan.shape[0] == img.shape[0] else img)
                 cv2.waitKey(60)
         finally:
             Progress.hook = None
             th.join()
+        st['busy_s'] = _t.monotonic() - t0
+        return res.get('r'), res.get('e')
+
+    def stitch_here():
+        """S: сшить это выделение (mc.stitch) прямо из просмотра; затем окно открывается заново уже со сшитой
+        картинкой (кресты переезжают вместе с кадрами)."""
+        from .stitch import stitch as _stitch
+        g.save(px_um)
+        r, e = busy(f"Stitching Selection {SM.sample_index(folder)}" if len(subs) > 1 else "Stitching",
+                    lambda: _stitch(folder, verbose=True), close_scene=True, footer="(the view reopens by itself)")
         st['stitched'] = True
-        if 'e' in res:
-            car['msg'] = f"Stitching failed: {type(res['e']).__name__}: {res['e']}"
+        if e is not None:
+            car['msg'] = f"Stitching failed: {type(e).__name__}: {e}"
         else:
-            r = res['r']
-            car['msg'] = (f"Stitched in {_t.monotonic() - t0:.0f} s: seams {r.get('Seams accepted', '-')}, "
+            car['msg'] = (f"Stitched in {st['busy_s']:.0f} s: seams {r.get('Seams accepted', '-')}, "
                           f"error {r.get('Seam error, px', '-')} px" + ("; crosses moved with the frames" if 'Crosses' in r else ""))
         st['switch'] = folder
 
@@ -907,12 +931,16 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
             g.save(px_um); st['msg'] = f"All {len(g.selected)} squares selected"
         elif ch == 'x' and st['mode'] in ('select', 'paint'):
             g.selected.clear(); g.save(px_um); st['msg'] = "Selection cleared"
-        elif ch == 'e':
-            try:
-                r = export(folder)
-                st['msg'] = f"Exported {r['Squares']} squares: {r['File']}"
-            except Exception as e:
+        elif ch == 'e':                                      # вывод: картинки квадратов + чертёж, прогресс в окне
+            g.save(px_um)
+            r, e = busy("Export", lambda: export(folder))
+            if e is not None:
                 st['msg'] = f"Export: {e}"
+            else:
+                dw = r.get('DWG', '')
+                st['msg'] = (f"Exported {r['Squares']} squares in {st['busy_s']:.0f} s: "
+                             + (f"drawing {dw}" if str(dw).endswith('.dwg') else f"drawing {r.get('Drawing', '-')}"
+                                + ("  (DWG: install ODA File Converter)" if 'ODA' in str(dw) else "")))
         elif ch and ch in '+=' or key in {2162688, 65365}:
             zoom(1.25)
         elif ch and ch in '-_' or key in {2228224, 65366}:

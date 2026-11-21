@@ -325,7 +325,7 @@ exp_ = size_ / 2 + (np.array([u0 + 10.5, v0 + 4.5]) - (Wsc_ / 2, 450)) / sv
 assert np.hypot(*(g2.cr.marks[-1] - exp_)) < 0.6 / sv + 0.5, (g2.cr.marks[-1], exp_)
 u1, v1 = view_xy(world(6, 5)); u1, v1 = u1 - 3, v1 + 2
 mc.view(f, _keys=[ord('c'), -1, ('click', u1, v1), -1, ('drag', u1, v1, u1 + 6, v1), -1, 26, -1, 26, -1, 25, -1,
-                  26, -1, ord('l'), -1, ('click', 300, 300), -1, ('click', 420, 380), -1, 27, 27])
+                  26, -1, ord('r'), -1, ('click', 300, 300), -1, ('click', 420, 380), -1, 27, 27])
 assert len(Grid(f).cr.marks) == n0 + 1, (n0, len(Grid(f).cr.marks))              # крест, сдвиг -> Ctrl+Z x2, Ctrl+Y, Ctrl+Z
 print("Cross marks: exactly at the click, draggable, Ctrl+Z / Ctrl+Y: OK")
 n0 = len(json.load(open(os.path.join(f, 'grid.json')))['selected'])
@@ -612,7 +612,7 @@ M.run(m, fullscreen=False, _keys=[ord('1'), -1, R_, -1, ord('2'), -1, -1, 26, -1
 assert not m._regions and m._pending is None and m.position == p0, (m._regions, m._pending, m.position, p0)
 M.run(m, fullscreen=False, _keys=[25, -1, 25, -1, -1, 25, -1, -1, 27])                # всё вернуть
 assert len(m._regions) == 1 and m.position != p0, (m._regions, m.position)
-M.run(m, fullscreen=False, _keys=[ord('l'), -1, (600, 300), -1, (700, 300), -1, -1, ord('l'), -1, ord('l'), -1,
+M.run(m, fullscreen=False, _keys=[ord('r'), -1, (600, 300), -1, (700, 300), -1, -1, ord('r'), -1, ord('r'), -1,
                                   (600, 300), -1, R_, -1, (600, 300), -1, -1])     # линейка; точка 2 — после сдвига
 d_ = np.hypot(*(np.array(m._ruler['pts'][1]) - m._ruler['pts'][0]))
 assert len(m._ruler['pts']) == 2 and abs(d_ - m.frame_size[0]) < 0.1 * m.frame_size[0], (m._ruler, d_, m.frame_size)

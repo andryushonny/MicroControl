@@ -9,8 +9,8 @@
   1 / 2               Углы выделения;  C — удалить выделение (дважды)
   S (дважды)          Снять выделения этого объектива и сшить, прямо в окне (Esc — стоп)
   V                   Открыть последний скан в просмотре, после — снова сюда
-  F / W / I           Свет / баланс белого / лазер
-  R или L             Линейка: два щелчка — расстояние
+  L / I / W           Свет / лазер / баланс белого
+  R                   Линейка: два щелчка — расстояние
   Пробел              Снимок в photos/
   0 / Shift+0         Ноль здесь / настоящие координаты
   Ctrl+Z / Ctrl+Y     Отменить / вернуть
@@ -48,8 +48,8 @@ HELP = ["Shift+Esc: Exit (or close the window)", "P: Hide / show the left panel"
         "C: Cancel the new selection / delete the chosen one (press twice)",
         "S (twice): Scan the selections of this objective and stitch them, here in the window (Esc: stop)",
         "V: Open the last scan in the view (crosses, squares, export); closing it brings you back here",
-        "F: Light on / off   W: White balance (aim at an empty place)   I: Laser on / off   Space: Picture",
-        "R or L: Ruler: click two points (distance, um)   0: Zero here   Shift+0: Real coordinates",
+        "L: Light on / off   I: Laser on / off   W: White balance (aim at an empty place)   Space: Picture",
+        "R: Ruler: click two points (distance, um)   0: Zero here   Shift+0: Real coordinates",
         "Wheel: zoom   Middle button or Shift+drag: move the zoomed picture   Z: whole frame",
         "T: Turn the camera picture by 180 degrees (remembered)",
         "[ / ]: Arrows left-right / up-down the other way; the mini map always follows the arrows (remembered)",
@@ -950,6 +950,15 @@ def run(m, fullscreen=True, _keys=None):
             rects['usefp'] = (x_l - 6, cb[1] - 4, cb[2] + 40 + UI.size(t_, FS)[0], cb[3] + 4)
             right = max(right, rects['usefp'][2], rects['obj'][2] + 60)
             y += LH
+            lt_ = f"Light {'on' if m.light else 'off'}"   # свет и лазер: состояние и клавиши
+            ops.append(('t', lt_, x_l, y, FS, UI.TEXT if m.light else UI.DIM, 1))
+            ops.append(('t', "L", x_l + UI.size(lt_ + "  ", FS)[0], y, FS, UI.ACCENT, 1))
+            lz_ = f"Laser {m.laser:g} mW" if m.laser else "Laser off"
+            xz_ = x_l + UI.size(lt_ + "  L      ", FS)[0]
+            ops.append(('t', lz_, xz_, y, FS, (80, 80, 255) if m.laser else UI.DIM, 1 if not m.laser else 2))
+            ops.append(('t', "I", xz_ + UI.size(lz_ + "  ", FS, 2)[0], y, FS, UI.ACCENT, 1))
+            right = max(right, xz_ + UI.size(lz_ + "  I", FS, 2)[0])
+            y += LH
             fp = SM.numbered(m)
             ops.append(('l', y - LH // 2 + 4))
             y += 6
@@ -1284,7 +1293,7 @@ def run(m, fullscreen=True, _keys=None):
             elif ch == 'k':                                # запомнить Z здесь как точку фокуса выделения
                 msg = SM.add_point(m)
                 L.event('MAN-006', msg + ".")
-            elif ch == 'f':                                # свет («огонь») вкл. / выкл.
+            elif ch in 'lf' and ch:                        # L (и F): свет вкл. / выкл.
                 m.light = 0 if m.light else 5
                 msg = "Light on" if m.light else "Light off"
             elif raw in (',', '.') and m._regions:         # предыдущая / следующая (в порядке дерева слоёв)
@@ -1307,10 +1316,10 @@ def run(m, fullscreen=True, _keys=None):
             elif ch == 'w':                                # баланс белого (навести на пустое место)
                 m.white_balance()
                 msg = "White balance done"
-            elif ch in 'lr' and ch:                        # линейка: две точки на картинке -> расстояние
+            elif ch == 'r':                                # линейка: две точки на картинке -> расстояние
                 rul['on'], rul['pts'] = not rul['on'], []
                 msg = ("Ruler: click two points on the picture (you may move the stage between them); "
-                       "R, L or Esc: off") if rul['on'] else "Ruler off"
+                       "R or Esc: off") if rul['on'] else "Ruler off"
             elif ch == 'h':
                 show_help = not show_help
             elif ch == 'c':                                # отменить новую область / удалить выбранную (дважды)

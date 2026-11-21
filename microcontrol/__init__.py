@@ -70,9 +70,9 @@ MANUAL WINDOW (arrows move; letters do things)
   Carousel, , / .  Selections as layers; Go / Enter: drive there; x or C (twice): delete it
   S (twice)        Scan the selections of this objective and stitch them, here in the window (Esc: stop)
   V                Open the last scan in the view; closing it brings you back
-  F                Light ("fire") on / off  W       White balance (aim at an empty place)
+  L                Light on / off           W       White balance (aim at an empty place)
   I                Laser on / off (needs allow_laser=True; a red LASER ON banner while it is on)
-  R or L           Ruler: click two points -> distance in um (also in mc.view)
+  R                Ruler: click two points -> distance in um (also in mc.view)
   Space            Picture                  0 / Shift+0   Zero here / real coordinates
   Wheel, + / -     Zoom (Z: whole frame)    Drag    Move the zoomed picture (any button)
   Ctrl+Z / Ctrl+Y  Undo / redo any step (selections, focus points, moves: the stage drives back)
@@ -88,7 +88,7 @@ VIEW WINDOW (mc.view)
   N                Number a square: click it, type X Y (two squares in another row and column fix all numbers)
   Y                Yellow hint: squares with something in them   Shift+Y  Select the yellow ones
   U, < / >         Hint sensitivity 0-100 (type it / -5 / +5)    T  Straight / as shot
-  R or L           Ruler                    E       Export
+  R                Ruler                    E       Export
   Ctrl+Z / Ctrl+Y  Undo / redo any change
 
 STAGE (micrometres; +Z = stage up, towards the objective; moves go one after another)

@@ -555,7 +555,7 @@ Result: `join/positions_all.csv`, `join/stitch.json`, `join/preview_all.jpg` (re
 | `M` · `B` | select (click, box) · brush (rectangles); `Shift` — unselect; `A` / `X` — all / none |
 | `Y` · `Shift+Y` · `<` `>` | hints · take the hints · sensitivity |
 | `T` | picture level / as shot |
-| `R` or `L` | ruler: two clicks — the distance |
+| `R` | ruler: two clicks — the distance |
 | `E` | export: square pictures + the drawing (DWG / DXF), progress in the window |
 | `,` `.` | previous / next selection |
 | `Ctrl+Z` · `Ctrl+Y` | undo · redo any change |
@@ -713,7 +713,7 @@ The `F` (feed) parameter is not supported (`E902`): the speed is set by the cont
 
 **Chosen squares on the maps.** Lattice corners of the chosen squares are mapped from mosaic pixels to stage micrometres by an affine fit over the frame positions (frame centre = where the stage stood; one row of frames — by the camera matrix `A`); in manual mode they are drawn dark green on the mini map and on the live picture (`selections.marked_all`, refreshed every 3 s), in the viewer — on the previews in the list.
 
-**Ruler** (`R` or `L`, both windows): two clicks — the distance in µm and its projections; the points are placed exactly at the clicks (marked with «+»). In manual mode the points are on the sample (stage coordinates), so the stage may move between the clicks. In manual mode: `F` — light, `W` — white balance, `I` — laser; `S` (twice) scans the selections of the objective in place and stitches them in the window (`Esc` stops after the current frame), `V` opens the result in the viewer.
+**Ruler** (`R`, both windows): two clicks — the distance in µm and its projections; the points are placed exactly at the clicks (marked with «+»). In manual mode the points are on the sample (stage coordinates), so the stage may move between the clicks. In manual mode: `L` — light, `I` — laser, `W` — white balance; `S` (twice) scans the selections of the objective in place and stitches them in the window (`Esc` stops after the current frame), `V` opens the result in the viewer.
 
 **Undo** (`Ctrl+Z`, `Ctrl+Y` / `Ctrl+Shift+Z` — redo; both windows). After every action the window compares its state with the previous one and keeps the pair (before, after), up to 200 steps. Manual mode: selections, focus points, objective, zero offset and the stage position (undoing a move drives the stage back: down first, then X/Y in legs ≤ `max_jump`, then up in steps ≤ `max_move_z`). Viewer: crosses, grid, squares, numbers, hints, and a selection removed from the list (moved back from `_removed/`).
 
@@ -738,8 +738,8 @@ The camera is read in a separate thread: the window is redrawn at once (pan, zoo
 | `C` | cancel the new selection / delete the chosen one (press twice) |
 | `S` (twice) | scan the selections of this objective and stitch them, in the window (`Esc` — stop) |
 | `V` | open the last scan in the viewer; closing it brings you back |
-| `F` · `W` · `I` | light ("fire") on / off · white balance · laser on / off |
-| `R` or `L` | ruler: two clicks — the distance |
+| `L` · `I` · `W` | light on / off · laser on / off · white balance |
+| `R` | ruler: two clicks — the distance |
 | `Space` | take a picture |
 | `0` · `Shift+0` | zero here · real coordinates |
 | `Ctrl+Z` · `Ctrl+Y` | undo · redo (moves too: the stage drives back) |
@@ -866,7 +866,7 @@ Dependencies: `pyserial`, `numpy`, `opencv-python`, `h5py`, `psutil`. The MindVi
 3. Connect without the camera: `m = mc.Microscope(objective=10, camera=False)`; expect the Mapping type and the cooling fan noise. Then `m.move(dx=200)`.
 4. Connect with the camera, `m.manual()`. Key `Q`: the stage must go **down** (the image blurs slightly). If it goes up — `Shift`+`Esc` at once, then `m.reverse_z = True`.
 5. Arrow `→`: the image must shift **left** by a frame width; likewise `↓` — up. If not — `mirror_x`, `mirror_y` or `reverse_x`, `reverse_y`.
-6. `Shift`+`F` — autofocus; `Shift`+`Esc`; `m.measure_speed()` in focus on an area with details.
+6. `A` — autofocus; `Shift`+`Esc`; `m.measure_speed()` in focus on an area with details.
 7. Check the emergency stop: while `m.manual()` runs, execute `python -m microcontrol stop` in another window.
 8. Set the home at a noticeable mark: `m.set_home()`. Disconnect, connect, `m.confirm_position()`, `m.go_home()` — expect "matches the home photo".
 9. Mark the corners of a small area (`1`, `2`), `folder = m.scan()`, `mc.stitch(folder)`, `mc.view(folder)`.

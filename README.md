@@ -44,13 +44,13 @@ Both windows close with **Shift+Esc** or the window's ×. A single `Esc` only ca
 
 ![Manual mode](docs/img/manual.jpg)
 
-`m.manual()` opens the live camera. Move with the arrows (one press = one frame), focus with `E` / `Q` (or `A` — autofocus). Letters do things: `F` light, `W` white balance, `I` laser, `R` / `L` ruler, `S` (twice) scan and stitch right in the window, `V` open the result in the viewer.
+`m.manual()` opens the live camera. Move with the arrows (one press = one frame), focus with `E` / `Q` (or `A` — autofocus). Letters do things: `L` light, `I` laser, `W` white balance, `R` ruler, `S` (twice) scan and stitch right in the window, `V` open the result in the viewer.
 
 - **Mini map** (top right): one cell = one camera frame; the yellow cell is where you are. It moves with the arrows: arrow up — the cell goes up.
 - **Selection:** go to one corner of the sample, focus, press `1`; go to the opposite corner, focus, press `2`. The selection appears in its colour; corners snap to whole frames. Each selection remembers the objective it was marked with.
 - **Focus points:** the height $Z$ at each corner is remembered; `K` adds more points. During the scan every frame gets its own $Z$ from these points, so a tilted sample stays sharp. With the checkbox "Z follows the focus points" the arrows also follow them.
 - **Several selections, layers:** set them one after another (`1`, `2`, then `1`, `2` again). Selections of one objective do not overlap, but a selection of a higher objective may lie inside one of a lower objective (see *Layers* below). The list on the right shows them nested: click — choose, **Go** — drive to it, **x** — delete.
-- **Ruler:** `R` or `L`, then click two points — the distance in µm (the stage may move between the clicks).
+- **Ruler:** `R`, then click two points — the distance in µm (the stage may move between the clicks).
 - **Undo:** `Ctrl+Z` undoes any step (a selection, a focus point, a move — the stage drives back), `Ctrl+Y` redoes it.
 
 `m.scan()` shoots every area frame by frame with 30 % overlap (35 % at 50x, 100x) and saves the frames into a new folder (one sub-folder per selection); `m.scan(name='test')` again writes into the same folder. Selections keep their numbers and colours when one is deleted. Only the selections of the objective in place are shot. It prints the expected time; this estimate learns from the previous scans of your microscope. `mc.stitch(folder)` measures from the overlaps where each frame really is and joins them into one seamless picture.
@@ -218,8 +218,8 @@ Arrows move; letters do things. As much as possible is done right in the window.
 | `C` | cancel the new selection / delete the chosen one (press twice) |
 | `S` (twice) | scan the selections of this objective and stitch them, in the window (`Esc` — stop) |
 | `V` | open the last scan in the viewer; closing it brings you back |
-| `F` · `W` · `I` | light ("fire") on / off · white balance · laser on / off |
-| `R` or `L` | ruler: two clicks — the distance |
+| `L` · `I` · `W` | light on / off · laser on / off · white balance |
+| `R` | ruler: two clicks — the distance |
 | `Space` | take a picture |
 | `0` · `Shift+0` | zero here · real coordinates |
 | `Ctrl+Z` · `Ctrl+Y` | undo · redo (moves too: the stage drives back) |
@@ -240,7 +240,7 @@ Arrows move; letters do things. As much as possible is done right in the window.
 | `M` · `B` | select (click, box) · brush (rectangles); `Shift` — unselect; `A` / `X` — all / none |
 | `Y` · `Shift+Y` · `<` `>` | hints · take the hints · sensitivity |
 | `T` | picture level / as shot |
-| `R` or `L` | ruler: two clicks — the distance |
+| `R` | ruler: two clicks — the distance |
 | `E` | export: square pictures + the drawing (DWG / DXF), progress in the window |
 | `,` `.` | previous / next selection |
 | `Ctrl+Z` · `Ctrl+Y` | undo · redo any change |

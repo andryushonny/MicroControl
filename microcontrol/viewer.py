@@ -116,24 +116,24 @@ class _Scene:
 
 HELP_V2 = "Arrows / drag: move  Wheel: zoom  0: whole  T: straight  , / .: selection  H: all keys  Shift+Esc: exit"
 HELP_MODE = {
-    'look': "S: stitch  C: mark crosses  F: fit grid  M: select squares  B: brush  N: number squares  Y: hints  R / L: ruler  E: export",
+    'look': "S: stitch  C: mark crosses  F: fit grid  M: select squares  B: brush  N: number squares  Y: hints  R: ruler  E: export",
     'cross': "Click: cross exactly there (2 in a row = tilt)  Shift+click: snap to centre  Drag a mark: move  Right click: remove  Shift+C: again  F: fit grid  C / Esc: done",
     'select': "Click: square  Drag: box  Shift: unselect  Right click: remove green area  A: all  X: none  Esc: done",
     'paint': "Drag a rectangle: select all squares in it  Shift+drag: unselect  Click: one square  A: all  X: none  Esc: done",
     'label': "Click a square, type its number X Y  Enter: set  Esc: done",
-    'ruler': "Click two points: the distance (a third click starts again)  Drag: move  R, L or Esc: off",
+    'ruler': "Click two points: the distance (a third click starts again)  Drag: move  R or Esc: off",
 }
 HELP_HINTS = "Y: hints on / off  Shift+Y: select them  < / >: sensitivity  U: type it"
 HELP_V = ("S: stitch   C: crosses (2 in a row = tilt; right click = remove, Shift+C = again)   F: fit grid   M: select "
           "(click, box; Shift = unselect; right click = remove the green area)   B: brush   N: number squares (X Y)   "
-          "Y: hints, Shift+Y: select them, U, < / >: sensitivity   A / X: all / none   R / L: ruler   E: export   Esc: exit")
+          "Y: hints, Shift+Y: select them, U, < / >: sensitivity   A / X: all / none   R: ruler   E: export   Esc: exit")
 HELP_ALL = [
     ("Look", "Arrows or drag (right / middle in any mode): move   Wheel, + / -: zoom   0: whole"),
     ("", "T: straight / as shot   , / .: previous / next selection   H: this help   Esc: leave the mode"),
     ("Undo", "Ctrl+Z: undo any change (crosses, grid, squares, numbers, hints, removed selection)   Ctrl+Y: redo"),
     ("Exit", "Shift+Esc (or Ctrl+Esc), or close the window"),
     ("Stitch", "S: stitch this selection right here (progress in the window), then the view reopens"),
-    ("Ruler", "R or L: click two points -> distance in um (a third click starts again); R, L or Esc: off"),
+    ("Ruler", "R: click two points -> distance in um (a third click starts again); R or Esc: off"),
     ("Crosses", "C: mark crosses: click two neighbouring crosses in one row = tilt; more crosses far apart = more exact"),
     ("", "The mark goes exactly where you click   Shift+click: snap to the cross centre   Drag a mark: move it"),
     ("", "Right click: remove a cross   Backspace: the last one   Shift+C: start again   F: fit the grid to all crosses"),
@@ -858,13 +858,13 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
         elif ch in 'sj' and ch:                              # S: сшить прямо здесь; окно потом откроется заново
             stitch_here()
             break
-        elif ch in 'lr' and ch:                              # L или R: линейка, две точки -> расстояние
+        elif ch == 'r':                                      # R: линейка, две точки -> расстояние
             if st['mode'] == 'ruler':
                 st['mode'], st['ruler'] = 'look', []
                 st['msg'] = "Ruler off"
             else:
                 st['mode'], st['ruler'] = 'ruler', []
-                st['msg'] = "Ruler: click two points (a third click starts again). L, R or Esc: off"
+                st['msg'] = "Ruler: click two points (a third click starts again). R or Esc: off"
         elif ch == 'c':                                      # C: отмечать кресты (ещё раз C — выйти)
             if st['mode'] == 'cross':
                 st['mode'] = 'look'

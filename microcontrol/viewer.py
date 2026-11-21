@@ -115,9 +115,9 @@ class _Scene:
         return out
 
 
-HELP_V2 = "Arrows / drag: move  Wheel: zoom  0: whole  T: straight  , / .: selection  H: all keys  Shift+Esc: exit"
+HELP_V2 = "Arrows / drag: move  Wheel: zoom  0: whole  , / .: selection  H: all keys  Shift+Esc: exit"
 HELP_MODE = {
-    'look': "S: stitch  C: mark crosses  F: fit grid  M: select squares  B: brush  N: number squares  Y: hints  R: ruler  E: export",
+    'look': "S: stitch  C: mark crosses  T: level / as shot  F: fit grid  M: select squares  B: brush  N: numbers  Y: hints  R: ruler  E: export",
     'cross': "Click: cross exactly there (2 in a row = tilt)  Shift+click: snap to centre  Drag a mark: move  Right click: remove  Shift+C: again  F: fit grid  C / Esc: done",
     'select': "Click: square  Drag: box  Shift: unselect  Right click: remove green area  A: all  X: none  Esc: done",
     'paint': "Drag a rectangle: select all squares in it  Shift+drag: unselect  Click: one square  A: all  X: none  Esc: done",
@@ -130,7 +130,7 @@ HELP_V = ("S: stitch   C: crosses (2 in a row = tilt; right click = remove, Shif
           "Y: hints, Shift+Y: select them, U, < / >: sensitivity   A / X: all / none   R: ruler   E: export   Esc: exit")
 HELP_ALL = [
     ("Look", "Arrows or drag (right / middle in any mode): move   Wheel, + / -: zoom   0: whole"),
-    ("", "T: straight / as shot   , / .: previous / next selection   H: this help   Esc: leave the mode"),
+    ("", "T: level (tilt removed, from the crosses) / as shot   , / .: previous / next selection   H: this help   Esc: leave the mode"),
     ("Undo", "Ctrl+Z: undo any change (crosses, grid, squares, numbers, hints, removed selection)   Ctrl+Y: redo"),
     ("Exit", "Shift+Esc (or Ctrl+Esc), or close the window"),
     ("Stitch", "S: stitch this selection right here (progress in the window), then the view reopens"),
@@ -1011,9 +1011,13 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
                 f"   hints: {len(g.useful)} squares (Y)"
         elif ch == 'h':
             st['help'] = not st.get('help')
-        elif ch == 't':                                      # T: ровно / как снято
-            set_straight(not st['straight'])
-            st['msg'] = "Straight: squares stand level" if st['straight'] else "Picture as shot"
+        elif ch == 't':                                      # T: ровно (наклон снят) / как снято
+            if not g.ready():
+                st['msg'] = "The tilt is taken from the crosses: mark two neighbouring crosses in a row (C), then T"
+            else:
+                set_straight(not st['straight'])
+                st['msg'] = (f"Level: the picture is turned by {st['rot']:+.2f} deg, the squares stand straight (T: as shot)"
+                             if st['straight'] else "Picture as shot, with its tilt (T: level)")
         elif ch == 'a' and st['mode'] in ('select', 'paint') and g.ready():
             W_, H_ = sc.size
             g.selected |= g.cells_in([(0, 0), (W_, 0), (W_, H_), (0, H_)], sc.size)

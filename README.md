@@ -4,6 +4,8 @@
 
 **Authors:** A. Lyapeikov, S. Domenko. **Version:** 0.18.0. Русский: [docs/README_ru.md](docs/README_ru.md) · 中文: [docs/README_zh.md](docs/README_zh.md) · PDF: [EN](docs/MicroControl_en.pdf), [RU](docs/MicroControl_ru.pdf), [中文](docs/MicroControl_zh.pdf).
 
+> Independent project, not affiliated with Optosky. Provided as is, without warranty — see the [Disclaimer](#disclaimer) and the [MIT licence](LICENSE).
+
 ---
 
 ## Contents
@@ -1062,6 +1064,27 @@ On the instrument, do not raise the stage "blindly" with commands like `m.move(d
 
 ---
 
+## Disclaimer
+
+**No affiliation.** MicroControl is an independent project. It is not made, endorsed, supported or certified by Optosky Photonics or by MindVision. Optosky, ATR8300, MindVision and other names are trademarks of their owners and are used here only to say which equipment the software works with. The controller protocol was determined independently, by observing the exchange between the stock software and the instrument, solely to make this program work with the instrument; no Optosky source code is included.
+
+**No warranty.** The software is provided "as is", without any warranty, express or implied, including warranties of merchantability, fitness for a particular purpose, accuracy of results and non-infringement (see [LICENSE](LICENSE)).
+
+**Limitation of liability.** To the maximum extent permitted by law, the authors are not liable for any direct, indirect, incidental, special or consequential damage arising from the use of or inability to use the software, including damage to the microscope, objectives, stage, camera, spectrometer or other equipment, damage to or loss of samples, loss of data or measurement results, lost time or profit, and injury.
+
+**Use at your own risk.** The software moves a motorised stage and can switch on a laser. The user alone is responsible for:
+- safe operation of the instrument, including the objective working distance, stage limits and collision risk;
+- laser safety: protective eyewear, safety rules and local regulations for the laser class of the instrument;
+- checking the settings and the results before relying on them, and keeping copies of important data;
+- compliance with the instrument manufacturer's licence, warranty and service terms — using third-party control software may affect the warranty;
+- compliance with the laws and regulations that apply to the user.
+
+The safety checks built into MicroControl reduce risk but do not replace the user's attention and judgement; they have not been certified by anyone. The software is not intended for medical, diagnostic or safety-critical use.
+
+---
+
 ## Contact
 
 Questions and bug reports: [andrey.quant@yandex.ru](mailto:andrey.quant@yandex.ru)
+
+Licence: [MIT](LICENSE).

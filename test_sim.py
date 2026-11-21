@@ -437,3 +437,49 @@ print(os.path.basename(f1), os.path.basename(f2), os.path.basename(f3))
 assert f1 == f2 and f3 != f1 and len(os.listdir(m.dirs['scans'])) == 2
 m.close(); print("Same name -> same folder: OK")
 
+# ------------------------------------------------------------------ 20. Кресты переезжают вместе с кадрами при сшивке
+from microcontrol.mask import Grid
+d = tempfile.mkdtemp()
+g = Grid(d)
+old = np.array([[0, 0], [100, 0], [200, 0]], float)        # три кадра 120 x 80 px, перекрытие 20 px
+for q in ((50, 40), (150, 40)):
+    g.cr.add(np.array(q, float))
+g.frames_px = old.copy()
+new = old + [[0, 0], [3, -2], [5, 1]]                       # сшивка сдвинула кадры 2 и 3
+n = g.sync(new, 120, 80)
+assert n == 2, n
+assert np.allclose(g.cr.marks[0], (50, 40)) and np.allclose(g.cr.marks[1], (153, 38)), g.cr.marks
+g.save(1.0)
+g2 = Grid(d); assert np.allclose(g2.frames_px, new) and g2.sync(new, 120, 80) == 0
+print("Crosses move with their frames after stitching: OK")
+
+# ------------------------------------------------------------------ 21. Цветная поправка освещения, яркость кадров
+from microcontrol.storage import ScanData
+from microcontrol.stitch import load_positions
+m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp())
+w = m._world; w.vignette_bgr = (0.10, 0.35, 0.25); w.flicker = 0.08; m.focus()
+fw, fh = m.frame_size
+m.area = mc.Area(0, 0, 3 * fw, 2 * fh)
+f = m.scan(name='flat')
+m.close()
+def seam_err(st, P, W, H):
+    e = []
+    for a in range(len(st)):
+        for b in range(a + 1, len(st)):
+            d = P[b] - P[a]; ox, oy = W - abs(d[0]), H - abs(d[1])
+            if ox < 0.1 * W or oy < 0.1 * H: continue
+            A = st.frame(a)[int(max(0, d[1])):int(max(0, d[1]) + oy), int(max(0, d[0])):int(max(0, d[0]) + ox)].reshape(-1, 3)
+            B = st.frame(b)[int(max(0, -d[1])):int(max(0, -d[1]) + oy), int(max(0, -d[0])):int(max(0, -d[0]) + ox)].reshape(-1, 3)
+            e.append(np.abs(np.log(np.median(A, 0) + 1) - np.log(np.median(B, 0) + 1)).max())
+    return 100 * np.mean(e)
+st = ScanData(f); st.fix = None; st.gains = None
+H, W = st.shape[:2]
+P0 = load_positions(f, st)
+before = seam_err(st, P0, W, H); st.close()
+r = mc.stitch(f, verbose=False); print(r)
+st = ScanData(f); P = load_positions(f, st)
+after = seam_err(st, P, W, H); st.close()
+print(f"seam colour/brightness mismatch: before {before:.1f} %, after {after:.1f} %")
+assert after < 0.5 * before and after < 3, (before, after)
+print("Colour flat-field + frame gains: OK")
+

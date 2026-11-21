@@ -80,7 +80,7 @@ MicroControl 是一个 Python 库，用于在连接仪器的计算机上通过 J
 | $N_x \times N_y$ | 图像像素尺寸 | $2592 \times 1944$ |
 | $W = N_x p,\ H = N_y p$ | 视场（样品上的图像尺寸） | $M = 10$ 时为 $570 \times 428$ µm |
 | $v$ | 载物台速度 | $3000$ µm/s（假定值） |
-| $\tau$ | 移动后的停顿（`move_pause`） | $0$ s |
+| $\tau$ | 移动后的停顿（`move_pause`） | $0.1$ s |
 | $\mathrm{NA}$ | 物镜数值孔径 | 0.1 / 0.25 / 0.4 / 0.75 / 0.9 |
 | $\lambda$ | 波长 | $0.532$ µm（激光） |
 
@@ -537,7 +537,8 @@ st.export()                                    # 用于 Fiji 的 PNG 文件和 T
 模拟器验证（基底旋转 1.2°，电机步长偏差 +1.5 / +1.2 %，每次移动漂移 ±1 步，42 帧）：按载物台计算的图像位置误差最大 63 px；拼接后 3.3 px（均方根），接缝 0.15 px（中位数）。在相同图像上原版 ASHLAR（`mc.stitch(folder, engine='ashlar')`，需要 `pip install ashlar` 和 Java）为 9.8 px。
 
 **光学校正**（在读取图像用于拼接、查看和导出时应用）：
-- *照明*：场 $F(x, y)$ —— 最多 40 帧的中位数，平滑处理，$\langle F\rangle = 1$；图像 $I' = I/F$（`join/flatfield.npy`，每次拼接时计算；`flat=False` —— 不做此校正）；
+- *照明*：每个颜色通道 $c$ 的场 $F_c(x, y)$ —— 最多 60 帧的中位数（每帧先除以自身中位数），平滑处理，$\langle F_c\rangle = 1$；图像 $I'_c = I_c/F_c$（`join/flatfield.npy`）；
+- *帧亮度*：由重叠区求出每帧每通道的增益 $a_i$，$I''_i = a_i I'_i$（`join/gains.npy`）；两者每次拼接时计算，`flat=False` —— 不做；
 - *畸变*（12.5），如果已为该显微镜和物镜测量过。
 
 结果：`join/positions_all.csv`、`join/stitch.json`、`join/preview_all.jpg`（缩小的拼图）、`viewer/levels/`（缩小 2、4、8 倍的图像 —— 供查看器处理大扫描）。
@@ -641,8 +642,11 @@ R = \frac{\hat I_i \hat I_j^{*}}{|\hat I_i \hat I_j^{*}|}.
 ```
 
 $w_{ij}$ —— 相关峰高，$\mathbf{r}_i^{(0)}$ —— 按载物台计算的位置。
-4. **照明均匀化**（至少 12 帧时）：场 $F(x, y)$ —— 最多 40 帧的中位数，用 $\sigma = \min(W, H)/12$ 的高斯平滑并按平均值归一化；图像除以 $F$。
-5. **融合**，权重向图像边缘递减：
+4. **照明均匀化**（至少 8 帧时）：对每个颜色通道求场 $F_c(x, y)$ —— 最多 60 帧的中位数，每帧先除以自身中位数（整体亮度不同的帧不会破坏场），用 $\sigma = \min(W, H)/12$ 的高斯平滑并按平均值归一化；图像逐通道除以 $F_c$。边缘的亮度和色调都得到校正。
+5. **帧亮度**（位置确定之后，类似全景图的曝光补偿）：对 X、Y 方向重叠均不少于 10 % 的每对相邻帧，$m_i$、$m_j$ 为公共部分在各帧中的中位数（按通道）。增益 $a_i$ 最小化
+$$\sum_{(i,j)} \bigl(\ln a_i - \ln a_j - \ln m_j + \ln m_i\bigr)^2 + \lambda^2 \sum_i (\ln a_i)^2,\qquad \lambda = 0.05,$$
+（对 $\ln a$ 的线性最小二乘），增益中位数为 1，$|\ln a_i| \le 0.7$。报告中显示 `frame brightness evened (±N %)`。
+6. **融合**，权重向图像边缘递减：
 
 ```math
 w(x, y) = \min(x + 1,\, N_x - x)\cdot\min(y + 1,\, N_y - y).
@@ -928,8 +932,8 @@ m = mc.Microscope(port='auto', objective=10, camera=True, allow_laser=False,
 | `z_min` | −50 000 | 最小 −100 000 µm | 下限 |
 | `motor_speed` | 3000 | 50…20 000 µm/s | $v$ |
 | `max_jump` | 3000 | 100…25 000 µm | `goto` / G 代码的一次行程 |
-| `move_pause` | 0 | 0…10 s | $\tau$ |
-| `photo_pause` | 0 | 0…10 s | 拍照前的停顿 |
+| `move_pause` | 0.1（模拟器 0） | 0…10 s | $\tau$ |
+| `photo_pause` | 0.1（模拟器 0） | 0…10 s | 拍照前的停顿；若画面仍在移动，静止检查会等待更久 |
 | `light_pause` | 0 | 0…120 s | 开灯后的停顿 |
 | `focus_method` | laplacian | 见 9.1 | 清晰度度量 |
 | `focus_range` | 按物镜 | 1…2000 µm | $R$ |

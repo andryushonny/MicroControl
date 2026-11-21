@@ -72,6 +72,7 @@ class ScanData:
         self.shape = self._jpg(r0['file']).shape if r0.get('file') else \
             tuple(self._file(r0['batch'])['tiles'].shape[1:])
         self.fix, self._fixed = None, OrderedDict()         # оптические поправки (optics.attach)
+        self.gains = None
         try:
             from .optics import attach
             attach(self, folder)
@@ -224,6 +225,10 @@ class ScanData:
                 if img is None:
                     raw = self._jpg(r['file']) if r.get('file') else self._file(r['batch'])['tiles'][r['slot']]
                     img = self.fix(raw)
+                    g_ = getattr(self, 'gains', None)
+                    if g_ is not None:                      # яркость кадра, выровненная по соседям
+                        img = np.clip(img.astype(np.float32) * (g_[i] if img.ndim == 3 else g_[i].mean()),
+                                      0, 255).astype(np.uint8)
                     self._fixed[i] = img
                     if len(self._fixed) > self.cache_n:
                         self._fixed.popitem(last=False)

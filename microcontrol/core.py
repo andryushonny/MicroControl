@@ -272,7 +272,7 @@ class Microscope:
                          map_flip_x=False, map_flip_y=False, arrows_flip_x=False, arrows_flip_y=False, turn_180=False, swap_xy=False, mirror_x=False, mirror_y=False, reverse_x=False, reverse_y=False, reverse_z=False,
                          motor_step=UM_PER_STEP, max_move=2000.0, max_move_down=2000.0, xy_limit=25000.0, max_jump=3000.0,
                          motor_speed=3000.0,
-                         move_pause=0.0 if sim else 0.3, photo_pause=0.0 if sim else 0.3, light_pause=0.0 if sim else 2.0,
+                         move_pause=0.0 if sim else 0.1, photo_pause=0.0 if sim else 0.1, light_pause=0.0 if sim else 2.0,
                          focus_method='laplacian', focus_every=5, refocus=False, batch_size=100, save_jpg=True, jpg_scale=0.5,
                          frame_format='jpg', frame_scale=0.5, jpg_quality=90, scan_check=True, still_check=True,
                          log_bytes=True)

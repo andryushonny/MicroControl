@@ -142,6 +142,15 @@ class SimWorld:
             y, x = np.mgrid[0:h, 0:w].astype(np.float32)
             rr = ((x - w / 2) ** 2 + (y - h / 2) ** 2) / ((w / 2) ** 2 + (h / 2) ** 2)
             img = np.clip(img * (1 - vg * rr)[..., None], 0, 255).astype(np.uint8)
+        vc = getattr(self, 'vignette_bgr', None)               # цветное виньетирование: края другого оттенка
+        if vc:
+            h, w = img.shape[:2]
+            y, x = np.mgrid[0:h, 0:w].astype(np.float32)
+            rr = ((x - w / 2) ** 2 + (y - h / 2) ** 2) / ((w / 2) ** 2 + (h / 2) ** 2)
+            img = np.clip(img * (1 - rr[..., None] * np.array(vc, np.float32)), 0, 255).astype(np.uint8)
+        fl = getattr(self, 'flicker', 0.0)                     # яркость лампы от кадра к кадру
+        if fl:
+            img = np.clip(img * (1 + np.random.uniform(-fl, fl)), 0, 255).astype(np.uint8)
         return img
 
     def _frame(self, W=640, H=480):

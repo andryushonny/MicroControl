@@ -25,6 +25,26 @@ def sens_frac(S):
     return 0.05 * 10 ** (-2 * float(S) / 100)
 
 
+def _stage_layout(folder, P):
+    """Положения кадров по столику (как в просмотре до сшивки), если сетка размечена раньше, чем сделана
+    сшивка (grid.json старее join/positions_all.csv). Иначе None."""
+    g_, j_ = os.path.join(folder, 'grid.json'), os.path.join(folder, 'join', 'positions_all.csv')
+    if not (os.path.exists(g_) and os.path.exists(j_)) or os.path.getmtime(g_) >= os.path.getmtime(j_):
+        return None
+    try:
+        from .storage import ScanData
+        from .stitch import meta_A
+        st = ScanData(folder)
+        H, W = st.shape[:2]
+        p = np.array([[r['x_p'], r['y_p']] for r in st.index], float)
+        st.close()
+        Q = -(p @ meta_A(st.meta, W, H).T)
+        Q = Q - Q.min(0)
+        return Q if Q.shape == np.asarray(P).shape else None
+    except Exception:
+        return None
+
+
 class Grid:
     def __init__(self, folder):
         self.folder = folder
@@ -35,6 +55,7 @@ class Grid:
         self.useful = {}                                    # подсказка: квадраты, где что-то есть -> доля
         self.sensitivity = SENSITIVITY
         self.refined = None
+        self.frames_px = None                               # где стояли кадры, когда ставились кресты (px мозаики)
         p = os.path.join(folder, 'grid.json')
         if os.path.exists(p):
             with open(p, encoding='utf-8') as f:
@@ -54,9 +75,33 @@ class Grid:
             self.arm = d.get('arm_px')
             self.useful = {(int(a), int(b)): f for a, b, f in d.get('useful', [])}
             self.sensitivity = d.get('sensitivity', SENSITIVITY)
+            self.frames_px = np.array(d['frames_px'], float) if 'frames_px' in d else None
             if 'hint_scores' in d:
                 self.scores = {(int(a), int(b)): f for a, b, f in d['hint_scores']}
                 self.hint_squares = d.get('hint_squares', len(self.scores))
+
+    def sync(self, P, W, H):
+        """Кадры встали по-другому (после сшивки или пересшивки): перенести кресты вместе с их кадром.
+        P — положения кадров сейчас (px мозаики, левый верх), W, H — кадр. Крест остаётся в том же месте
+        своего кадра (кадр выбирается тот, у центра которого крест ближе всего). Возвращает, сколько перенесено."""
+        P = np.asarray(P, float)
+        old = self.frames_px
+        if old is None:                                     # старый grid.json: кресты ставились до сшивки?
+            old = _stage_layout(self.folder, P)
+        moved = 0
+        if old is not None and old.shape == P.shape and self.cr.marks and np.abs(old - P).max() > 0.5:
+            c_old = old + (W / 2, H / 2)
+            for n, q in enumerate(self.cr.marks):
+                inside = np.all((q >= old) & (q <= old + (W, H)), axis=1)
+                d = np.hypot(*(c_old - q).T)
+                d[~inside] = np.inf
+                k = int(np.argmin(d))
+                if np.isfinite(d[k]):
+                    self.cr.marks[n] = q - old[k] + P[k]
+                    moved += 1
+            self.cr._fit()
+        self.frames_px = P.copy()
+        return moved
 
     def save(self, px_um=None):
         v1, v2 = self.cr.vectors()
@@ -77,6 +122,8 @@ class Grid:
             d['hint_squares'] = getattr(self, 'hint_squares', len(sc_))
         if self.refined:
             d['refined'] = self.refined
+        if self.frames_px is not None:
+            d['frames_px'] = np.round(self.frames_px, 2).tolist()
         if v1 is not None:
             d.update(origin_px=list(map(float, self.cr.O)), v1_px=list(map(float, v1)), v2_px=list(map(float, v2)),
                      turn_deg=self.cr.angle())

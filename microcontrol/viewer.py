@@ -213,8 +213,8 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
     """Открыть сшитый скан. Перемещение — левая кнопка (в режимах выделения — правая или средняя), колесо — масштаб.
     G — отметить кресты (щелчок у креста: центр находится сам по симметрии креста); соседний крест по ряду,
     по столбцу и дальние — решётка уточняется. R — повернуть картинку так, чтобы квадраты стали ровными.
-    S — выделять квадраты: щелчок — квадрат, рамка — много сразу (Shift — снять); P — многоугольник:
-    щелчки — вершины, Enter — выделить внутри, Del — снять внутри. A — все, X — ни одного.
+    S — выделять квадраты: щелчок — квадрат, рамка — много сразу (Shift — снять); B — кисть: прямоугольники.
+    A — все, X — ни одного.
     E — вывести выделенное (mc.export). Разметка хранится в <скан>/grid.json."""
     from .mask import Grid, snap_cross, export, sens_frac
     from . import samples as SM
@@ -223,11 +223,17 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
     if sensitivity is not None:
         g.sensitivity = float(min(100, max(0, sensitivity)))
     px_um = sc.st.meta.get('pixel_size_um') or 1.0
+    moved_ = g.sync(sc.P, sc.W, sc.H) if g.cr.marks else 0   # кадры встали иначе (сшивка): кресты — за ними
+    if moved_:
+        g.refined = None
+    if g.cr.marks:
+        g.save(px_um)
     ses, subs = SM.session_of(folder)
     Wv, Hv = car['size']
     st = dict(cx=sc.size[0] / 2, cy=sc.size[1] / 2, s=None, rot=0.0, mode='look', down=None, box=None,
               poly=[], dirty=True, Wv=Wv - SM.CAR_W, Hv=Hv, straight=False, switch=None,
-              msg=(f"Sample {SM.sample_index(folder)} ({subs.index(folder) + 1} of {len(subs)})" if len(subs) > 1 else ""))
+              msg=(f"Sample {SM.sample_index(folder)} ({subs.index(folder) + 1} of {len(subs)})" if len(subs) > 1 else "")
+              + (f"   Crosses moved with the stitched frames ({moved_}); F: fit the grid again" if moved_ else ""))
 
     def car_click(x, y):
         h_ = SM.hit(car.get('hits', []), x - st['Wv'], y)

@@ -79,6 +79,10 @@ def stitch(folder, engine='builtin', max_shift_um=40.0, sigma=None, alpha=0.01, 
     from .optics import flatfield, attach
     os.makedirs(os.path.join(folder, 'join'), exist_ok=True)
     fp = os.path.join(folder, 'join', 'flatfield.npy')
+    gp = os.path.join(folder, 'join', 'gains.npy')
+    if os.path.exists(gp):                                       # яркость кадров считается заново
+        os.remove(gp)
+    st.gains = None
     if flat:                                                     # поле освещения — по сырым кадрам
         F = flatfield(st)
         if F is not None:
@@ -116,6 +120,7 @@ def stitch(folder, engine='builtin', max_shift_um=40.0, sigma=None, alpha=0.01, 
         used = 'builtin'
     out = os.path.join(folder, 'join')
     os.makedirs(out, exist_ok=True)
+    P_before = load_positions(folder, st)                   # как кадры стояли до этой сшивки (для крестов)
     with open(os.path.join(out, 'positions_all.csv'), 'w', newline='', encoding='utf-8') as f:
         wr = csv.writer(f)
         wr.writerow(['id', 'x_px', 'y_px', 'scale'])
@@ -132,6 +137,33 @@ def stitch(folder, engine='builtin', max_shift_um=40.0, sigma=None, alpha=0.01, 
                   "Corrections": f"light {'yes' if getattr(st, 'fix_info', {}).get('flatfield') else 'no'}, "
                                  f"distortion k1 {getattr(st, 'fix_info', {}).get('k1', 0.0):.2e}",
                   "Time, s": info['time_s']})
+    if flat:                                                # яркость кадров по перекрытиям (после сшивки)
+        try:
+            from .optics import frame_gains
+            gn = frame_gains(st, pos, W, H)
+            if gn is not None:
+                np.save(gp, gn)
+                st.gains = gn
+                st._fixed.clear()
+                if st.fix is None:
+                    attach(st, folder)
+                r['Corrections'] += f", frame brightness evened (±{100 * float(np.abs(np.log(gn)).max()):.0f} %)"
+        except Exception as e:
+            L.event('STI-004', f"Frame brightness not evened: {type(e).__name__}: {e}", 30)
+    try:                                                    # кресты уже стоят: перенести их вместе с кадрами
+        from .mask import Grid
+        if os.path.exists(os.path.join(folder, 'grid.json')):
+            g_ = Grid(folder)
+            if g_.cr.marks:
+                if g_.frames_px is None or len(g_.frames_px) != n:
+                    g_.frames_px = P_before - P_before.min(0)
+                nmv = g_.sync(pos - pos.min(0), W, H)
+                if nmv:
+                    g_.refined = None
+                    g_.save(px)
+                    r['Crosses'] = f"{nmv} moved with their frames (F in the viewer fits the grid again)"
+    except Exception as e:                                  # сшивка важнее: кресты можно поставить заново
+        L.event('STI-003', f"Crosses not moved: {type(e).__name__}: {e}", 30)
     if preview:
         r['Preview'] = make_preview(folder, pos)
     st.close()

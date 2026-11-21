@@ -21,26 +21,77 @@ HOME = os.path.join(os.path.expanduser('~'), '.microcontrol')
 
 
 # ------------------------------------------------------------------ освещение
-def flatfield(st, n=40, down=4):
-    """Поле освещения скана: медиана до n кадров (по яркости), гауссово сглаживание, среднее = 1.
-    Возвращает уменьшенное в down раз поле (float32) или None, если кадров мало."""
+def flatfield(st, n=60, down=4):
+    """Поле освещения скана — отдельно по каждому цвету (края кадра бывают не только темнее, но и другого
+    оттенка): медиана до n кадров, каждый сначала поделён на свою медиану (кадры с другой общей яркостью
+    не портят поле), гауссово сглаживание, среднее каждого цвета = 1. Возвращает уменьшенное в down раз
+    поле (h, w, 3) или (h, w) float32, или None, если кадров мало (< 8)."""
     N = len(st)
-    if N < 12:
+    if N < 8:
         return None
     ids = np.linspace(0, N - 1, min(n, N)).astype(int)
     fix, st.fix = getattr(st, 'fix', None), None              # считать по сырым кадрам
+    gains, st.gains = getattr(st, 'gains', None), None
     try:
         stack = []
         for i in ids:
-            g = st.frame(int(i))
-            g = g if g.ndim == 2 else cv2.cvtColor(np.ascontiguousarray(g), cv2.COLOR_BGR2GRAY)
-            stack.append(cv2.resize(g, None, fx=1 / down, fy=1 / down, interpolation=cv2.INTER_AREA).astype(np.float32))
+            g = np.ascontiguousarray(st.frame(int(i)))
+            g = cv2.resize(g, None, fx=1 / down, fy=1 / down, interpolation=cv2.INTER_AREA).astype(np.float32)
+            med = np.median(g.reshape(-1, g.shape[2]) if g.ndim == 3 else g.ravel(), 0)
+            stack.append(g / np.maximum(med, 1.0))
     finally:
-        st.fix = fix
+        st.fix, st.gains = fix, gains
     F = np.median(np.array(stack), 0)
-    F = cv2.GaussianBlur(F, (0, 0), min(F.shape) / 12)
-    F /= F.mean()
+    sig = min(F.shape[:2]) / 12
+    F = cv2.GaussianBlur(F, (0, 0), sig)
+    F = F / F.reshape(-1, F.shape[2]).mean(0) if F.ndim == 3 else F / F.mean()
     return np.clip(F, 0.2, 5).astype(np.float32)
+
+
+def frame_gains(st, pos, W, H, down=8, lam=0.05):
+    """Выровнять яркость (и оттенок) кадров по перекрытиям, как экспозицию в панорамах: для каждой пары
+    соседей медиана общего участка в обоих кадрах; множители кадров a_i — по МНК в логарифмах
+    ln a_i − ln a_j = ln m_j − ln m_i, со слабой привязкой ln a_i → 0. Возвращает (n, каналы) или None."""
+    n = len(st)
+    if n < 2:
+        return None
+    small = []
+    for i in range(n):
+        f = np.ascontiguousarray(st.frame(i))
+        small.append(cv2.resize(f, (max(1, W // down), max(1, H // down)), interpolation=cv2.INTER_AREA))
+    C = small[0].shape[2] if small[0].ndim == 3 else 1
+    pos = np.asarray(pos, float)
+    rows, rhs = [], []
+    for a in range(n):
+        for b in range(a + 1, n):
+            d = pos[b] - pos[a]
+            ox, oy = W - abs(d[0]), H - abs(d[1])
+            if ox < 0.1 * W or oy < 0.1 * H:
+                continue
+            # общий участок в координатах кадра a и кадра b (с полем 10 % от края перекрытия)
+            ax0, ay0 = max(0.0, d[0]), max(0.0, d[1])
+            bx0, by0 = max(0.0, -d[0]), max(0.0, -d[1])
+            sl = lambda x0, y0: (slice(int(y0 / down) + 1, int((y0 + oy) / down) - 1),
+                                 slice(int(x0 / down) + 1, int((x0 + ox) / down) - 1))
+            ra, rb = small[a][sl(ax0, ay0)], small[b][sl(bx0, by0)]
+            if ra.size == 0 or rb.size == 0:
+                continue
+            ma = np.median(ra.reshape(-1, C), 0).astype(float)
+            mb = np.median(rb.reshape(-1, C), 0).astype(float)
+            if np.any(ma < 5) or np.any(mb < 5):
+                continue
+            rows.append((a, b))
+            rhs.append(np.log(mb) - np.log(ma))
+    if not rows:
+        return None
+    M = np.zeros((len(rows) + n, n))
+    for k, (a, b) in enumerate(rows):
+        M[k, a], M[k, b] = 1.0, -1.0
+    M[len(rows):] = np.eye(n) * lam
+    R = np.vstack([np.array(rhs), np.zeros((n, C))])
+    lg, *_ = np.linalg.lstsq(M, R, rcond=None)
+    lg -= np.median(lg, 0)                                     # средний кадр — без изменений
+    return np.exp(np.clip(lg, -0.7, 0.7)).astype(np.float32)
 
 
 # ------------------------------------------------------------------ дисторсия
@@ -84,21 +135,28 @@ def attach(st, folder):
         F = cv2.resize(np.load(fp), (W, H), interpolation=cv2.INTER_LINEAR)
     k1 = load_k1(folder, st.meta)
     maps = undistort_maps(W, H, k1) if abs(k1) * np.hypot(W / 2, H / 2) >= 0.3 else None
-    if F is None and maps is None:
+    gp = os.path.join(folder, 'join', 'gains.npy')
+    st.gains = np.load(gp) if os.path.exists(gp) else None     # яркость кадров, выровненная по перекрытиям
+    if st.gains is not None and len(st.gains) != len(st):
+        st.gains = None
+    if F is None and maps is None and st.gains is None:
         st.fix = None
         return st
 
     def fix(img):
         out = img
         if F is not None:
-            f = F if img.ndim == 2 else F[..., None]
+            if img.ndim == 2:
+                f = F if F.ndim == 2 else F.mean(2)
+            else:
+                f = F if F.ndim == 3 else F[..., None]
             out = np.clip(img.astype(np.float32) / f, 0, 255).astype(np.uint8)
         if maps is not None:
             out = cv2.remap(out, maps[0], maps[1], cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
         return out
 
     st.fix = fix
-    st.fix_info = dict(flatfield=F is not None, k1=k1 if maps is not None else 0.0)
+    st.fix_info = dict(flatfield=F is not None, k1=k1 if maps is not None else 0.0, gains=st.gains is not None)
     return st
 
 

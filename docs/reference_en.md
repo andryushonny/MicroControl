@@ -80,7 +80,7 @@ Lengths are in micrometres (µm), time in seconds (s), laser power in milliwatts
 | $N_x \times N_y$ | frame size in pixels | $2592 \times 1944$ |
 | $W = N_x p,\ H = N_y p$ | field of view (frame size on the sample) | $570 \times 428$ µm at $M = 10$ |
 | $v$ | stage speed | $3000$ µm/s (assumed value) |
-| $\tau$ | pause after a move (`move_pause`) | $0$ s |
+| $\tau$ | pause after a move (`move_pause`) | $0.1$ s |
 | $\mathrm{NA}$ | objective numerical aperture | 0.1 / 0.25 / 0.4 / 0.75 / 0.9 |
 | $\lambda$ | wavelength | $0.532$ µm (laser) |
 
@@ -536,7 +536,8 @@ with outlier suppression: $w_{ij} = w^0_{ij}/\bigl(1 + (\rho_{ij}/c)^2\bigr)$, $
 Simulator check (substrate turned by 1.2°, motor step off by +1.5 / +1.2 %, drift ±1 step per move, 42 frames): frame position error by the stage — up to 63 px; after stitching — 3.3 px (RMS), seams 0.15 px (median). Real ASHLAR (`mc.stitch(folder, engine='ashlar')`, needs `pip install ashlar` and Java) on the same frames — 9.8 px.
 
 **Optical corrections** (applied when frames are read for stitching, viewing and export):
-- *illumination*: field $F(x, y)$ — median of up to 40 frames, smoothed, $\langle F\rangle = 1$; frame $I' = I/F$ (`join/flatfield.npy`, computed at every stitch; `flat=False` — without it);
+- *illumination*: field $F_c(x, y)$ for each colour $c$ — median of up to 60 frames, each divided by its own median, smoothed, $\langle F_c\rangle = 1$; frame $I'_c = I_c/F_c$ (`join/flatfield.npy`);
+- *frame brightness*: gains $a_i$ per frame and colour from the overlaps, $I''_i = a_i I'_i$ (`join/gains.npy`); both are computed at every stitch, `flat=False` — without them;
 - *distortion* (12.5), if it was measured for this microscope and objective.
 
 Result: `join/positions_all.csv`, `join/stitch.json`, `join/preview_all.jpg` (reduced mosaic), `viewer/levels/` (frames reduced 2, 4, 8 times — for the viewer on large scans).
@@ -640,8 +641,11 @@ The shift is accepted if the peak height is at least 0.08 and the correction doe
 ```
 
 $w_{ij}$ — correlation peak height, $\mathbf{r}_i^{(0)}$ — position by the stage.
-4. **Illumination flattening** (with at least 12 frames): field $F(x, y)$ — median of up to 40 frames, smoothed by a Gaussian with $\sigma = \min(W, H)/12$ and normalised to the mean; the frame is divided by $F$.
-5. **Blending** with weights falling towards the frame edges:
+4. **Illumination flattening** (with at least 8 frames): for each colour channel a field $F_c(x, y)$ — median of up to 60 frames, each first divided by its median (so a frame with another overall brightness does not spoil the field), smoothed by a Gaussian with $\sigma = \min(W, H)/12$ and normalised to the mean; the frame is divided by $F_c$ channel by channel. The edges are corrected both in brightness and in tint.
+5. **Frame brightness** (after the positions are known, like exposure compensation in panoramas): for every pair of neighbours with an overlap of at least 10 % in X and Y, $m_i$ and $m_j$ are the medians of the common part in each frame (per colour). Gains $a_i$ minimise
+$$\sum_{(i,j)} \bigl(\ln a_i - \ln a_j - \ln m_j + \ln m_i\bigr)^2 + \lambda^2 \sum_i (\ln a_i)^2,\qquad \lambda = 0.05,$$
+(linear least squares in $\ln a$), the median gain is 1, $|\ln a_i| \le 0.7$. The result is reported as `frame brightness evened (±N %)`.
+6. **Blending** with weights falling towards the frame edges:
 
 ```math
 w(x, y) = \min(x + 1,\, N_x - x)\cdot\min(y + 1,\, N_y - y).
@@ -927,8 +931,8 @@ Read `m.photo_pause`, change `m.photo_pause = 0.5`, table of all parameters `m.s
 | `z_min` | −50 000 | down to −100 000 µm | floor |
 | `motor_speed` | 3000 | 50…20 000 µm/s | $v$ |
 | `max_jump` | 3000 | 100…25 000 µm | `goto` / G-code trip |
-| `move_pause` | 0 | 0…10 s | $\tau$ |
-| `photo_pause` | 0 | 0…10 s | pause before a picture |
+| `move_pause` | 0.1 (sim 0) | 0…10 s | $\tau$ |
+| `photo_pause` | 0.1 (sim 0) | 0…10 s | pause before a picture; the stillness check waits longer if the picture still moves |
 | `light_pause` | 0 | 0…120 s | pause after the light is turned on |
 | `focus_method` | laplacian | see 9.1 | sharpness measure |
 | `focus_range` | by objective | 1…2000 µm | $R$ |

@@ -72,6 +72,8 @@ class Progress:
     unit — что считается (frames, seams, squares ...); text — что делается сейчас. Вложенная полоса (фокус
     внутри скана) молчит, пока открыта внешняя. Можно как with Progress(...) as pr: ..."""
     _open = None                                          # открытая сейчас полоса (вложенные молчат)
+    hook = None                                           # f(title, доля 0..1, подпись, прошло с, осталось с | None)
+                                                          # — полоса ещё и в окне (сшивка из mc.view)
 
     def __init__(self, total, title, expect=None, unit=''):
         """expect — ожидаемое время всего, с (из прошлых сканов): в начале «left» берётся из него, потом всё
@@ -155,6 +157,11 @@ class Progress:
         line = (f"{self.title:<18} [{'#' * bar}{'.' * (24 - bar)}] {100 * f:6.2f}% / 100.00%   {cnt}"
                 f"{t(el)} passed" + (f", {t(eta)} left" if eta is not None and self.done < self.total else "")
                 + self._label("   "))
+        if Progress.hook is not None:
+            try:
+                Progress.hook(self.title, f, self._label(), el, eta if self.done < self.total else 0.0)
+            except Exception:
+                pass
         pad = max(0, self._w - len(line))
         self._w = len(line)
         sys.stdout.write("\r" + line + " " * pad)

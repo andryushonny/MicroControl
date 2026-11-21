@@ -11,6 +11,7 @@
 """
 from .samples import per_sample as _per_sample
 import copy, csv, json, math, os
+import time as _t
 from collections import OrderedDict
 import cv2
 import numpy as np
@@ -115,7 +116,7 @@ class _Scene:
 
 HELP_V2 = "Drag: move  Wheel: zoom  0: whole  R: straight  , / .: selection  H: all keys  Shift+Esc: exit"
 HELP_MODE = {
-    'look': "L: ruler  G: mark crosses  F: fit grid  S: select  B: brush (rectangles)  N: number squares  Y: hints  E: export",
+    'look': "J: stitch  L: ruler  G: mark crosses  F: fit grid  S: select  B: brush (rectangles)  N: number squares  Y: hints  E: export",
     'cross': "Click: cross exactly there (2 in a row = tilt)  Shift+click: snap to centre  Drag a mark: move  Right click: remove  C: again  F: fit grid  Esc: done",
     'select': "Click: square  Drag: box  Shift: unselect  Right click: remove green area  A: all  X: none  Esc: done",
     'paint': "Drag a rectangle: select all squares in it  Shift+drag: unselect  Click: one square  A: all  X: none  Esc: done",
@@ -131,6 +132,7 @@ HELP_ALL = [
     ("", "R: straight / as shot   , / .: previous / next selection   H: this help   Esc: leave the mode"),
     ("Undo", "Ctrl+Z: undo any change (crosses, grid, squares, numbers, hints, removed selection)   Ctrl+Y: redo"),
     ("Exit", "Shift+Esc (or Ctrl+Esc), or close the window"),
+    ("Stitch", "J: stitch this selection right here (progress in the window), then the view reopens"),
     ("Ruler", "L: click two points -> distance in um (a third click starts again); L or Esc: off"),
     ("Grid", "G: mark crosses: click two neighbouring crosses in one row = tilt; more crosses far apart = more exact"),
     ("", "The mark goes exactly where you click   Shift+click: snap to the cross centre   Drag a mark: move it"),
@@ -237,7 +239,7 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
     Wv, Hv = car['size']
     st = dict(cx=sc.size[0] / 2, cy=sc.size[1] / 2, s=None, rot=0.0, mode='look', down=None, box=None,
               poly=[], dirty=True, Wv=Wv - SM.CAR_W, Hv=Hv, straight=False, switch=None, ruler=[], mouse=None,
-              msg=(f"Selection {SM.sample_index(folder)} ({subs.index(folder) + 1} of {len(subs)})" if len(subs) > 1 else "")
+              msg=car.pop('msg', None) or (f"Selection {SM.sample_index(folder)} ({subs.index(folder) + 1} of {len(subs)})" if len(subs) > 1 else "")
               + (f"   Crosses moved with the stitched frames ({moved_}); F: fit the grid again" if moved_ else ""))
 
     def car_click(x, y):
@@ -292,6 +294,80 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
             st['rot'] = -(((th + 90) % 180) - 90)
         else:
             st['rot'] = 0.0
+
+    def stitch_here():
+        """J: сшить это выделение (mc.stitch) прямо из просмотра. Полоса прогресса — в окне, по этапам сшивки;
+        затем окно открывается заново уже со сшитой картинкой (кресты переезжают вместе с кадрами)."""
+        import threading
+        from .stitch import stitch as _stitch
+        from .util import Progress
+        g.save(px_um)
+        base = st.get('scene')
+        if base is None:
+            base = render()[:, :st['Wv']]
+        base = (base.astype(np.float32) * 0.35).astype(np.uint8)
+        pan = carousel_img()
+        sc.st.close()
+        sc.thumbs, sc.over = None, None
+        sc.cache.clear()
+        prog = dict(title="Stitch", f=0.0, text="starting", el=0.0, eta=None)
+        res = {}
+
+        def hook(t, f, txt, el, eta):
+            prog.update(title=t, f=f, text=txt, el=el, eta=eta)
+
+        def work():
+            try:
+                res['r'] = _stitch(folder, verbose=True)
+            except Exception as e:                          # покажем в окне после сшивки
+                res['e'] = e
+
+        t0 = _t.monotonic()
+        Progress.hook = hook
+        th = threading.Thread(target=work, daemon=True)
+        th.start()
+        try:
+            while th.is_alive():
+                img = base.copy()
+                Wv, Hv = img.shape[1], img.shape[0]
+                pw, ph = min(680, Wv - 60), 200
+                x0, y0 = int((Wv - pw) / 2), int((Hv - ph) / 2)
+                UI.panel(img, x0, y0, x0 + pw, y0 + ph, 0.94, UI.LINE)
+                UI.put(img, f"Stitching Selection {SM.sample_index(folder)}" if len(subs) > 1 else "Stitching",
+                       x0 + 22, y0 + 38, 0.7, UI.ACCENT, 2)
+                nm_ = prog['title'].replace("Stitch: ", "").lower()
+                order_ = ['light', 'seams', 'brightness', 'saving']
+                stage = (f"Step {order_.index(nm_) + 1} of 4:  " if nm_ in order_ else "") + \
+                    {'light': "light field (uneven lighting)", 'seams': "seams (where each frame really is)",
+                     'brightness': "frame brightness", 'saving': "saving the preview and small copies"}.get(nm_, nm_)
+                UI.put(img, stage, x0 + 22, y0 + 74, 0.55, UI.TEXT, 1)
+                bx0, bx1, by = x0 + 22, x0 + pw - 22, y0 + 92
+                cv2.rectangle(img, (bx0, by), (bx1, by + 18), (60, 60, 66), -1)
+                cv2.rectangle(img, (bx0, by), (bx0 + int((bx1 - bx0) * prog['f']), by + 18), (90, 200, 90), -1)
+                cv2.rectangle(img, (bx0, by), (bx1, by + 18), (110, 110, 118), 1)
+                pct = f"{100 * prog['f']:.2f}% / 100.00%"
+                UI.put(img, pct, bx1 - UI.size(pct, 0.5)[0], y0 + 74, 0.5, UI.TEXT, 1)
+                txt = prog['text'] or ""
+                while txt and UI.size(txt, 0.45)[0] > pw - 44:
+                    txt = txt[:-2]
+                UI.put(img, txt, x0 + 22, y0 + 136, 0.45, UI.DIM, 1)
+                el = _t.monotonic() - t0
+                left_ = f", this step {int(prog['eta'] // 60):02d}:{int(prog['eta'] % 60):02d} left" if prog['eta'] else ""
+                UI.put(img, f"{int(el // 60):02d}:{int(el % 60):02d} passed{left_}   (the view reopens by itself)",
+                       x0 + 22, y0 + 172, 0.45, UI.DIM, 1)
+                cv2.imshow(WIN, np.hstack([img, pan]) if pan.shape[0] == img.shape[0] else img)
+                cv2.waitKey(60)
+        finally:
+            Progress.hook = None
+            th.join()
+        st['stitched'] = True
+        if 'e' in res:
+            car['msg'] = f"Stitching failed: {type(res['e']).__name__}: {res['e']}"
+        else:
+            r = res['r']
+            car['msg'] = (f"Stitched in {_t.monotonic() - t0:.0f} s: seams {r.get('Seams accepted', '-')}, "
+                          f"error {r.get('Seam error, px', '-')} px" + ("; crosses moved with the frames" if 'Crosses' in r else ""))
+        st['switch'] = folder
 
     def ruler_text(a=None, b=None):
         """Подпись линейки: расстояние, мкм, и его проекции по осям картинки."""
@@ -565,6 +641,8 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
         UI.panel(img, 0, 0, Wv, bh, 0.82)                   # верх: режим и главное о скане
         x_ = UI.chip(img, mode, 10, bh - 11, fs, mcol) + 14
         it = [f"{len(sc.st)} frames", f"{um:.2f} um / px"]
+        if not os.path.exists(os.path.join(folder, 'join', 'positions_all.csv')):
+            it += ["not stitched: J"]
         if g.ready():
             it += [f"pitch {np.hypot(*g.cr.vectors()[0]) * px_um:.1f} um", f"tilt {g.cr.angle():+.2f} deg"]
         else:
@@ -770,6 +848,9 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
         elif ch == 'c' and st['mode'] == 'cross':           # кресты заново
             g.cr.clear(); g.refined = None; set_straight(False); g.save(px_um)
             st['msg'] = "Crosses cleared. Click a cross, then its neighbour in the same row"
+        elif ch == 'j':                                      # сшить прямо здесь; окно потом откроется заново
+            stitch_here()
+            break
         elif ch == 'l':                                      # линейка: две точки -> расстояние
             if st['mode'] == 'ruler':
                 st['mode'], st['ruler'] = 'look', []
@@ -859,8 +940,9 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
         elif key in {2621440, 65364} or (ch == 's' and raw.isupper()):
             st['cy'] += step
         st['dirty'] = True
-    if os.path.isdir(folder):
+    if os.path.isdir(folder) and not st.get('stitched'):   # после сшивки разметку уже записала она (кресты — за кадрами)
         g.save(px_um)
+    if os.path.isdir(folder):
         sc.st.close()
     return st['switch'] or None
 

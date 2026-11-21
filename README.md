@@ -21,7 +21,7 @@ m = mc.Microscope()          # 1. connect to the microscope   (mc.Microscope('si
 
 m.manual()                   # 2. green area: keys 1 and 2 at two opposite corners, focus at each
 folder = m.scan()            #    shoot the area frame by frame
-mc.stitch(folder)            #    join the frames into one picture (mosaic)
+mc.stitch(folder)            #    join the frames into one picture (or J in mc.view)
 
 mc.view(folder)              # 3. key G: click two neighbouring crosses -> the red grid
                              # 4. keys S / B: choose squares (green); Y shows hints, Shift+Y takes them
@@ -224,6 +224,7 @@ Options: train the normal model once on a clean substrate — `mc.train_hints(fo
 | Key | Action |
 |---|---|
 | drag · wheel · `0` | move · zoom · whole picture |
+| `J` | stitch right here: progress in the window, then the view reopens stitched |
 | `G` · `F` | mark crosses · fit the grid to all crosses |
 | `N` | number a square |
 | `S` · `B` | select (click, box) · brush (rectangles); `Shift` — unselect |

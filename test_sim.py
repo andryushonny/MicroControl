@@ -595,7 +595,9 @@ assert 'Where the time goes' in txt and 'Camera: picture' in inf['Time'] and inf
 print(txt.split("\n\n")[1].splitlines()[2])
 r = m.remove(2, confirm=False); print(r)
 assert not os.path.exists(det) and len(m.list()) == 1 and os.path.isdir(mapf)
-m.close(); print("Layers 10x > 50x, list, remove, time report: OK")
+mc.view(mapf, _keys=[-1, ord('j'), -1, -1, 27, 27])                                # J: сшить прямо в просмотре
+assert os.path.exists(os.path.join(mapf, 'join', 'positions_all.csv'))
+m.close(); print("Layers 10x > 50x, list, remove, time report, stitch from the viewer (J): OK")
 
 # ------------------------------------------------------------------ 23. Ctrl+Z / Ctrl+Y в ручном режиме
 import microcontrol.manual as M

@@ -261,8 +261,8 @@ class ScanData:
         else:
             return out
         if os.path.exists(cache):
-            z = np.load(cache)
-            return [z[f"t{i}"] for i in range(len(self))]
+            with np.load(cache) as z:                       # файл не держится открытым (Windows: его перезапишет сшивка)
+                return [z[f"t{i}"] for i in range(len(self))]
         for i, img in self.frames():                        # по одному кадру: память не растёт
             out[i] = _thumb(img)
         os.makedirs(os.path.dirname(cache), exist_ok=True)

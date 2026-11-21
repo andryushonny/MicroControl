@@ -21,7 +21,7 @@ m = mc.Microscope()          # 1. 连接显微镜   （mc.Microscope('sim') —�
 
 m.manual()                   # 2. 绿色区域：在两个对角按 1 和 2，每个角点先对焦
 folder = m.scan()            #    逐帧拍摄该区域
-mc.stitch(folder)            #    把各帧拼接成一张图（拼图）
+mc.stitch(folder)            #    把各帧拼接成一张图（或在 mc.view 中按 J）
 
 mc.view(folder)              # 3. 按 G：点击两个相邻的十字 -> 红色网格
                              # 4. 按 S / B：选择方格（绿色）；Y —— 提示，Shift+Y —— 采纳提示
@@ -224,6 +224,7 @@ z = \frac{\min_k \sqrt{(\mathbf f-\boldsymbol\mu_k)^{\mathsf T}\Sigma_k^{-1}(\ma
 | 按键 | 操作 |
 |---|---|
 | 拖动 · 滚轮 · `0` | 移动 · 缩放 · 整幅图 |
+| `J` | 就地拼接：窗口内显示进度，完成后查看器以拼接结果重新打开 |
 | `G` · `F` | 标记十字 · 用所有十字拟合网格 |
 | `N` | 为方格编号 |
 | `S` · `B` | 选择（点击、矩形框）· 画笔（矩形）；`Shift` —— 取消选择 |

@@ -73,10 +73,10 @@ class Progress:
         self.total, self.title, self.done, self.t0, self._t = max(1, total), title, 0, time.monotonic(), 0
         self.expect = expect
 
-    def update(self, n=1, text=''):
+    def update(self, n=1, text='', force=False):
         self.done = min(self.total, self.done + n)
         now = time.monotonic()
-        if now - self._t < 0.3 and self.done < self.total:
+        if now - self._t < 0.3 and self.done < self.total and not force:
             return
         self._t = now
         el = now - self.t0

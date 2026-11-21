@@ -84,7 +84,7 @@ def stitch(folder, engine='builtin', max_shift_um=40.0, sigma=None, alpha=0.01, 
         os.remove(gp)
     st.gains = None
     if flat:                                                     # поле освещения — по сырым кадрам
-        F = flatfield(st)
+        F = flatfield(st, verbose=verbose)
         if F is not None:
             np.save(fp, F)
     elif os.path.exists(fp):
@@ -140,7 +140,7 @@ def stitch(folder, engine='builtin', max_shift_um=40.0, sigma=None, alpha=0.01, 
     if flat:                                                # яркость кадров по перекрытиям (после сшивки)
         try:
             from .optics import frame_gains
-            gn = frame_gains(st, pos, W, H)
+            gn = frame_gains(st, pos, W, H, verbose=verbose)
             if gn is not None:
                 np.save(gp, gn)
                 st.gains = gn
@@ -165,7 +165,8 @@ def stitch(folder, engine='builtin', max_shift_um=40.0, sigma=None, alpha=0.01, 
     except Exception as e:                                  # сшивка важнее: кресты можно поставить заново
         L.event('STI-003', f"Crosses not moved: {type(e).__name__}: {e}", 30)
     if preview:
-        r['Preview'] = make_preview(folder, pos)
+        r['Preview'] = make_preview(folder, pos, verbose=verbose)
+        r['Time, s'] = round(time.monotonic() - t0, 1)
     st.close()
     L.event('STI-001', f"{folder}: {dict(r)}")
     return r
@@ -302,7 +303,16 @@ def _ashlar(st, pred, px, max_shift_um, sigma, verbose):
     return pos, dict(pairs=len(al.neighbors_graph.edges), accepted=len(al.spanning_tree.edges))
 
 
-def make_preview(folder, pos=None, max_side=4000, levels=True):
+def _write_levels(img, i, W, H, lvdir):
+    """Кадр, уменьшенный в 2, 4, 8 раз, — в viewer/levels/ (для быстрого просмотра)."""
+    lv_img = img
+    for lv in (1, 2, 3):
+        lv_img = cv2.resize(lv_img, (max(1, W >> lv), max(1, H >> lv)), interpolation=cv2.INTER_AREA)
+        ok, buf = cv2.imencode('.jpg', lv_img, [cv2.IMWRITE_JPEG_QUALITY, 88])
+        buf.tofile(os.path.join(lvdir, f"{i:05d}_{lv}.jpg"))
+
+
+def make_preview(folder, pos=None, max_side=4000, levels=True, verbose=False):
     """Уменьшенная мозаика (JPG) для быстрого взгляда: кадры уменьшаются и кладутся по положениям.
     Заодно (levels=True) каждый кадр пишется уменьшенным в 2, 4, 8 раз в viewer/levels/ — просмотр больших
     сканов на слабом ПК берёт оттуда маленькие файлы, а не раскрывает целые кадры."""
@@ -319,24 +329,40 @@ def make_preview(folder, pos=None, max_side=4000, levels=True):
     out = np.full((int(size[1] * k) + 2, int(size[0] * k) + 2, 3), 0, np.uint8)
     sw, sh = max(1, int(math.ceil(W * k)) + 1), max(1, int(math.ceil(H * k)) + 1)   # с нахлёстом: без щелей
     thumbs = [None] * len(st) if (levels and st.index[0].get('file')) else None   # JPG-кадры: превью для view
+    n = len(st)
+    pr = Progress(n + 2, "Stitch: saving") if verbose else None   # кадры + thumbs + preview_all.jpg
+    from concurrent.futures import ThreadPoolExecutor
+    pool, jobs = ThreadPoolExecutor(max_workers=3), []
     for i, img in st.frames():
-        if levels:
-            lv_img = img
-            for lv in (1, 2, 3):
-                lv_img = cv2.resize(lv_img, (max(1, W >> lv), max(1, H >> lv)), interpolation=cv2.INTER_AREA)
-                ok, buf = cv2.imencode('.jpg', lv_img, [cv2.IMWRITE_JPEG_QUALITY, 88])
-                buf.tofile(os.path.join(lvdir, f"{i:05d}_{lv}.jpg"))
+        if pr:
+            pr.update(text=f"frame {i + 1}/{n}")
+        if levels:                                          # уровни пишутся в фоне (кодирование JPG — в потоках)
+            while len(jobs) > 6:
+                jobs.pop(0).result()
+            jobs.append(pool.submit(_write_levels, img, i, W, H, lvdir))
         if thumbs is not None:
             thumbs[i] = _thumb(img)
         t = cv2.resize(img, (sw, sh), interpolation=cv2.INTER_AREA)
         t = t if t.ndim == 3 else cv2.cvtColor(t, cv2.COLOR_GRAY2BGR)
         x, y = int(pos[i, 0] * k), int(pos[i, 1] * k)
         out[y:y + sh, x:x + sw] = t[:out.shape[0] - y, :out.shape[1] - x]
+    if pr and jobs:
+        pr.update(0, text="writing the last frames", force=True)
+    for j in jobs:
+        j.result()
+    pool.shutdown()
+    if pr:
+        pr.update(0, text="thumbs.npz", force=True)
     if thumbs is not None:
         np.savez(os.path.join(folder, 'viewer', 'thumbs.npz'), **{f"t{i}": a for i, a in enumerate(thumbs)})
+    if pr:
+        pr.update(1, text=f"preview_all.jpg {out.shape[1]}x{out.shape[0]}", force=True)
     path = os.path.join(folder, 'join', 'preview_all.jpg')
     ok, buf = cv2.imencode('.jpg', out, [cv2.IMWRITE_JPEG_QUALITY, 90])
     buf.tofile(path)
+    if pr:
+        pr.update(1, text="done" + " " * 30, force=True)
+        pr.close()
     st.close()
     return path
 

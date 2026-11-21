@@ -21,7 +21,7 @@ HOME = os.path.join(os.path.expanduser('~'), '.microcontrol')
 
 
 # ------------------------------------------------------------------ освещение
-def flatfield(st, n=60, down=4):
+def flatfield(st, n=60, down=4, verbose=False):
     """Поле освещения скана — отдельно по каждому цвету (края кадра бывают не только темнее, но и другого
     оттенка): медиана до n кадров, каждый сначала поделён на свою медиану (кадры с другой общей яркостью
     не портят поле), гауссово сглаживание, среднее каждого цвета = 1. Возвращает уменьшенное в down раз
@@ -32,15 +32,21 @@ def flatfield(st, n=60, down=4):
     ids = np.linspace(0, N - 1, min(n, N)).astype(int)
     fix, st.fix = getattr(st, 'fix', None), None              # считать по сырым кадрам
     gains, st.gains = getattr(st, 'gains', None), None
+    from .util import Progress
+    pr = Progress(len(ids), "Stitch: light field") if verbose else None
     try:
         stack = []
         for i in ids:
+            if pr:
+                pr.update()
             g = np.ascontiguousarray(st.frame(int(i)))
             g = cv2.resize(g, None, fx=1 / down, fy=1 / down, interpolation=cv2.INTER_AREA).astype(np.float32)
             med = np.median(g.reshape(-1, g.shape[2]) if g.ndim == 3 else g.ravel(), 0)
             stack.append(g / np.maximum(med, 1.0))
     finally:
         st.fix, st.gains = fix, gains
+        if pr:
+            pr.close()
     F = np.median(np.array(stack), 0)
     sig = min(F.shape[:2]) / 12
     F = cv2.GaussianBlur(F, (0, 0), sig)
@@ -48,17 +54,23 @@ def flatfield(st, n=60, down=4):
     return np.clip(F, 0.2, 5).astype(np.float32)
 
 
-def frame_gains(st, pos, W, H, down=8, lam=0.05):
+def frame_gains(st, pos, W, H, down=8, lam=0.05, verbose=False):
     """Выровнять яркость (и оттенок) кадров по перекрытиям, как экспозицию в панорамах: для каждой пары
     соседей медиана общего участка в обоих кадрах; множители кадров a_i — по МНК в логарифмах
     ln a_i − ln a_j = ln m_j − ln m_i, со слабой привязкой ln a_i → 0. Возвращает (n, каналы) или None."""
     n = len(st)
     if n < 2:
         return None
+    from .util import Progress
+    pr = Progress(n, "Stitch: brightness") if verbose else None
     small = []
     for i in range(n):
         f = np.ascontiguousarray(st.frame(i))
         small.append(cv2.resize(f, (max(1, W // down), max(1, H // down)), interpolation=cv2.INTER_AREA))
+        if pr:
+            pr.update()
+    if pr:
+        pr.close()
     C = small[0].shape[2] if small[0].ndim == 3 else 1
     pos = np.asarray(pos, float)
     rows, rhs = [], []

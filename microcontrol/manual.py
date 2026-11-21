@@ -351,7 +351,6 @@ def minimap(img, m, A, B, size=MAP_W, zcolor=None, others=(), right=0):
             cv2.rectangle(ovr, (int(cu0), int(cv0)), (int(cu1), int(cv1)), SM.dim(oc, 0.6), -1)
             sub[:] = cv2.addWeighted(ovr, 0.5, sub, 0.5, 0)
             cv2.rectangle(sub, (int(cu0), int(cv0)), (int(cu1), int(cv1)), oc, 2)
-            label(olab, ((cu0 + cu1) / 2, (cv0 + cv1) / 2), oc, 0.45)
     a_, b_ = to(px - sx / 2, py - sy / 2), to(px + sx / 2, py + sy / 2)  # жёлтое — кадр = клетка карты
     ov_ = sub.copy()
     cv2.rectangle(ov_, (int(max(a_[0], gx0)), int(max(a_[1], gy0))),

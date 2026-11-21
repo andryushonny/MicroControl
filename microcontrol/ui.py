@@ -90,3 +90,26 @@ def facts(img, items, x, y, scale, color=TEXT):
         put(img, t, x, y, scale, color)
         x += size(t, scale)[0]
     return x
+
+
+def chevron(img, cx, cy, r, direction, color, th=2):
+    """Стрелка-шеврон ‹ или › (direction = -1 / +1), сглаженная, по центру (cx, cy)."""
+    d = int(direction)
+    pts = np.array([[cx - d * r * 0.45, cy - r], [cx + d * r * 0.55, cy], [cx - d * r * 0.45, cy + r]], np.int32)
+    cv2.polylines(img, [pts], False, color, th, cv2.LINE_AA)
+
+
+def round_rect(img, x0, y0, x1, y1, r, color, th=-1):
+    """Прямоугольник со скруглёнными углами (заливка th=-1 или контур)."""
+    x0, y0, x1, y1, r = int(x0), int(y0), int(x1), int(y1), int(max(1, r))
+    if th < 0:
+        cv2.rectangle(img, (x0 + r, y0), (x1 - r, y1), color, -1)
+        cv2.rectangle(img, (x0, y0 + r), (x1, y1 - r), color, -1)
+        for cx, cy in ((x0 + r, y0 + r), (x1 - r, y0 + r), (x0 + r, y1 - r), (x1 - r, y1 - r)):
+            cv2.circle(img, (cx, cy), r, color, -1, cv2.LINE_AA)
+    else:
+        for a, b in (((x0 + r, y0), (x1 - r, y0)), ((x0 + r, y1), (x1 - r, y1)),
+                     ((x0, y0 + r), (x0, y1 - r)), ((x1, y0 + r), (x1, y1 - r))):
+            cv2.line(img, a, b, color, th, cv2.LINE_AA)
+        for (cx, cy), a0 in (((x0 + r, y0 + r), 180), ((x1 - r, y0 + r), 270), ((x0 + r, y1 - r), 90), ((x1 - r, y1 - r), 0)):
+            cv2.ellipse(img, (cx, cy), (r, r), 0, a0, a0 + 90, color, th, cv2.LINE_AA)

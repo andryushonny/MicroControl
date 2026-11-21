@@ -17,6 +17,7 @@
   H                   Подсказка
   Esc / Enter         Выход
 """
+import math
 import time
 import cv2
 import numpy as np
@@ -305,7 +306,8 @@ def minimap(img, m, A, B, size=MAP_W, zcolor=None, others=(), right=0):
     gw, gh = MAP_COLS * sx * k, MAP_ROWS * sy * k
 
     def to(hh, vv):         # экранные мкм -> пиксели карты
-        return int(gx0 + (hh - (ox + (i0 - 0.5) * sx)) * k), int(gy0 + (vv - (oy + (j0 - 0.5) * sy)) * k)
+        return (int(round(gx0 + (hh - (ox + (i0 - 0.5) * sx)) * k)),       # округление (не отбрасывание):
+                int(round(gy0 + (vv - (oy + (j0 - 0.5) * sy)) * k)))       # кадр и клетка совпадают до пикселя
 
     def cell(i, j, color, t=1):
         a = to(ox + (i - 0.5) * sx, oy + (j - 0.5) * sy)
@@ -349,7 +351,7 @@ def minimap(img, m, A, B, size=MAP_W, zcolor=None, others=(), right=0):
             sub[:] = cv2.addWeighted(ovr, 0.5, sub, 0.5, 0)
             cv2.rectangle(sub, (int(cu0), int(cv0)), (int(cu1), int(cv1)), oc, 2)
             label(olab, ((cu0 + cu1) / 2, (cv0 + cv1) / 2), oc, 0.45)
-    a_, b_ = to(px - w / 2, py - h / 2), to(px + w / 2, py + h / 2)      # жёлтое — ровно поле зрения
+    a_, b_ = to(px - sx / 2, py - sy / 2), to(px + sx / 2, py + sy / 2)  # жёлтое — кадр = клетка карты
     ov_ = sub.copy()
     cv2.rectangle(ov_, (int(max(a_[0], gx0)), int(max(a_[1], gy0))),
                   (int(min(b_[0], gx0 + int(gw))), int(min(b_[1], gy0 + int(gh)))), (0, 200, 255), -1)
@@ -392,7 +394,7 @@ def minimap(img, m, A, B, size=MAP_W, zcolor=None, others=(), right=0):
             cv2.circle(sub, (u, v), 5, (255, 255, 255), -1, cv2.LINE_AA)
             cv2.circle(sub, (u, v), 3, pc, -1, cv2.LINE_AA)
             cv2.putText(sub, str(num), (u + 6, v - 4), font, 0.42, (255, 255, 255), 1, cv2.LINE_AA)
-    cv2.rectangle(sub, to(px - w / 2, py - h / 2), to(px + w / 2, py + h / 2), (255, 255, 255), 2)   # поле зрения
+    cv2.rectangle(sub, to(px - sx / 2, py - sy / 2), to(px + sx / 2, py + sy / 2), (255, 255, 255), 2)   # кадр
     cv2.rectangle(sub, (gx0, gy0), (gx0 + int(gw), gy0 + int(gh)), (120, 120, 120), 1)
     sub[:] = cv2.addWeighted(sub, 0.85, under, 0.15, 0)                 # карта слегка прозрачная
     cv2.rectangle(sub, (0, 0), (sub.shape[1] - 1, sub.shape[0] - 1), (78, 80, 88), 1)
@@ -434,10 +436,13 @@ def smove(m, cr, ax, d):
 
 
 def default_steps(m):
-    """Шаги ручного режима, мкм, кратные 5: X, Y — кадр (округлён вниз до 5 мкм и не больше max_move), Z — 100."""
+    """Шаги ручного режима, мкм: X, Y — ровно клетка мини-карты (кадр, округлённый вниз до целого числа шагов
+    мотора; не больше max_move) — столик при каждом нажатии встаёт точно на сетку; Z — 100 (кратно 5)."""
     st = m._frame_step()
+    s = m.motor_step
+    cell = lambda v: round(min(v, math.floor(m.max_move / s + 1e-9) * s), 2)
     r5 = lambda v, lim: float(max(5, min(lim, v) // 5 * 5))
-    return {'x': r5(st['x'], m.max_move), 'y': r5(st['y'], m.max_move), 'z': r5(Z_STEP, m.max_move_z)}
+    return {'x': cell(st['x']), 'y': cell(st['y']), 'z': r5(Z_STEP, m.max_move_z)}
 
 
 def step_limit(m, ax):
@@ -724,16 +729,21 @@ def run(m, fullscreen=True, _keys=None):
             if fp:
                 ops.append(('t', "Focus points", x_l, y, FS, UI.DIM, 1))
                 y += LH
-                per = 4
+                per = 4                                      # таблица: столбцы равной ширины, Z — по правому краю
+                fz = FS * 0.95
+                vals = [f"{f_['z'] - m._off['z']:.1f}" for _n, _k, f_ in fp[:12]]
+                nw = max(UI.size(str(n_), fz)[0] for n_, _k, _f in fp[:12])
+                vw_ = max(UI.size(v_, fz)[0] for v_ in vals)
+                colw = 14 + nw + 10 + vw_ + 22
                 for r0 in range(0, min(len(fp), 12), per):
-                    xx = x_l
-                    for n_, k_, f_ in fp[r0:r0 + per]:
+                    for c0_, (n_, k_, f_) in enumerate(fp[r0:r0 + per]):
+                        xx = x_l + c0_ * colw
                         c_ = SM.color(k_ if k_ >= 0 else len(m._regions))
                         ops.append(('d', (xx + 5, y - th0 // 2), c_))
-                        t_ = f"{n_}  {f_['z'] - m._off['z']:.1f}"
-                        ops.append(('t', t_, xx + 14, y, FS * 0.95, UI.TEXT, 1))
-                        xx += 14 + UI.size(t_ + "    ", FS * 0.95)[0]
-                    right = max(right, xx)
+                        ops.append(('t', str(n_), xx + 14, y, fz, UI.DIM, 1))
+                        v_ = vals[r0 + c0_]
+                        ops.append(('t', v_, xx + 14 + nw + 10 + vw_ - UI.size(v_, fz)[0], y, fz, UI.TEXT, 1))
+                    right = max(right, x_l + min(per, len(fp)) * colw - 22)
                     y += LH - 2
                 if len(fp) > 12:
                     ops.append(('t', f"... {len(fp) - 12} more", x_l, y, FS * 0.9, UI.DIM, 1))
@@ -748,22 +758,32 @@ def run(m, fullscreen=True, _keys=None):
                 ops.append(('t', f"Zoom x{zm['z']:.2f}   Z: whole frame", x_l, y, FS * 0.9, UI.ACCENT, 1))
                 y += LH
             hidden_ = getattr(m, '_panel_hidden', False)
-            if hidden_:                                      # панель спрятана: координаты в строке состояния
-                ops, rects = [], {}
-                bt_ = "Panel (P)"
-                wb_, hb_, _ = UI.size(bt_, FS)
-                rects['panel'] = (8, 8, 8 + wb_ + 34, 8 + hb_ + 16)
-                UI.panel(view, *rects['panel'], 0.85, UI.LINE)
-                UI.put(view, ">", 18, rects['panel'][3] - 8, FS, UI.ACCENT)
-                UI.put(view, bt_, 34, rects['panel'][3] - 8, FS, UI.TEXT)
+            hov_ = lambda r_: hover[0] is not None and r_[0] <= hover[0][0] <= r_[2] and r_[1] <= hover[0][1] <= r_[3]
+            if hidden_:                                      # панель спрятана: «ручка» у левого края
+                tw_ = int(26 * sc)
+                th_ = int(72 * sc)
+                rects.clear()                                # невидимые поля не нажимаются
+                rects['panel'] = (0, 12, tw_, 12 + th_)
+                hv_ = hov_(rects['panel'])
+                UI.panel(view, 0, 12, tw_, 12 + th_, 0.9)
+                UI.round_rect(view, -8, 12, tw_, 12 + th_, 8, UI.ACCENT if hv_ else UI.LINE, 1)
+                if hv_:
+                    view[13:12 + th_, 0:tw_ - 1] = np.clip(view[13:12 + th_, 0:tw_ - 1].astype(int) + 14, 0, 255)
+                UI.chevron(view, tw_ // 2 - 1, 12 + th_ // 2, int(7 * sc), +1, UI.ACCENT if hv_ else UI.TEXT, 2)
+                if hv_:                                      # подсказка рядом с ручкой
+                    UI.toast(view, "Show the panel (P)", tw_ + 90 * sc, 12 + th_ // 2 + 6, FS * 0.9, 'info')
                 line = f"X {p.x:.1f}  Y {p.y:.1f}  Z {p.z:.1f} um    " + line
+                ops = []
             else:
                 UI.panel(view, 8, 8, right + 44, y - LH + 16, 0.82, UI.LINE)
-                rects['panel'] = (right + 14, 14, right + 38, 38)    # кнопка «спрятать»
-                hp_ = hover[0] is not None and rects['panel'][0] <= hover[0][0] <= rects['panel'][2] and \
-                    rects['panel'][1] <= hover[0][1] <= rects['panel'][3]
-                cv2.rectangle(view, rects['panel'][:2], rects['panel'][2:], (96, 96, 104) if hp_ else (62, 62, 70), -1)
-                UI.put(view, "<", rects['panel'][0] + 7, rects['panel'][3] - 7, FS, UI.TEXT)
+                bs_ = int(26 * sc)
+                rects['panel'] = (right + 34 - bs_, 16, right + 34, 16 + bs_)    # кнопка «спрятать»
+                hv_ = hov_(rects['panel'])
+                x0b, y0b, x1b, y1b = rects['panel']
+                UI.round_rect(view, x0b, y0b, x1b, y1b, 6, (78, 80, 90) if hv_ else (46, 47, 54), -1)
+                UI.round_rect(view, x0b, y0b, x1b, y1b, 6, UI.ACCENT if hv_ else UI.LINE, 1)
+                UI.chevron(view, (x0b + x1b) // 2 + 1, (y0b + y1b) // 2, int(6 * sc), -1,
+                           UI.ACCENT if hv_ else UI.TEXT, 2)
             for op in ops:
                 if op[0] == 't':
                     UI.put(view, op[1], op[2], op[3], op[4], op[5], op[6])

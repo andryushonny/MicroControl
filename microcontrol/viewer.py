@@ -19,6 +19,7 @@ from .storage import ScanData, THUMB, meta_A
 from .util import wheel_delta, open_window, window_size, exit_key, EXIT, set_icon
 from .undo import History, undo_key
 from . import ui as UI
+from . import log as L
 from . import anomaly as _AD
 from . import config as _cfg
 
@@ -212,6 +213,20 @@ def _car_items(subs, cur, car):
 
 
 def view(folder, fullscreen=False, sensitivity=None, _keys=None):
+    """Окно; если что-то упало — полный текст ошибки пишется в журнал (logs/MC_*.log), окно закрывается."""
+    try:
+        return _view(folder, fullscreen=fullscreen, sensitivity=sensitivity, _keys=_keys)
+    except Exception:
+        import traceback
+        L.event('VIEW-999', "The window stopped with an error:\n" + traceback.format_exc(), 40)
+        try:
+            cv2.destroyAllWindows()
+        except Exception:
+            pass
+        raise
+
+
+def _view(folder, fullscreen=False, sensitivity=None, _keys=None):
     """Открыть сшитый скан (или папку сеанса из нескольких образцов). Справа — карусель образцов:
     щелчок — открыть образец, x — убрать образец (папка уходит в <сеанс>/_removed/), , / . — предыдущий / следующий."""
     from . import samples as SM

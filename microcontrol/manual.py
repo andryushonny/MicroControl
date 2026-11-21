@@ -509,6 +509,20 @@ def draw_fields(view, steps, edit, scale, top, m=None):
 
 
 def run(m, fullscreen=False, _keys=None):
+    """Окно; если что-то упало — полный текст ошибки пишется в журнал (logs/MC_*.log), окно закрывается."""
+    try:
+        return _run(m, fullscreen=fullscreen, _keys=_keys)
+    except Exception:
+        import traceback
+        L.event('MAN-999', "The window stopped with an error:\n" + traceback.format_exc(), 40)
+        try:
+            cv2.destroyAllWindows()
+        except Exception:
+            pass
+        raise
+
+
+def _run(m, fullscreen=False, _keys=None):
     m._need_cam()
     WH0 = open_window(WIN, fullscreen)
     if fullscreen:
@@ -702,7 +716,7 @@ def run(m, fullscreen=False, _keys=None):
                 rows = [l_ for l_ in repr(lst).split("\n")[2:-1:2]]
                 r_ = D.choose(f"Scans of {m.sample.title}", rows, len(rows) - 1, ("View",))
                 if r_:
-                    m._last_view = lst[r_[1]]['folder']
+                    m._last_view, m._view_pick = lst[r_[1]]['folder'], True
                     open_view()
             elif item == "View":
                 open_view()
@@ -790,17 +804,34 @@ def run(m, fullscreen=False, _keys=None):
         elif res.get('stop'):
             msg = f"Scan stopped. Frames so far: {res.get('folder', '-')}"
         else:
-            m._last_view = res['folder']
+            m._last_view = (m.last_scans or [res['folder']])[-1]
             msg = f"Scanned and stitched in {TM.fmt(time.monotonic() - t0)}: V opens it in the view"
 
     def open_view():
         """V: открыть последний скан в просмотре (кресты, квадраты, экспорт); закрыли — снова ручной режим."""
         nonlocal msg, msg_t
         from .viewer import view as _view
-        f_ = getattr(m, '_last_view', None) or getattr(m, 'last_scan', None)
+        from . import project as P_
         msg_t = time.monotonic()
-        if not f_ or not os.path.isdir(f_):
-            msg = "Nothing scanned yet: mark a selection (1, 2) and press S"
+        f_ = None
+        lv = getattr(m, '_last_view', None)                # выбрали в меню Scans (любую версию)
+        if lv and os.path.isdir(lv) and P_.sample_of(lv) == m.sample.folder and getattr(m, '_view_pick', False):
+            f_ = lv
+            m._view_pick = False
+        elif m._sel is not None and m._sel < len(m._regions):   # выбранное выделение — его последняя съёмка
+            sc_ = P_.Selection(m.sample, m._regions[m._sel]).latest
+            f_ = sc_.folder if sc_ else None
+            if f_ is None:
+                msg = (f"Selection {m._regions[m._sel]['num']} is not scanned yet: S twice scans it"
+                       + ("" if not P_.latest_scans(m.sample.folder) else " (Scans in the menu: the others)"))
+                return
+        if f_ is None and lv and os.path.isdir(lv) and P_.sample_of(lv) == m.sample.folder:
+            f_ = lv                                        # только что сняли
+        if f_ is None:                                     # иначе — самая новая съёмка образца
+            ls = sorted(P_.latest_scans(m.sample.folder), key=os.path.basename)
+            f_ = ls[-1] if ls else None
+        if not f_:
+            msg = "Nothing scanned in this sample yet: mark a selection (1, 2) and press S twice"
             return
         if live is not None:
             live.paused = True

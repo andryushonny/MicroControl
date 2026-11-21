@@ -613,7 +613,8 @@ m.close(); print("Layers 10x > 50x, list, remove, time report, stitch from the v
 
 # ------------------------------------------------------------------ 23. Ctrl+Z / Ctrl+Y в ручном режиме
 import microcontrol.manual as M
-m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp())
+d23 = tempfile.mkdtemp()
+m = mc.Microscope('sim', objective=10, folder=d23)
 m.focus()
 p0 = m.position
 R_ = 65363
@@ -628,4 +629,13 @@ assert len(m._ruler['pts']) == 2 and abs(d_ - m.frame_size[0]) < 0.1 * m.frame_s
 M.run(m, fullscreen=False, _keys=[ord('1'), -1, R_, -1, ord('2'), -1, ord('s'), -1, ord('s'), -1, -1, ord('v'), 27, 27, -1])
 sf = m._last_view
 assert os.path.exists(os.path.join(sf, 'join', 'positions_all.csv')), sf              # S, S: снято и сшито в окне
+m.close()
+import microcontrol.viewer as VW                                    # перезапуск: V открывает последнюю съёмку
+opened = []                                                        # выбранного выделения
+_v0 = VW.view
+VW.view = lambda f, **kw: opened.append(f)
+m = mc.Microscope('sim', objective=10, folder=d23)
+M.run(m, fullscreen=False, _keys=[ord('v'), -1, -1])
+VW.view = _v0
+assert opened and opened[0] == m.sample.selections[-1].latest.folder, (opened, m.sample.selections)
 m.close(); print("Undo / redo in manual mode (selections and moves), ruler, scan + stitch (S) and view (V) from the window: OK")

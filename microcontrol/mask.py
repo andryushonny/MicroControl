@@ -13,7 +13,7 @@ import cv2
 from . import log as L
 from .crosses import Crosses, fit_square
 from .storage import ScanData
-from .util import Result, Progress
+from .util import Result, Progress, save_image
 
 
 # ------------------------------------------------------------------ состояние разметки
@@ -260,9 +260,12 @@ class Grid:
         n = int(min(n, max(32, (6e6 / max(1, len(cells))) ** 0.5)))   # слабый ПК: вся мозаика ≤ ~6 Мпикс
         s = min(1.0, n / pitch)
         W, H = int(np.ceil(size[0] * s)), int(np.ceil(size[1] * s))
+        pr = Progress(5, "Hints", unit='steps')
+        pr.stage(f"assembling the mosaic, {W} x {H} px")
         big = render(size[0] / 2, size[1] / 2, s, W, H)
         void = (big <= 22).all(2).astype(np.uint8)            # вне кадров (фон просмотра, чёрные поля обзора)
         net = AD.load_backbone()
+        pr.stage("patch features" + (" (CNN)" if net is not None else " (colour + texture)"), 1)
         F = AD.features(big, 0.75 * n, net)
         del big
         Hp, Wp = F.shape[:2]
@@ -280,9 +283,12 @@ class Grid:
         if isinstance(model, str):
             path = os.path.join(model, AD.MODEL_FILE) if os.path.isdir(model) else model
             model = AD.Normal.load(path)
+        pr.stage("model of the empty substrate" + (" (loaded)" if model is not None else f" from {int(valid.sum())} patches"), 1)
         if model is None:
             model = AD.Normal.fit(F[valid], kind='cnn' if net is not None else 'hand')
+        pr.stage("searching for anything unusual", 1)
         m, _z = AD.anomaly_mask(F, model, valid, dust=not dark)
+        pr.stage("scoring the squares", 1)
         # доля «чего-то» в каждом квадрате: центр патча -> квадрат решётки
         yy, xx = np.mgrid[0:Hp, 0:Wp]
         P = np.stack([(xx.ravel() + 0.5) * p / s, (yy.ravel() + 0.5) * p / s], 1) - self.cr.O
@@ -302,6 +308,8 @@ class Grid:
                 continue
             out[(int(kk // nj + i0), int(kk % nj + j0))] = float(hit[kk] / good[kk])
         self.scores, self.hint_squares = out, len(out)
+        pr.stage(f"{len(out)} squares scored", 1)
+        pr.close()
         self.hint_model = model
         if info is not None:
             info.update(seconds=round(_t.monotonic() - t0, 2), patches=int(valid.sum()), square_px=n,
@@ -506,9 +514,10 @@ def export(folder, fmt='png', scale=1.0, cells=False, dxf=True, max_mb=2000, mar
     if cells:
         os.makedirs(os.path.join(out, 'squares'), exist_ok=True)
     num = g.numbering()
-    pr = Progress(len(sel), "Export")
+    pr = Progress(len(sel), "Export: squares", unit='squares')
     for i, j in sel:
-        pr.update(1)
+        X_, Y_ = g.name(i, j, num)
+        pr.update(1, f"square X {X_:+d}, Y {Y_:+d}")
         # угол квадрата на экране — верхний левый: при ex = -1 это крест i + 1
         corner = g.cr.point(i + (1 if ex < 0 else 0), j + (1 if ey < 0 else 0))
         pad = 16
@@ -528,9 +537,8 @@ def export(folder, fmt='png', scale=1.0, cells=False, dxf=True, max_mb=2000, mar
             buf.tofile(os.path.join(out, 'squares', f"square_X{X:+04d}_Y{Y:+04d}.png"))
     pr.close()
     path = os.path.join(out, 'selection.' + ('jpg' if jpg else 'png'))
-    ok_, buf = cv2.imencode(os.path.splitext(path)[1], canvas, [cv2.IMWRITE_JPEG_QUALITY, 95] if jpg else
-                            [cv2.IMWRITE_PNG_COMPRESSION, 6])
-    buf.tofile(path)
+    save_image(path, canvas, [cv2.IMWRITE_JPEG_QUALITY, 95] if jpg else [cv2.IMWRITE_PNG_COMPRESSION, 6],
+               "Export: saving")
     pitch = (a * px_um, b * px_um)
     info = dict(squares=[list(c) for c in sel], names=[list(g.name(i, j, num)) for i, j in sel],
                 numbering=num[2], pitch_um=list(pitch), turn_deg=g.cr.angle(),

@@ -9,7 +9,7 @@ from .config import (OBJECTIVES, Z_RANGE, z_limits, VID, PID, UM_PER_STEP, SENSO
 from .errors import SafetyError, LimitError, CommError, CameraError, FocusError, StopError
 from .control import ControlLock, stop_requested_after
 from .device import DeviceMemory
-from .util import Result, fmt
+from .util import Result, Progress, fmt
 
 AXES = ('x', 'y', 'z')
 ORIENTATION = ('map_flip_x', 'map_flip_y', 'arrows_flip_x', 'arrows_flip_y', 'turn_180', 'swap_xy', 'mirror_x', 'mirror_y', 'reverse_x', 'reverse_y', 'reverse_z')   # помнится для прибора
@@ -1315,11 +1315,13 @@ class Microscope:
         L.event('CAM-002', "White balance done.")
         return Result("White balance done")
 
-    def _average(self, n):
+    def _average(self, n, title="Averaging"):
         acc = None
-        for _ in range(n):
-            f = self.image().astype(np.float32)
-            acc = f if acc is None else acc + f
+        with Progress(n, title, unit='frames') as pr:
+            for _ in range(n):
+                f = self.image().astype(np.float32)
+                acc = f if acc is None else acc + f
+                pr.update(1)
         return acc / n
 
     def _save_ref(self, kind, img):
@@ -1337,7 +1339,7 @@ class Microscope:
         lvl = self.light
         self.light = 0
         try:
-            img = self._average(frames)
+            img = self._average(frames, "Dark frame")
         finally:
             self.light = lvl
         return self._save_ref('dark', img)
@@ -1345,7 +1347,7 @@ class Microscope:
     def empty_frame(self, frames=16):
         """Кадр однородного поля: наведите на пустой участок (чистая подложка), усредняются frames кадров.
         Неравномерность освещения — для коррекции снимков датасета."""
-        return self._save_ref('empty', self._average(frames))
+        return self._save_ref('empty', self._average(frames, "Empty frame"))
 
     # ---------------- фокус ----------------
     @property
@@ -1372,10 +1374,13 @@ class Microscope:
         совсем потерян."""
         self._need_cam()
         t0 = time.monotonic()
-        if wide:
-            r = F.run(self, self.focus_method, self.focus_range, self.focus_step)
-        else:
-            r = F.run_physics(self, self.focus_method, center_um=self.expected_z())
+        with Progress(10, "Focus", unit='pictures') as pr:     # число снимков уточняется по ходу
+            if wide:
+                r = F.run(self, self.focus_method, self.focus_range, self.focus_step, pr=pr)
+            else:
+                r = F.run_physics(self, self.focus_method, center_um=self.expected_z(), pr=pr)
+            pr.total = pr.done = max(1, pr.done)
+            pr.update(0, f"best Z {r['z_um'] - self._off['z']:.1f} um")
         weak = r['contrast'] < (WEAK_FOCUS if wide else 1.05)
         L.event('AF-001', f"Focused at Z {r['z_um']:.1f} um, sharpness {r['score']:.1f}, contrast {r['contrast']:.2f}, "
                           f"{r['points']} frames, {time.monotonic() - t0:.1f} s." + (" Weak peak." if weak else ""),

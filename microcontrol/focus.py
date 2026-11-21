@@ -34,7 +34,7 @@ def sharpness(img, method='laplacian', roi=0.5, down=2):
     return f(_prep(img, roi, down))
 
 
-def run(m, method, range_um, step_um, roi=0.5):
+def run(m, method, range_um, step_um, roi=0.5, pr=None):
     """Автофокус в два прохода.
     1) Грубо: сверху вниз по окну ±range с шагом step, резкость по уменьшенному кадру (крупные детали
        видны и при расфокусе, поэтому пик широкий и не проскакивается, даже если глубина резкости меньше шага).
@@ -51,6 +51,8 @@ def run(m, method, range_um, step_um, roi=0.5):
 
     def scan(zs, st, down):
         best, vals = (-np.inf, zs[0]), []
+        if pr:
+            pr.total = pr.done + len(zs) + (2 * s + 1 if st > 1 else 0) + 1
         for i, z in enumerate(zs):
             try:
                 m._go({'z': z})
@@ -62,6 +64,8 @@ def run(m, method, range_um, step_um, roi=0.5):
             v = sharpness(m.image(), method, roi, down)
             curve.append((z, v))
             vals.append(v)
+            if pr:
+                pr.update(1, f"{'wide search' if st > 1 else 'fine'}: Z {z * upp:.1f} um, sharpness {v:.3g}")
             if v > best[0]:
                 best = (v, z)
             if i >= 3 and z < best[1] - 2 * st and v < 0.6 * best[0]:
@@ -98,7 +102,7 @@ def _score(m, method, roi, frames=2):
     return v / frames
 
 
-def run_physics(m, method, center_um=None, half_um=None, step_um=None, roi=0.5, extend=2):
+def run_physics(m, method, center_um=None, half_um=None, step_um=None, roi=0.5, extend=2, pr=None):
     """Автофокус вокруг ожидаемого Z (по точкам фокуса или текущему).
     Окно ±half (по умолчанию 4 глубины резкости, не меньше 3 шагов мотора), шаг — половина глубины
     резкости, не меньше шага мотора. Проход всегда снизу вверх (люфт выбирается одинаково), пик уточняется
@@ -119,16 +123,20 @@ def run_physics(m, method, center_um=None, half_um=None, step_um=None, roi=0.5, 
         except LimitError:
             pass
         vals = []
+        if pr:
+            pr.total = pr.done + len(zs) + 1                  # +1: подход к лучшему Z
         for z in zs:
             m._go({'z': z})
             v = _score(m, method, roi)
             vals.append(v)
             curve.append((z, v))
+            if pr:
+                pr.update(1, f"{'window ' + str(k + 1) + ': ' if k else ''}Z {z * upp:.1f} um, sharpness {v:.3g}")
         i = int(np.argmax(vals))
         if max(vals) / max(min(vals), 1e-12) < 1.15:          # кривая плоская: фокус далеко — широкий поиск
             L.event('AF-004', "No focus peak in the narrow window: wide search.", 20)
             m._go({'z': c})
-            r = run(m, method, m.focus_range, m.focus_step, roi)
+            r = run(m, method, m.focus_range, m.focus_step, roi, pr=pr)
             r.update(dof_um=dof, step_um=s * upp, half_um=H * upp, wide=True)
             return r
         if 0 < i < len(zs) - 1 or k == extend:

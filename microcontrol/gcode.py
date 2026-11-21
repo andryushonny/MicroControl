@@ -170,14 +170,16 @@ def focus_plane(m, area):
     xs, ys = _points(area.x0, area.x1, step['x'] * m.focus_every), _points(area.y0, area.y1, step['y'] * m.focus_every)
     pts, weak = [], []
     m._plane = None
-    pr = Progress(len(xs) * len(ys), "Focus plane")
-    for j, y in enumerate(ys):
-        for x in (xs if j % 2 == 0 else xs[::-1]):
-            m._travel(x=x, y=y)
-            f = m.focus()
-            (weak if 'Note' in f else pts).append(tuple(m.real_position))   # плоскость — в машинных координатах
-            pr.update(1, f"Z {m.position.z:.0f} um")
-    pr.close()
+    with Progress(len(xs) * len(ys), "Focus plane", unit='points') as pr:
+        for j, y in enumerate(ys):
+            for x in (xs if j % 2 == 0 else xs[::-1]):
+                k_ = pr.done + 1
+                pr.update(0, f"point {k_} of {pr.total}: moving to X {x:.0f}, Y {y:.0f} um")
+                m._travel(x=x, y=y)
+                pr.update(0, f"point {k_} of {pr.total}: focusing")
+                f = m.focus()
+                (weak if 'Note' in f else pts).append(tuple(m.real_position))   # плоскость — в машинных координатах
+                pr.update(1, f"last Z {m.position.z:.1f} um" + (" (weak peak)" if 'Note' in f else ""))
     m._travel(x=area.x0, y=area.y0)                     # вернуться к первому кадру зоны
     if not pts:                                          # нигде нет деталей — плоскость строить не по чему
         raise FocusError('E603', f"All {len(weak)} focus points had no clear focus peak. "
@@ -333,10 +335,18 @@ def run(m, program, save=None, notes='', folder=None, extra=None, reuse=False):
     if rec and focus_mode and n_pic:
         expect, src = TM.estimate(m, n_pic, focus_mode)
         print(f"Expected time {TM.fmt(expect)} for {n_pic} frames ({src})")
-    pr = Progress(len(cmds), "Scan" if rec else "G-code", expect) if (rec or len(cmds) > 20) else None
+    def weight(c):                                      # доля времени команды: фокус ~ 8 кадров, плоскость — по точкам
+        if c == 'G29' and area is not None:
+            st_ = m._frame_step()
+            return 8 * len(_points(area.x0, area.x1, st_['x'] * m.focus_every)) * len(_points(area.y0, area.y1, st_['y'] * m.focus_every))
+        return {'G30': 8, 'M240': 3, 'G28': 20}.get(c, 1)
+    wts = [weight(c) for _, c, _ in cmds]
+    pr = Progress(sum(wts), "Scan" if rec else "G-code", expect, unit=None) if (rec or len(cmds) > 20) else None
     report = []
     try:
-        for n, c, p in cmds:
+        for k_, (n, c, p) in enumerate(cmds):
+            if pr:
+                pr.step = wts[k_]
             L.debug('GC-002', f"{n}: {'G53 ' if p.get('_machine') else ''}{c} " + " ".join(f"{k}{v:g}" for k, v in p.items() if k != '_machine'))
             if c in ('G0', 'G1'):
                 cur = dict(zip('xyz', m.position))
@@ -362,7 +372,8 @@ def run(m, program, save=None, notes='', folder=None, extra=None, reuse=False):
             elif c == 'G30':
                 m.focus()
             elif c == 'G29':
-                print(focus_plane(m, area))
+                res_ = focus_plane(m, area)
+                pr.write(str(res_)) if pr else print(res_)
             elif c == 'M420':
                 if p.get('S', 1) == 0:
                     m._plane_off, m._plane = m._plane, None
@@ -376,7 +387,7 @@ def run(m, program, save=None, notes='', folder=None, extra=None, reuse=False):
                 m.light = int(p.get('P', 5)) if p.get('S', 1) else 0
             elif c == 'M114':
                 report.append(str(m.position))
-                print(f"Position  {m.position}")
+                pr.write(f"Position  {m.position}") if pr else print(f"Position  {m.position}")
             elif c == 'M240':
                 if rec:
                     rec.picture(int(p['R']) if 'R' in p else None, int(p['C']) if 'C' in p else None)
@@ -384,7 +395,7 @@ def run(m, program, save=None, notes='', folder=None, extra=None, reuse=False):
                     m.photo()
             done += 1
             if pr:
-                pr.update(1, f"Frames {rec.n}" if rec else '')
+                pr.update(wts[k_], (f"frame {rec.n} of {n_pic}" if rec.n else "") if rec else f"line {n} of {cmds[-1][0]}")
     except KeyboardInterrupt:
         status = f"stopped at line {cmds[done][0] if done < len(cmds) else '-'}"
     except Exception as e:

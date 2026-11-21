@@ -33,13 +33,13 @@ def flatfield(st, n=60, down=4, verbose=False):
     fix, st.fix = getattr(st, 'fix', None), None              # считать по сырым кадрам
     gains, st.gains = getattr(st, 'gains', None), None
     from .util import Progress
-    pr = Progress(len(ids), "Stitch: light field") if verbose else None
+    pr = Progress(len(ids), "Stitch: light", unit='frames') if verbose else None
     try:
         stack = []
         for i in ids:
-            if pr:
-                pr.update()
             g = np.ascontiguousarray(st.frame(int(i)))
+            if pr:
+                pr.update(1, f"light field from frame {int(i) + 1}")
             g = cv2.resize(g, None, fx=1 / down, fy=1 / down, interpolation=cv2.INTER_AREA).astype(np.float32)
             med = np.median(g.reshape(-1, g.shape[2]) if g.ndim == 3 else g.ravel(), 0)
             stack.append(g / np.maximum(med, 1.0))
@@ -62,15 +62,15 @@ def frame_gains(st, pos, W, H, down=8, lam=0.05, verbose=False):
     if n < 2:
         return None
     from .util import Progress
-    pr = Progress(n, "Stitch: brightness") if verbose else None
+    pr = Progress(n, "Stitch: brightness", unit='frames') if verbose else None
     small = []
     for i in range(n):
         f = np.ascontiguousarray(st.frame(i))
         small.append(cv2.resize(f, (max(1, W // down), max(1, H // down)), interpolation=cv2.INTER_AREA))
         if pr:
-            pr.update()
+            pr.update(1, "reading overlaps")
     if pr:
-        pr.close()
+        pr.stage("solving frame gains")
     C = small[0].shape[2] if small[0].ndim == 3 else 1
     pos = np.asarray(pos, float)
     rows, rhs = [], []
@@ -95,6 +95,8 @@ def frame_gains(st, pos, W, H, down=8, lam=0.05, verbose=False):
             rows.append((a, b))
             rhs.append(np.log(mb) - np.log(ma))
     if not rows:
+        if pr:
+            pr.close()
         return None
     M = np.zeros((len(rows) + n, n))
     for k, (a, b) in enumerate(rows):
@@ -102,6 +104,9 @@ def frame_gains(st, pos, W, H, down=8, lam=0.05, verbose=False):
     M[len(rows):] = np.eye(n) * lam
     R = np.vstack([np.array(rhs), np.zeros((n, C))])
     lg, *_ = np.linalg.lstsq(M, R, rcond=None)
+    if pr:
+        pr.stage(f"{len(rows)} overlaps, gains solved")
+        pr.close()
     lg -= np.median(lg, 0)                                     # средний кадр — без изменений
     return np.exp(np.clip(lg, -0.7, 0.7)).astype(np.float32)
 
@@ -193,7 +198,10 @@ def measure_distortion(folder, save=True):
     c = np.array([W / 2, H / 2])
     Rd = float(np.hypot(W / 2, H / 2))
     E, X = [], []
+    from .util import Progress
+    pr = Progress(len(st), "Distortion", unit='frames')
     for k in range(len(st)):
+        pr.update(1, f"crosses found: {len(E)}")
         lo, hi = P[k] + r * 2, P[k] + (W, H) - r * 2
         pts = [(i, j) for i, j in g.cells_range(lo, hi)
                if np.all(g.cr.point(i, j) >= lo) and np.all(g.cr.point(i, j) <= hi)]
@@ -223,6 +231,7 @@ def measure_distortion(folder, save=True):
         E.append(d_ - d_.mean(0))
         X.append(np.stack([v - v.mean(0), np.c_[-v[:, 1], v[:, 0]] - np.c_[-v[:, 1], v[:, 0]].mean(0),
                            f - f.mean(0)], -1))             # масштаб и поворот решётки — отдельно от дисторсии
+    pr.close()
     st.close()
     if not E:
         raise ValueError("No frame with 2 or more crosses found.")

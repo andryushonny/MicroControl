@@ -19,7 +19,7 @@ import numpy as np
 import cv2
 from . import log as L
 from .storage import ScanData, meta_A, _thumb
-from .util import Result, Progress
+from .util import Result, Progress, save_image
 
 
 def _gray(a):
@@ -189,25 +189,28 @@ def _builtin(st, pred, p, W, H, max_shift, sigma, alpha, verbose):
         return pred.copy(), dict(pairs=0, accepted=0, note="frames do not overlap: positions from the stage")
     # 2) сдвиги
     meas, err = [], []
-    pr = Progress(len(pairs), "Stitch: seams") if verbose else None
-    for a, b in pairs:
+    nf = min(300, 3 * len(pairs))
+    pr = Progress(len(pairs) + nf, "Stitch: seams", unit='comparisons') if verbose else None
+    for k_, (a, b) in enumerate(pairs):
         dt, e = _pair(st, a, b, pred[b] - pred[a], W, H, pad, sigma, max_shift)
         meas.append(pred[b] - pred[a] if dt is None else dt); err.append(e)
         if pr:
-            pr.update(1)
-    if pr:
-        pr.close()
+            pr.update(1, f"seam {k_ + 1} of {len(pairs)}: frames {a + 1} + {b + 1}")
     meas, err = np.array(meas), np.array(err)
     # 3) тест перестановок: та же геометрия, но вместо соседа — далёкий кадр (заведомо ложная пара)
     rng = np.random.default_rng(0)
     fake = []
-    for _ in range(min(300, 3 * len(pairs))):
+    for f_ in range(nf):
+        if pr:
+            pr.update(1, f"false-match test {f_ + 1} of {nf}")
         a, b = pairs[rng.integers(len(pairs))]
         c = int(rng.integers(n))
         dc = np.abs(pred[c] - pred[a])
         if c in (a, b) or (dc[0] < 1.5 * W and dc[1] < 1.5 * H):
             continue
         fake.append(_pair(st, a, b, pred[b] - pred[a], W, H, pad, sigma, 1e9, other=c)[1])
+    if pr:
+        pr.stage("solving frame positions")
     thr = float(np.quantile(fake, alpha)) if len(fake) >= 20 else 0.7
     ok = err < min(thr, 0.99)
     # 4) модель столик -> пиксели по принятым парам: d = A·Δp
@@ -250,6 +253,9 @@ def _builtin(st, pred, p, W, H, max_shift, sigma, alpha, verbose):
         res = np.hypot(*(pos[J] - pos[I] - meas).T)
         w = w0 / (1.0 + (res / cs) ** 2)
     keep = (w0 > 0) & (res < 3.0)
+    if pr:
+        pr.stage(f"{int(keep.sum())} of {len(pairs)} seams accepted")
+        pr.close()
     res_k = res[keep] if keep.any() else np.array([np.nan])
     R_ = np.linalg.solve(Ast, model)                              # поворот камеры относительно принятой ориентации
     ang = np.degrees(np.arctan2(R_[1, 0] - R_[0, 1], R_[0, 0] + R_[1, 1]))
@@ -330,12 +336,12 @@ def make_preview(folder, pos=None, max_side=4000, levels=True, verbose=False):
     sw, sh = max(1, int(math.ceil(W * k)) + 1), max(1, int(math.ceil(H * k)) + 1)   # с нахлёстом: без щелей
     thumbs = [None] * len(st) if (levels and st.index[0].get('file')) else None   # JPG-кадры: превью для view
     n = len(st)
-    pr = Progress(n + 2, "Stitch: saving") if verbose else None   # кадры + thumbs + preview_all.jpg
+    pr = Progress(n + 2, "Stitch: saving", unit='files') if verbose else None   # кадры + thumbs + preview_all.jpg
     from concurrent.futures import ThreadPoolExecutor
     pool, jobs = ThreadPoolExecutor(max_workers=3), []
     for i, img in st.frames():
         if pr:
-            pr.update(text=f"frame {i + 1}/{n}")
+            pr.update(1, f"frame {i + 1} of {n}: preview and 3 small copies")
         if levels:                                          # уровни пишутся в фоне (кодирование JPG — в потоках)
             while len(jobs) > 6:
                 jobs.pop(0).result()
@@ -347,21 +353,20 @@ def make_preview(folder, pos=None, max_side=4000, levels=True, verbose=False):
         x, y = int(pos[i, 0] * k), int(pos[i, 1] * k)
         out[y:y + sh, x:x + sw] = t[:out.shape[0] - y, :out.shape[1] - x]
     if pr and jobs:
-        pr.update(0, text="writing the last frames", force=True)
+        pr.stage("writing the last small copies")
     for j in jobs:
         j.result()
     pool.shutdown()
     if pr:
-        pr.update(0, text="thumbs.npz", force=True)
+        pr.stage("viewer/thumbs.npz")
     if thumbs is not None:
         np.savez(os.path.join(folder, 'viewer', 'thumbs.npz'), **{f"t{i}": a for i, a in enumerate(thumbs)})
     if pr:
-        pr.update(1, text=f"preview_all.jpg {out.shape[1]}x{out.shape[0]}", force=True)
+        pr.stage(f"join/preview_all.jpg, {out.shape[1]} x {out.shape[0]} px", 1)
     path = os.path.join(folder, 'join', 'preview_all.jpg')
-    ok, buf = cv2.imencode('.jpg', out, [cv2.IMWRITE_JPEG_QUALITY, 90])
-    buf.tofile(path)
+    save_image(path, out, [cv2.IMWRITE_JPEG_QUALITY, 90], pr=pr)
     if pr:
-        pr.update(1, text="done" + " " * 30, force=True)
+        pr.stage("saved", 1)
         pr.close()
     st.close()
     return path

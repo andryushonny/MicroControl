@@ -301,13 +301,17 @@ class ScanData:
         os.makedirs(out, exist_ok=True)
         lines = ["dim = 2"]
         A = meta_A(self.meta, self.shape[1], self.shape[0])
+        from .util import Progress
+        pr = Progress(len(self) if ids is None else len(ids), "Export frames", unit='frames')
         for i, img in self.frames(ids, crop):
             r = self.index[i]
             fn = f"t{i:05d}." + fmt
             imwrite(os.path.join(out, fn), img)
+            pr.update(1, fn)
             if A is not None:                              # позиция в px по масштабу кадра
                 px, py = -(A @ (r['x_p'], r['y_p']))
                 lines.append(f"{fn}; ; ({px:.2f}, {py:.2f})")
+        pr.close()
         if A is not None:
             with open(os.path.join(out, 'TileConfiguration.txt'), 'w', encoding='utf-8') as f:
                 f.write("\n".join(lines) + "\n")

@@ -14,7 +14,7 @@ from . import log as L
 from .core import imwrite
 from .errors import StoreError
 from .storage import ScanData, meta_A
-from .util import Result, Progress
+from .util import Result, Progress, save_image
 
 
 def _gray(a):
@@ -102,7 +102,7 @@ def join(folder, ids=None, x=None, y=None, center=None, scale=None, flatfield=No
 
     # --- 2) пары соседей (векторно) и уточнение по полосам перекрытия ---
     pairs = []
-    pr = Progress(n, "Join: matching")
+    pr = Progress(n, "Join: matching", unit='frames')
     for a in range(n):
         pr.update(1)
         d = pred[a + 1:] - pred[a]
@@ -177,7 +177,7 @@ def join(folder, ids=None, x=None, y=None, center=None, scale=None, flatfield=No
     ry = np.minimum(np.arange(sh) + 1, sh - np.arange(sh)).astype(np.float32)
     wt = (np.outer(ry, rx) if blend else np.ones((sh, sw), np.float32))[..., None]
     where = {int(i): k for k, i in enumerate(ids)}
-    pr = Progress(n, "Join: blending")
+    pr = Progress(n, "Join: blending", unit='frames')
     for i, t in st.frames(ids):
         pr.update(1)
         x0, y0 = P[where[i]]
@@ -198,13 +198,7 @@ def join(folder, ids=None, x=None, y=None, center=None, scale=None, flatfield=No
     os.makedirs(out_dir, exist_ok=True)
     if fmt == 'jpg' and max(mosaic.shape[:2]) > 65000:                 # предел формата JPG
         fmt = 'png'
-    if fmt == 'jpg':
-        p_ = os.path.join(out_dir, f"mosaic_{tag}.jpg")
-        ok, buf = cv2.imencode('.jpg', mosaic, [cv2.IMWRITE_JPEG_QUALITY, 92])
-        buf.tofile(p_)
-        out = p_
-    else:
-        out = imwrite(os.path.join(out_dir, f"mosaic_{tag}.png"), mosaic)
+    out = save_image(os.path.join(out_dir, f"mosaic_{tag}.{fmt if fmt == 'jpg' else 'png'}"), mosaic, None, "Join: saving")
     k = 3000 / max(mosaic.shape[:2])
     imwrite(os.path.join(out_dir, f"preview_{tag}.jpg"),
             cv2.resize(mosaic, None, fx=k, fy=k, interpolation=cv2.INTER_AREA) if k < 1 else mosaic)

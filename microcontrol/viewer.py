@@ -336,7 +336,7 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
     smp = P_.sample_obj(folder)                             # образец этой съёмки (если она в проекте)
 
     def show(img):
-        ttl = (smp.title + (f"  —  {smp.description}" if smp.description else "")) if smp else os.path.basename(folder)
+        ttl = (smp.title + f"  [{smp.project.uid}]" + (f"  —  {smp.description}" if smp.description else "")) if smp else os.path.basename(folder)
         bar, menu['hits'] = UI.menu_bar(img.shape[1], ttl, ["Open", "Scans", "Info", "Help"], menu['hover'])
         cv2.imshow(WIN, np.vstack([bar, img]))
 
@@ -370,7 +370,7 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
                 if smp is None:
                     st['msg'] = f"Scan {folder} (not in a project)"
                     return
-                lines = [f"Project    {smp.project.name}", f"Sample     {smp.name}",
+                lines = [f"Project    {smp.project.name}   (id {smp.project.uid})", f"Sample     {smp.name}",
                          f"This scan  {os.path.relpath(folder, smp.folder)}",
                          f"Frames     {len(sc.st)}", f"Scans      {len(P_.all_scans(smp.folder))}"]
                 r_ = D.describe(smp.title, lines, [("Project description", smp.project.description),

@@ -58,6 +58,33 @@ def new_project(title="New project", name_label="Name", desc_label="Short descri
     return out.get('r')
 
 
+def ask(title, label, value=''):
+    """Одна строка текста -> строка или None."""
+    import tkinter as tk
+    root = _root()
+    w = _win(root, title)
+    out = {}
+    tk.Label(w, text=label).pack(anchor='w', padx=10, pady=(10, 2))
+    e = tk.Entry(w, width=32)
+    e.insert(0, value)
+    e.pack(padx=10, fill='x')
+
+    def ok(*_):
+        if e.get().strip():
+            out['r'] = e.get().strip()
+            root.quit()
+    b = tk.Frame(w)
+    b.pack(pady=10)
+    tk.Button(b, text="Open", width=12, command=ok).pack(side='left', padx=5)
+    tk.Button(b, text="Cancel", width=12, command=root.quit).pack(side='left', padx=5)
+    w.bind('<Return>', ok)
+    w.protocol("WM_DELETE_WINDOW", root.quit)
+    e.focus_set()
+    root.mainloop()
+    root.destroy()
+    return out.get('r')
+
+
 def choose(title, rows, current=None, buttons=("Open",), extra=None):
     """Список строк -> (кнопка, индекс) или None. extra — подпись сверху."""
     import tkinter as tk

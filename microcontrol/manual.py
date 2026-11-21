@@ -677,7 +677,7 @@ def _run(m, fullscreen=False, _keys=None):
 
     def menu_img(W_):
         sm_ = m.sample
-        img_, menu['hits'] = UI.menu_bar(W_, f"{sm_.title}" + (f"  —  {sm_.description}" if sm_.description else ""),
+        img_, menu['hits'] = UI.menu_bar(W_, f"{sm_.title}  [{sm_.project.uid}]" + (f"  —  {sm_.description}" if sm_.description else ""),
                                          MENU, menu['hover'])
         return img_
 
@@ -692,15 +692,27 @@ def _run(m, fullscreen=False, _keys=None):
         try:
             if item == "Open":
                 ss = P_.all_samples(m.folder)
-                rows = [f"{x.title:<44} {len(x.data.get('selections', [])):>3} sel  {len(P_.all_scans(x.folder)):>3} scans   "
-                        f"{x.description}" for x in ss]
+                rows = [f"{x.project.uid}  {x.title:<44} {len(x.data.get('selections', [])):>3} sel  "
+                        f"{len(P_.all_scans(x.folder)):>3} scans   {x.description}" for x in ss]
                 cur = next((i for i, x in enumerate(ss) if x == m.sample), None)
-                r_ = D.choose("Open a sample (project / sample)", rows, cur, ("Open", "New project...", "New sample..."))
+                r_ = D.choose("Open a sample (project id, project / sample)", rows, cur,
+                              ("Open", "By project id...", "New project...", "New sample..."))
                 if r_ is None:
                     return
                 if r_[0] == "Open":
                     m.sample = ss[r_[1]]
                     msg = f"Opened {m.sample.title}: {len(m._regions)} selections"
+                elif r_[0].startswith("By project id"):
+                    u_ = D.ask("Open a project by its id", "Project id (4-5 characters, e.g. k3f9x)")
+                    if not u_:
+                        return
+                    if P_.by_uid(u_, m.folder) is None:
+                        msg = f"No project with id {u_}"
+                        return
+                    pj = P_.Project(u_, folder=m.folder)
+                    sms = sorted(pj.samples, key=lambda x: x.data.get('updated', ''))
+                    m.sample = sms[-1] if sms else pj.sample("Sample 1")
+                    msg = f"Opened {m.sample.title} [{pj.uid}]: {len(m._regions)} selections"
                 else:
                     return menu_do(r_[0].rstrip('.'))
             elif item == "New project":
@@ -723,7 +735,7 @@ def _run(m, fullscreen=False, _keys=None):
                 sm_ = m.sample
                 from collections import Counter
                 objs = Counter(r.get('obj') for r in m._regions)
-                lines = [f"Project    {sm_.project.name}", f"Sample     {sm_.name}",
+                lines = [f"Project    {sm_.project.name}   (id {sm_.project.uid})", f"Sample     {sm_.name}",
                          "Selections " + (", ".join(f"{n} x {o}x" for o, n in sorted(objs.items())) or "none"),
                          f"Scans      {len(P_.all_scans(sm_.folder))}", f"Created    {sm_.data.get('created', '')}",
                          f"Folder     {sm_.folder}"]

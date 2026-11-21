@@ -350,11 +350,14 @@ class Microscope:
             lp = P_.last(self.folder)
             pj = project if isinstance(project, P_.Project) else \
                 P_.Project(project or (lp[0] if lp else "Project 1"), folder=self.folder)
-            sm = pj.sample(sample or (lp[1] if lp and not project and lp[0] == os.path.basename(pj.folder) else "Sample 1"))
+            sms = sorted(pj.samples, key=lambda x: x.data.get('updated', ''))    # проект по имени или id: его недавний образец
+            sm = pj.sample(sample) if sample else \
+                pj.sample(lp[1]) if lp and not project and lp[0] == os.path.basename(pj.folder) else \
+                sms[-1] if sms else pj.sample("Sample 1")
         self._use(sm)
         r = Result("Connected", Port=self.port, Objective=f"{objective}x",
                    Camera="Yes" if self.cam else "No", Log=self.log_file,
-                   Sample=f"{self._sample.title}" + (f" — {self._sample.description}" if self._sample.description else "")
+                   Sample=f"{self._sample.title}  [project id {self.project.uid}]" + (f" — {self._sample.description}" if self._sample.description else "")
                    + f"   ({len(self._regions)} selections)")
         if self._mem.home:
             r['Home'] = f"set {self._mem.home['time']}"
@@ -1630,7 +1633,7 @@ class Microscope:
             n0 += len(pts)
             kk = self._regions.index(reg)
             pk = _par(self, kk)
-            extra = dict(sample_index=reg['num'], selection=reg['num'], sample_uid=reg['uid'], project_name=self.project.name, sample_name=self._sample.name,
+            extra = dict(sample_index=reg['num'], selection=reg['num'], sample_uid=reg['uid'], project_name=self.project.name, project_uid=self.project.uid, sample_name=self._sample.name,
                          focus_points=nums, area_real_um=[*reg['A'], *reg['B']])
             if pk is not None:
                 extra.update(parent_uid=self._regions[pk]['uid'], parent_selection=self._regions[pk]['num'],

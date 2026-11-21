@@ -85,7 +85,8 @@ m.close()
 工作按以下方式分组：**项目**（一项工作，带描述）→ **样品**（载物台上的一块基底：有自己的选区和坐标、描述）→ **选区**（某一物镜下的区域；图层：地图 10x > 细节 50x > 100x）→ **拍摄**（每次拍摄选区都是新版本）→ 网格、选中的方格、图纸。选区保存在样品中，再次打开样品时会恢复；地图上的选中方格、`m.list()` 和查看器只显示当前打开的样品。右侧列表中，选中方格的每个闭合图形都是单独的卡片（*Mask N.k*，颜色比所属选区深几度），可单独删除；卡片可拖动调整顺序，列表可滚动。
 
 ```python
-p = mc.Project("Graphene", "flakes for transport")   # 打开或创建
+p = mc.Project("Graphene", "flakes for transport")   # 打开或创建；p.uid —— 简短 id，例如 "k3f9x"
+p = mc.Project("k3f9x")                              # 按 id 打开已有项目
 s = p.sample("Chip 1", "SiO2 285 nm")                # 项目中的样品：打开或创建
 m.sample = s                                        # 使用该样品（其选区会恢复）
 p.samples, s.selections, s.selections[0].scans, s.selections[0].latest.view()

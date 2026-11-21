@@ -43,7 +43,8 @@ CONNECT
   m.close()                        Disconnect (light and laser go off)
 
 PROJECTS (Project > Sample > Selection > Scan)
-  p = mc.Project("Graphene", "about")   Open or create a project (projects/<name>/)
+  p = mc.Project("Graphene", "about")   Open or create a project (projects/<name>/); p.uid -- its short id
+  p = mc.Project("k3f9x")              Open an existing project by its id (also Microscope(project="k3f9x"))
   s = p.sample("Chip 1", "about")      A sample of it (one substrate): open or create
   m = mc.Microscope(sample=s)          Work with it (or m.sample = s); its selections come back
   mc.projects(), mc.all_samples()      What is there;  p.samples, s.selections, s.scans()

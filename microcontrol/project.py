@@ -10,7 +10,8 @@
     <папка>/projects/<Проект>/samples/<Образец>/selections/S01_10x/scans/<дата>/   съёмки
     <папка>/projects/<Проект>/samples/<Образец>/photos/              отдельные снимки (Пробел)
 
-    p = mc.Project("Graphene", "flakes on SiO2")    # открыть или создать
+    p = mc.Project("Graphene", "flakes on SiO2")    # открыть или создать; p.uid — короткий id ("k3f9x")
+    p = mc.Project("k3f9x")                         # открыть имеющийся проект по id
     s = p.sample("Chip 1", "285 nm oxide")          # образец проекта: открыть или создать
     m = mc.Microscope(objective=10, sample=s)        # или потом: m.sample = s
     s.selections, s.scans(), s.selections[0].latest.view()
@@ -86,13 +87,45 @@ class _Node:
         return f"{type(self).__name__} '{self.name}'" + (f" — {self.description}" if self.description else "")
 
 
+UID_ABC = '23456789abcdefghjkmnpqrstuvwxyz'                          # без 0 1 i l o: не спутать
+
+
+def by_uid(uid, folder='.'):
+    """Папка проекта с коротким id uid (без учёта регистра) или None."""
+    u = str(uid or '').strip().lower()
+    if not re.fullmatch(r'[0-9a-z]{4,5}', u):
+        return None
+    for f in glob.glob(os.path.join(root(folder), '*', 'project.json')):
+        try:
+            if json.load(open(f, encoding='utf-8')).get('uid', '').lower() == u:
+                return os.path.dirname(f)
+        except (OSError, ValueError):
+            pass
+    return None
+
+
+def _new_uid(folder):
+    import secrets
+    while True:
+        u = ''.join(secrets.choice(UID_ABC) for _ in range(5))
+        if by_uid(u, folder) is None:
+            return u
+
+
 class Project(_Node):
-    """Проект: Project("Имя", "описание") — открыть или создать в <folder>/projects/."""
+    """Проект: Project("Имя", "описание") — открыть или создать в <folder>/projects/.
+    Project("k3f9x") — открыть уже имеющийся проект по его короткому id (p.uid, 5 символов)."""
     FILE = 'project.json'
 
     def __init__(self, name, description=None, folder='.', create=True):
-        super().__init__(os.path.join(root(folder), safe(name)), name, description, create)
+        f_ = by_uid(name, folder) if not os.path.exists(os.path.join(root(folder), safe(name), self.FILE)) else None
+        super().__init__(f_ or os.path.join(root(folder), safe(name)), name, description, create)
         self.base = os.path.abspath(folder)
+        if not self.data.get('uid'):                                      # короткий id — один раз, навсегда
+            self.data['uid'] = _new_uid(folder)
+            self.save()
+
+    uid = property(lambda s: s.data.get('uid'))
 
     @property
     def samples(self):
@@ -108,7 +141,8 @@ class Project(_Node):
 
     def __repr__(self):
         n = len(self.samples)
-        return super().__repr__() + f"  ({n} sample{'s' if n != 1 else ''})"
+        return f"Project '{self.name}' [{self.uid}]" + (f" — {self.description}" if self.description else "") + \
+            f"  ({n} sample{'s' if n != 1 else ''})"
 
 
 class Sample(_Node):

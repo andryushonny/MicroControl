@@ -122,7 +122,7 @@ $$K = \begin{pmatrix} 0 & k_y \\ k_x & 0 \end{pmatrix},\qquad k_{x,y} = \mp\frac
 where $p$ is the pixel size on the sample and the signs are set by `mirror_x`, `mirror_y`; the frame size in stage axes is $(h, w)$ instead of $(w, h)$. The ATR8300 camera image is upside down (mirrored in both axes); `m.turn_180` (`True` by default on the instrument) turns it by 180° when shooting, and $K$ changes sign, so the arrow directions on the screen stay the same. The orientation parameters (`turn_180`, `swap_xy`, `mirror_*`, `reverse_*`) are remembered for each microscope by its serial number (section 16).
 
 **Micrometres to steps.** A requested move $\Delta$ (µm) becomes an integer number of steps
-$$N = \operatorname{round}\!\left(\frac{\Delta}{\delta}\right),\qquad |N\delta - \Delta| \le \frac{\delta}{2} \approx 2.8\ \text{µm}.$$
+$$N = \mathrm{round}\!\left(\frac{\Delta}{\delta}\right),\qquad |N\delta - \Delta| \le \frac{\delta}{2} \approx 2.8\ \text{µm}.$$
 If $|N\delta - \Delta| > 0.05$ µm, the reply reports the actual move. A move $|\Delta| < \delta/2$ (giving $N = 0$) is refused (error `E214`), and so is a zero move (`E213`).
 
 ---
@@ -136,9 +136,9 @@ Virtual COM port: 115 200 bit/s, 8 data bits, no parity, 1 stop bit. DTR and RTS
 ### 5.2. Frame
 
 Every command and every reply is a frame
-$$\texttt{AA}\ \texttt{55}\ \ L_{hi}\ L_{lo}\ \ C\ \ D_1 \dots D_n\ \ S,$$
+$$\mathtt{AA}\ \mathtt{55}\ \ L_{hi}\ L_{lo}\ \ C\ \ D_1 \dots D_n\ \ S,$$
 where $C$ is the command code, $D_1\dots D_n$ the data, $L = n + 4$ the length (2 bytes, high byte first), $S$ the checksum:
-$$S = \left(L_{hi} + L_{lo} + C + \sum_{i=1}^{n} D_i\right) \bmod 256.$$
+$$S = \left(L_{hi} + L_{lo} + C + \sum_{i=1}^{n} D_i\right) \mathrm{mod} 256.$$
 The full frame length is $L + 2$ bytes. Example: serial number request `AA 55 00 04 04 08`, $S = 00 + 04 + 04 = 08$.
 
 The reply repeats the command code and carries the data. The controller replies 1–4 ms after receiving a command, **before the motion ends**: a reply to a motion command means "command accepted", not "move finished".
@@ -343,10 +343,10 @@ Sharpness is computed on the central half of the frame (each side), converted to
 
 | `focus_method` | Measure $F$ |
 |---|---|
-| `laplacian` (default) | $\operatorname{Var}\!\left(\nabla^2 I\right)$ — variance of the Laplacian |
+| `laplacian` (default) | $\mathrm{Var}\!\left(\nabla^2 I\right)$ — variance of the Laplacian |
 | `tenengrad` | $\langle G_x^2 + G_y^2 \rangle$, $G_{x,y}$ — Sobel gradients |
 | `brenner` | $\langle (I(x+2, y) - I(x, y))^2 \rangle$ |
-| `variance` | $\operatorname{Var}(I) / \langle I \rangle$ — normalised variance |
+| `variance` | $\mathrm{Var}(I) / \langle I \rangle$ — normalised variance |
 
 ### 9.2. Wide search
 
@@ -358,7 +358,7 @@ The depth of field may be smaller than the search step (10x: about 8 µm with a 
 The stage approaches the best position from above: it first rises $s_f$ higher, then goes down. This removes the mechanism backlash.
 
 **Peak contrast**
-$$C = \frac{F_{\max}}{\operatorname{median}(F)}$$
+$$C = \frac{F_{\max}}{\mathrm{median}(F)}$$
 over the coarse pass points. With $C < 1.3$ the maximum is considered uncertain (few details in the frame): the reply has a warning and the log a WARNING record.
 
 Default window and step:
@@ -401,7 +401,7 @@ the 0.05 tolerance avoids an extra frame due to rounding. The path is a "snake" 
 Points with contrast $C < 1.3$ are not used for the plane (the number skipped is reported). With fewer than three good points the plane is horizontal; with none the scan does not start (`E603`). If the points deviate from the plane by more than `focus_step`, `focus='each'` is recommended.
 
 **Re-shooting blurred frames** (`refocus=True`). Frame $k$ is blurred if
-$$F_k < 0.5\,\operatorname{median}(F_{k-20}, \dots, F_{k-1})$$
+$$F_k < 0.5\,\mathrm{median}(F_{k-20}, \dots, F_{k-1})$$
 (with at least 5 previous frames). Such a frame is shot again after autofocus; the flags `refocused` and `blurry` are written to `index.csv`.
 
 ### 10.3. Execution
@@ -462,7 +462,7 @@ The method follows ASHLAR (Muhlich et al., *Bioinformatics* 38, 4613, 2022; MIT 
 1. **Neighbours** — pairs of frames whose rectangles predicted by the stage overlap by at least 30 % of the largest overlap (diagonal corners are dropped).
 2. **Pair shift** — phase correlation over the common part of the frames. The strips are filtered by a Laplacian of Gaussian ($\sigma = 1$ px for a pixel < 0.5 µm: details stay, the smooth background goes), multiplied by a Hann window and zero-padded twice (no wrap-around of the correlation). The seam error $e = 1 - \mathrm{NCC}$ after alignment. A shift farther than `max_shift_um` = 40 µm from the prediction is dropped.
 3. **Permutation test.** The same geometry, but a distant frame instead of the neighbour: errors of surely false pairs. The threshold is their 1st percentile.
-4. **Stage → pixels model** from the accepted seams: $\mathbf{d}_{ij} = M\,\Delta\mathbf{p}_{ij} + B\,\Delta\mathbf{s}_{ij}$. $M$ ($2\times2$) accounts for the camera rotation relative to the stage axes, an inexact motor step and skew; $\mathbf{s}_k = (\operatorname{sign}\Delta x, \operatorname{sign}\Delta y)$ is the side from which the stage approached frame $k$, $B$ the backlash (offset when the direction changes, reported in µm). A frame without reliable seams is placed by this model.
+4. **Stage → pixels model** from the accepted seams: $\mathbf{d}_{ij} = M\,\Delta\mathbf{p}_{ij} + B\,\Delta\mathbf{s}_{ij}$. $M$ ($2\times2$) accounts for the camera rotation relative to the stage axes, an inexact motor step and skew; $\mathbf{s}_k = (\mathrm{sign}\Delta x, \mathrm{sign}\Delta y)$ is the side from which the stage approached frame $k$, $B$ the backlash (offset when the direction changes, reported in µm). A frame without reliable seams is placed by this model.
 5. **Positions** — weighted least squares
 $$\min \sum_{(i,j)} w_{ij}\,\bigl|\mathbf{r}_j - \mathbf{r}_i - \mathbf{d}_{ij}\bigr|^2 + \varepsilon\sum_i \bigl|\mathbf{r}_i - M\mathbf{p}_i\bigr|^2,\qquad \varepsilon = 0.01,$$
 with outlier suppression: $w_{ij} = w^0_{ij}/\bigl(1 + (\rho_{ij}/c)^2\bigr)$, $\rho$ the seam residual, $c$ decreasing from $\infty$ to 2 px (first a rough solution, then inconsistent seams lose weight). $w^0 = 1 - e$. A frame without reliable seams is held by the stage model.
@@ -911,7 +911,6 @@ photos/<date>/          pictures
 references/             reference frames (16 bit)
 scans/                  scans (section 11)
 demo/                   demo programs (section 23)
-tools/                  AtrSniffer exchange recorder and its instructions
 
 ~/.microcontrol/devices/   home, last position, orientation and lens distortion of each instrument
 ~/.microcontrol/control_<port>.lock   who controls the instrument

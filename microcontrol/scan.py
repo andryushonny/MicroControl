@@ -51,7 +51,7 @@ def focus_z(pts, X, Y, k=4):
     return float((w * z[near]).sum() / w.sum())
 
 
-def plan(m, area=None, focus='auto', overlap=0.2, path='snake', pts=None):
+def plan(m, area=None, focus='auto', overlap=None, path='snake', pts=None):
     """Программа скана в G-коде."""
     area = area or m.area
     if area is None:
@@ -63,6 +63,9 @@ def plan(m, area=None, focus='auto', overlap=0.2, path='snake', pts=None):
         raise SafetyError('E703', f"focus = {focus!r}. Allowed: 'auto', 'points', 'plane', 'each', 'off'.")
     if focus == 'points' and not pts:
         raise SafetyError('E703', "No focus points: in m.manual() keys 1, 2 (corners) and F keep Z.")
+    if overlap is None:
+        from .config import scan_overlap
+        overlap = scan_overlap(m.objective)
     if isinstance(overlap, bool) or not isinstance(overlap, (int, float)) or not 0 <= overlap <= 0.5:
         raise SafetyError('E703', f"overlap = {overlap!r}. Allowed: 0 .. 0.5.")
     if path not in ('snake', 'rows'):

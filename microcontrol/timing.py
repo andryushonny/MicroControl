@@ -17,7 +17,8 @@ def key(m, focus):
 
 def prior(m, focus):
     """Оценка по физике: (подготовка T0, с; секунд на кадр)."""
-    st = m._frame_step(0.8)
+    from .config import scan_overlap
+    st = m._frame_step(1 - scan_overlap(m.objective))
     travel = st['x'] / max(1.0, m.motor_speed) + m.move_pause
     per = travel + m.photo_pause + 2 * m.exposure / 1000 + 0.3 + (0.15 if m.still_check else 0.0)
     if focus == 'points':

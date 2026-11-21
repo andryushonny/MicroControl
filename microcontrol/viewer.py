@@ -18,6 +18,7 @@ from .storage import ScanData, THUMB, meta_A
 from .util import wheel_delta, open_window, window_size, exit_key, EXIT, set_icon
 from . import ui as UI
 from . import anomaly as _AD
+from . import config as _cfg
 
 WIN = "MicroControl scan"
 
@@ -296,7 +297,8 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
                              f"A far cross in the row makes the tilt more exact")
                 if len(g.cr.marks) == 2:                    # два креста: прямая наклона -> полотно докручено
                     set_straight(True)
-                hints()
+                if _cfg.AUTO_HINTS or (getattr(g, 'scores', None) and st.get('hints')):   # подсказки — по Y
+                    hints()
             g.save(px_um)
             if st['straight']:
                 set_straight(True)
@@ -454,12 +456,12 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
             cells = [c for c in g.cells_range(lo, hi)                       # (до ~40 тыс. квадратов на экране)
                      if (lambda q: e_ <= q[0] <= sc.size[0] - e_ and e_ <= q[1] <= sc.size[1] - e_)(
                          g.cr.point(c[0] + 0.5, c[1] + 0.5))] if step >= 1.5 else []
-            if cells and (g.selected or (st.get('hints', True) and g.useful)):   # зелёные — выделены,
+            if cells and (g.selected or (st.get('hints', _cfg.AUTO_HINTS) and g.useful)):   # зелёные — выделены,
                 ov = img.copy()                                                   # жёлтые — подсказка
                 for c in cells:
                     if c in g.selected:
                         cv2.fillPoly(ov, [np.int32([to_view(q) for q in g.corners(*c)])], green)
-                    elif st.get('hints', True) and c in g.useful:
+                    elif st.get('hints', _cfg.AUTO_HINTS) and c in g.useful:
                         cv2.fillPoly(ov, [np.int32([to_view(q) for q in g.corners(*c)])], (0, 215, 255))
                 img = cv2.addWeighted(ov, 0.35, img, 0.65, 0)
             if step >= 34 and len(cells) <= 3000:           # номер квадрата в уголке: (X, Y) по подписям
@@ -523,7 +525,7 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
         else:
             it += ["no grid yet: G"]
         it += [f"selected {len(g.selected)}"]
-        if g.useful and st.get('hints', True):
+        if g.useful and st.get('hints', _cfg.AUTO_HINTS):
             it += [f"hints {len(g.useful)} (sensitivity {g.sensitivity:g})"]
         UI.facts(img, it, x_, bh - 11, fs)
         if st['straight']:
@@ -684,14 +686,14 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
                 st['msg'] = f"Hints selected: +{len(g.selected) - n0} squares, total {len(g.selected)}. " \
                             "Brush: drag to add, Shift+drag to erase"
         elif ch == 'y' and g.ready():                       # Y: подсказка вкл. / выкл. (первый раз — посчитать)
-            if not getattr(g, 'scores', None):
+            if not st.get('hints', _cfg.AUTO_HINTS) and not getattr(g, 'scores', None):
                 st['msg'] = "Looking for squares with something in them..."
                 cv2.imshow(WIN, render()); cv2.waitKey(1)
                 hints(); g.save(px_um)
             else:
-                st['hints'] = not st.get('hints', True)
+                st['hints'] = not st.get('hints', _cfg.AUTO_HINTS)
             st['msg'] = (f"Hints: {len(g.useful)} squares in yellow, sensitivity {g.sensitivity:g}. Shift+Y or Ctrl+Y: "
-                         f"select them; U: type the sensitivity 0-100, < / >: -5 / +5") if st.get('hints', True) \
+                         f"select them; U: type the sensitivity 0-100, < / >: -5 / +5") if st.get('hints', _cfg.AUTO_HINTS) \
                 else "Hints hidden"
         elif raw in ('<', '>') and g.ready():                # чувствительность подсказки -5 / +5
             set_sens(g.sensitivity + (5 if raw in '.>' else -5))
@@ -717,7 +719,8 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
                 g.cr.undo(); g.save(px_um); st['msg'] = "Last cross mark removed"
         elif ch == 'f' and g.ready():
             n_, rms = g.refine(lambda x, y, w, h: sc.render(x, y, 1.0, w, h), sc.size, px_um)
-            hints()
+            if _cfg.AUTO_HINTS or (getattr(g, 'scores', None) and st.get('hints')):
+                hints()
             g.save(px_um)
             st['msg'] = f"Grid fitted to all {n_} crosses" + (f": {rms:.2f} px off" if rms is not None else ": too few") + \
                 f"   hints: {len(g.useful)} squares (Y)"

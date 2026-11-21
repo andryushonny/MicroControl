@@ -41,8 +41,8 @@ CONNECT
 
 WORKFLOW
   m.manual()                       Live view on the full screen; mark the area with keys 1 and 2
-  folder = m.scan()                Shoot every sample area (each into its own folder sample_01, ...); 20 % overlap
-                                   (25 % at 50x, 100x); Z of each area from its own focus points
+  folder = m.scan()                Shoot every sample area (each into its own folder sample_01, ...); 30 % overlap
+                                   (35 % at 50x, 100x); Z of each area from its own focus points
   mc.stitch(folder)                Exact positions of all frames by their overlaps (like ASHLAR)
   mc.view(folder)                  Mark crosses on the mosaic, straighten it, select the squares you need
   mc.hints(folder, sensitivity=50) Yellow hint without the window: squares with something in them (0-100)

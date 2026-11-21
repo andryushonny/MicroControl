@@ -51,7 +51,7 @@ Both windows close with **Shift+Esc** or the window's ×. A single `Esc` only ca
 - **Focus points:** the height $Z$ at each corner is remembered; `F` adds more points. During the scan every frame gets its own $Z$ from these points, so a tilted sample stays sharp. With the checkbox "Z follows the focus points" the arrows also follow them.
 - **Several samples:** set areas one after another (`1`, `2`, then `1`, `2` again). They must not overlap. The list on the right shows them: click — choose, **Go** — drive to it, **x** — delete.
 
-`m.scan()` shoots every area frame by frame with a small overlap and saves the frames into a new folder (one sub-folder per sample). It prints the expected time; this estimate learns from the previous scans of your microscope. `mc.stitch(folder)` measures from the overlaps where each frame really is and joins them into one seamless picture.
+`m.scan()` shoots every area frame by frame with 30 % overlap (35 % at 50x, 100x) and saves the frames into a new folder (one sub-folder per sample). It prints the expected time; this estimate learns from the previous scans of your microscope. `mc.stitch(folder)` measures from the overlaps where each frame really is and joins them into one seamless picture.
 
 ### 3. Red grid — find the squares
 
@@ -65,7 +65,7 @@ Both windows close with **Shift+Esc** or the window's ×. A single `Esc` only ca
 ### 4. Choose squares — the mask
 
 - `S` — click squares or drag a box; `Shift` — unselect. `B` — brush. `P` — polygon. Chosen squares are green.
-- **Hints:** `Y` shows yellow squares where something is (flakes, crystals). `Shift+Y` takes all of them and switches to the brush to correct the choice; `<` / `>` change the sensitivity.
+- **Hints:** `Y` finds and shows yellow squares where something is (flakes, crystals); they are not computed by themselves — it takes a few seconds. `Shift+Y` takes all of them and switches to the brush to correct the choice; `<` / `>` change the sensitivity.
 
 ### 5. Export
 

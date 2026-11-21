@@ -428,7 +428,7 @@ The Z motor step $\delta = 5.56$ µm is larger than the depth of field of 20x (�
 
 The area is given by two corners $A = (x_A, y_A)$ and $B = (x_B, y_B)$ — the centres of the corner frames, usually with keys `1` and `2` in manual mode (section 15); or explicitly: `m.area = mc.Area(x0, y0, x1, y1)`.
 
-The grid step for overlap $q$ (`overlap`, $0 \le q \le 0.5$; by default 20 %, 25 % at 50x and 100x — `SCAN_OVERLAP`) is rounded down to a whole number of motor steps, so there are no gaps between frames:
+The grid step for overlap $q$ (`overlap`, $0 \le q \le 0.5$; by default 30 %, 35 % at 50x and 100x — `SCAN_OVERLAP`) is rounded down to a whole number of motor steps, so there are no gaps between frames:
 
 ```math
 s_x = \delta \left\lfloor \frac{W(1 - q)}{\delta} \right\rfloor,\qquad s_y = \delta \left\lfloor \frac{H(1 - q)}{\delta} \right\rfloor.
@@ -509,7 +509,7 @@ st.export()                                    # PNG files and TileConfiguration
 **Workflow.**
 1. `m.manual()`: sample areas — corners `1`, `2`, one area after another (several samples: section 15).
 2. Focus at the corners: at each corner bring the image into focus (`E`/`Q`) and press `1`/`2` (area corners) and `F` (other corners). The "Z follows the focus points" checkbox (`Y`, on by default): $Z$ of each scan frame from the 4 nearest points of its area with weights $1/d^2$; in manual mode, inside an area with at least 2 focus points, every arrow step also sets $Z$ this way (up by at most `max_move_z`). Unchecked — the arrows do not touch $Z$ and the scan keeps one $Z$.
-3. `folder = m.scan()` — frames with 20 % overlap, 25 % at 50x and 100x (`scan_overlap` in `config.py`). Before each picture two consecutive frames are compared by phase correlation: if the picture still moves by more than 1 px (the stage has not settled), the picture is postponed (`m.still_check`). Exposure and white balance are manual for the scan (they do not drift from frame to frame).
+3. `folder = m.scan()` — frames with 30 % overlap, 35 % at 50x and 100x (`scan_overlap` in `config.py`). Before each picture two consecutive frames are compared by phase correlation: if the picture still moves by more than 1 px (the stage has not settled), the picture is postponed (`m.still_check`). Exposure and white balance are manual for the scan (they do not drift from frame to frame).
 4. `mc.stitch(folder)` — exact frame positions from the overlaps (12.1). Once per objective — `mc.distortion(folder)` (12.5).
 5–7. `mc.view(folder)` — crosses (`G`), level view (`R`), square selection (`S`, `B`, `P`), square numbers (`N`), hints (`Y`) (12.2).
 8. `mc.export(folder)` — only the selected squares: PNG (transparent background) or JPG, DXF for AutoCAD (12.3).
@@ -673,7 +673,7 @@ where $I$ is the frame, $D$ the dark frame (`m.dark_frame()`), $E$ the frame of 
 Recommendations:
 1. Before a series: warm up the illumination for 2–5 min, `m.white_balance()`, `m.empty_frame()` on a clean substrate, `m.dark_frame()`. Repeat when the objective or light level changes.
 2. Do not change exposure, light and white balance within a series.
-3. Overlap: for overlap stitching use the default 20 %; for labelling objects on frame borders — 0.1–0.2 is enough.
+3. Overlap: for overlap stitching use the default 30 %; for labelling objects on frame borders — 0.1–0.2 is enough.
 4. Split into training and validation sets by areas or samples, not by random frames: neighbouring frames are correlated, and a random split overestimates the quality.
 5. Exclude frames with `blurry = 1`.
 
@@ -753,7 +753,7 @@ One key press — one move: key presses accumulated during a move (auto-repeat w
 - If the area is larger than the window: at the bottom — the number of area frames hidden on each side ("hidden <9 >10 ^6 v5"), under the map — an overview of the whole area with the visible window.
 - Corner A marked without B is kept until the next entry into manual mode.
 
-The mini map grid is the scan frames with `SCAN_OVERLAP` overlap (20 %; 25 % for 50x and 100x).
+The mini map grid is the scan frames with `SCAN_OVERLAP` overlap (30 %; 35 % for 50x and 100x).
 
 **Several samples on the stage.** Several samples can lie side by side; each gets its own area. Areas are set strictly one after another: `1` — first corner of a new area, `2` — the opposite corner (the area is fixed); then `1` again for the next sample. Areas must not overlap: `1` inside an existing area and a corner `2` that makes the new area cover another one are refused (`E704`). Each area has its own colour (green, blue, orange, purple, cyan, pink, …; colours do not repeat) on the mini map and in the carousel.
 

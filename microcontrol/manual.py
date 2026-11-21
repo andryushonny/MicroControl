@@ -920,7 +920,7 @@ def run(m, fullscreen=True, _keys=None):
             ops.append(('l', y - LH // 2 + 4))
             y += 6
             if fp:
-                ops.append(('t', "Focus points", x_l, y, FS, UI.DIM, 1))
+                ops.append(("t", "Focus points   (K: add one here)", x_l, y, FS, UI.DIM, 1))
                 y += LH
                 per = 4                                      # таблица: столбцы равной ширины, Z — по правому краю
                 fz = FS * 0.95
@@ -942,9 +942,9 @@ def run(m, fullscreen=True, _keys=None):
                     ops.append(('t', f"... {len(fp) - 12} more", x_l, y, FS * 0.9, UI.DIM, 1))
                     y += LH - 2
             else:
-                ops.append(('t', "Focus points: keys 1, 2 keep Z of the corners, F keeps Z here", x_l, y, FS * 0.9,
+                ops.append(('t', "Focus points: keys 1, 2 keep Z of the corners, K keeps Z here", x_l, y, FS * 0.9,
                             UI.DIM, 1))
-                right = max(right, x_l + UI.size("Focus points: keys 1, 2 keep Z of the corners, F keeps Z here",
+                right = max(right, x_l + UI.size("Focus points: keys 1, 2 keep Z of the corners, K keeps Z here",
                                                  FS * 0.9)[0])
                 y += LH
             if zm['z'] > 1:

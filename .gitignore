@@ -221,3 +221,36 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# --- MicroControl ---
+# Work and temporary files
+logs/
+photos/
+references/
+scans/
+demo_out/
+demo/demo_out/
+*.tmp
+*.log
+*.bak
+~$*
+.DS_Store
+Thumbs.db
+
+# Images: only demo/ may have pictures
+*.jpg
+*.jpeg
+*.png
+*.tif
+*.tiff
+*.bmp
+*.npy
+*.npz
+*.h5
+!demo/**/*.jpg
+!demo/**/*.png
+
+# Local tool settings
+.claude/
+.vscode/
+.idea/

@@ -21,10 +21,10 @@ m = mc.Microscope()          # 1. connect to the microscope   (mc.Microscope('si
 
 m.manual()                   # 2. green area: keys 1 and 2 at two opposite corners, focus at each
 folder = m.scan()            #    shoot the area frame by frame
-mc.stitch(folder)            #    join the frames into one picture (or J in mc.view)
+mc.stitch(folder)            #    join the frames into one picture (or S in mc.view)
 
-mc.view(folder)              # 3. key G: click two neighbouring crosses -> the red grid
-                             # 4. keys S / B: choose squares (green); Y shows hints, Shift+Y takes them
+mc.view(folder)              # 3. key C: click two neighbouring crosses -> the red grid
+                             # 4. keys M / B: choose squares (green); Y shows hints, Shift+Y takes them
 mc.export(folder)            # 5. the chosen squares: straight PNG + DXF in micrometres
 
 m.close()
@@ -44,13 +44,13 @@ Both windows close with **Shift+Esc** or the window's ×. A single `Esc` only ca
 
 ![Manual mode](docs/img/manual.jpg)
 
-`m.manual()` opens the live camera. Move with the arrows (one press = one frame), focus with `E` / `Q` (or `Shift+F` — autofocus).
+`m.manual()` opens the live camera. Move with the arrows (one press = one frame), focus with `E` / `Q` (or `A` — autofocus). Letters do things: `F` light, `W` white balance, `I` laser, `R` / `L` ruler, `S` (twice) scan and stitch right in the window, `V` open the result in the viewer.
 
 - **Mini map** (top right): one cell = one camera frame; the yellow cell is where you are. It moves with the arrows: arrow up — the cell goes up.
 - **Selection:** go to one corner of the sample, focus, press `1`; go to the opposite corner, focus, press `2`. The selection appears in its colour; corners snap to whole frames. Each selection remembers the objective it was marked with.
-- **Focus points:** the height $Z$ at each corner is remembered; `F` adds more points. During the scan every frame gets its own $Z$ from these points, so a tilted sample stays sharp. With the checkbox "Z follows the focus points" the arrows also follow them.
+- **Focus points:** the height $Z$ at each corner is remembered; `K` adds more points. During the scan every frame gets its own $Z$ from these points, so a tilted sample stays sharp. With the checkbox "Z follows the focus points" the arrows also follow them.
 - **Several selections, layers:** set them one after another (`1`, `2`, then `1`, `2` again). Selections of one objective do not overlap, but a selection of a higher objective may lie inside one of a lower objective (see *Layers* below). The list on the right shows them nested: click — choose, **Go** — drive to it, **x** — delete.
-- **Ruler:** `L`, then click two points — the distance in µm (the stage may move between the clicks).
+- **Ruler:** `R` or `L`, then click two points — the distance in µm (the stage may move between the clicks).
 - **Undo:** `Ctrl+Z` undoes any step (a selection, a focus point, a move — the stage drives back), `Ctrl+Y` redoes it.
 
 `m.scan()` shoots every area frame by frame with 30 % overlap (35 % at 50x, 100x) and saves the frames into a new folder (one sub-folder per selection); `m.scan(name='test')` again writes into the same folder. Selections keep their numbers and colours when one is deleted. Only the selections of the objective in place are shot. It prints the expected time; this estimate learns from the previous scans of your microscope. `mc.stitch(folder)` measures from the overlaps where each frame really is and joins them into one seamless picture.
@@ -61,12 +61,12 @@ Both windows close with **Shift+Esc** or the window's ×. A single `Esc` only ca
 
 `mc.view(folder)` opens the stitched picture (drag — move, wheel — zoom).
 
-- Press `G` and click **two neighbouring crosses in one row**. From them the program knows the tilt and the size of the squares, turns the picture level and draws the red grid over everything. The mark lands exactly where you click; `Shift`+click snaps it to the cross centre, a mark can be dragged. `F` refines the grid using all crosses.
+- Press `C` and click **two neighbouring crosses in one row**. From them the program knows the tilt and the size of the squares, turns the picture level and draws the red grid over everything. The mark lands exactly where you click; `Shift`+click snaps it to the cross centre, a mark can be dragged. `F` refines the grid using all crosses.
 - **Numbers:** press `N`, click a square and type the number written next to it (`12 7`). Do this for two squares in different rows and columns — then every square has its real number.
 
 ### 4. Choose squares — the mask
 
-- `S` — click squares or drag a box; `Shift` — unselect. `B` — brush: drag rectangles, every square in a rectangle is chosen (`Shift` — unchosen). Chosen squares are green.
+- `M` — click squares or drag a box; `Shift` — unselect. `B` — brush: drag rectangles, every square in a rectangle is chosen (`Shift` — unchosen). Chosen squares are green.
 - **Hints:** `Y` finds and shows yellow squares where something is (flakes, crystals); they are not computed by themselves — it takes a few seconds. `Shift+Y` takes all of them and switches to the brush to correct the choice; `<` / `>` change the sensitivity.
 
 ### 5. Export
@@ -199,22 +199,28 @@ Options: train the normal model once on a clean substrate — `mc.train_hints(fo
 
 ## Keys
 
+Arrows move; letters do things. As much as possible is done right in the window.
+
 **Manual mode** (`m.manual()`)
 
 | Key | Action |
 |---|---|
-| Arrows / `W A S D` | move by one frame (Step X, Y) |
-| `E` / `Q` | stage up / down by Step Z (`Shift` — ×5) |
-| `Shift+F` | autofocus |
+| Arrows | move by one frame (Step X, Y) |
+| `E` / `Q` (`PgUp` / `PgDn`) | stage up / down by Step Z (`Shift` — ×5) |
+| `A` · `K` | autofocus · keep $Z$ here as a focus point |
 | `1`, `2` | corners of a selection |
-| `F` | add a focus point here |
 | `Y` | "Z follows the focus points" on / off |
-| `,` `.` · `Enter` | previous / next area · drive to it |
-| `C` | cancel the new area / delete the chosen one (press twice) |
-| `Space` · `Shift+L` | take a picture · light on / off |
-| `L` | ruler: two clicks — the distance |
+| `,` `.` · `Enter` | previous / next selection · drive to it |
+| `C` | cancel the new selection / delete the chosen one (press twice) |
+| `S` (twice) | scan the selections of this objective and stitch them, in the window (`Esc` — stop) |
+| `V` | open the last scan in the viewer; closing it brings you back |
+| `F` · `W` · `I` | light ("fire") on / off · white balance · laser on / off |
+| `R` or `L` | ruler: two clicks — the distance |
+| `Space` | take a picture |
+| `0` · `Shift+0` | zero here · real coordinates |
 | `Ctrl+Z` · `Ctrl+Y` | undo · redo (moves too: the stage drives back) |
 | `Tab` or click a field | change steps, exposure, objective |
+| `G` · `M` | steps = one frame · next objective |
 | `P` | hide / show the left panel |
 | `T` · `O` · `[` `]` | turn the camera picture 180° · check directions with the camera · arrows (and the mini map with them) the other way (all remembered) |
 | `H` · `Shift+Esc` | all keys · exit |
@@ -223,16 +229,16 @@ Options: train the normal model once on a clean substrate — `mc.train_hints(fo
 
 | Key | Action |
 |---|---|
-| drag · wheel · `0` | move · zoom · whole picture |
-| `J` | stitch right here: progress in the window, then the view reopens stitched |
-| `G` · `F` | mark crosses · fit the grid to all crosses |
+| arrows, drag · wheel · `0` | move · zoom · whole picture |
+| `S` | stitch right here: progress in the window, then the view reopens stitched |
+| `C` · `F` | mark crosses (`Shift+C` — start again) · fit the grid to all crosses |
 | `N` | number a square |
-| `S` · `B` | select (click, box) · brush (rectangles); `Shift` — unselect |
+| `M` · `B` | select (click, box) · brush (rectangles); `Shift` — unselect; `A` / `X` — all / none |
 | `Y` · `Shift+Y` · `<` `>` | hints · take the hints · sensitivity |
-| `R` | picture level / as shot |
+| `T` | picture level / as shot |
+| `R` or `L` | ruler: two clicks — the distance |
 | `E` | export |
 | `,` `.` | previous / next selection |
-| `L` | ruler: two clicks — the distance |
 | `Ctrl+Z` · `Ctrl+Y` | undo · redo any change |
 | `Esc` · `H` · `Shift+Esc` | leave the mode · all keys · exit |
 

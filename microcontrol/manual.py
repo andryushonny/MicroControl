@@ -3,22 +3,23 @@
 Координаты знать не нужно: доезжаете до края нужного участка и отмечаете угол.
 Мини-карта в углу показывает отмеченную зону и где вы сейчас.
 
-  Стрелки / W A S D   На один кадр в сторону (или на долю кадра, см. [ ])
-  [  ]                Шаг мельче / крупнее: 1, 1/2, 1/5, 1/10 кадра
-  E / Q (PgUp/PgDn)   Столик вверх / вниз на шаг фокуса
-  F                   Автофокус
-  1 / 2               Угол зоны A / B (центр текущего кадра)
-  C                   Стереть зону
+  Стрелки             На шаг X / Y в сторону (буквы — для действий)
+  E / Q (PgUp/PgDn)   Столик вверх / вниз на шаг Z (Shift — x5)
+  A                   Автофокус;  K — точка фокуса (Z здесь)
+  1 / 2               Углы выделения;  C — удалить выделение (дважды)
+  S (дважды)          Снять выделения этого объектива и сшить, прямо в окне (Esc — стоп)
+  V                   Открыть последний скан в просмотре, после — снова сюда
+  F / W / I           Свет / баланс белого / лазер
+  R или L             Линейка: два щелчка — расстояние
   Пробел              Снимок в photos/
-  0                   Ноль здесь: текущая точка становится (0, 0, 0), как m.offset()
-  R                   Убрать сдвиг нуля: снова настоящие координаты, как m.offset_clear()
-  B                   Баланс белого (наведите на пустой участок), как m.white_balance()
-  L                   Свет вкл / выкл
+  0 / Shift+0         Ноль здесь / настоящие координаты
+  Ctrl+Z / Ctrl+Y     Отменить / вернуть
   H                   Подсказка
-  Esc / Enter         Выход
+  Shift+Esc           Выход
 """
 import math
 import time
+import os
 import copy
 import json
 import cv2
@@ -36,19 +37,23 @@ from . import timing as TM
 from . import ui as UI
 
 WIN = "MicroControl"
-HELP = ["Shift+Esc: Exit (or close the window)", "P: Hide / show the left panel", "Arrows / WASD: Move by Step X / Step Y", "E / Q: Stage up / down by Step Z (Shift: x5)",
+HELP = ["Shift+Esc: Exit (or close the window)", "P: Hide / show the left panel",
+        "Arrows: Move by Step X / Step Y   E / Q (PgUp / PgDn): Stage up / down by Step Z (Shift: x5)",
         "Tab or click a field: steps (multiple of 5 um), exposure (ms), objective; Enter",
-        "G: Steps X, Y = one frame", "M: Next objective (4x, 10x, 20x, 100x)",
+        "G: Steps X, Y = one frame", "M: Next objective (4x, 10x, 20x, 50x, 100x)",
         "1 / 2: Corners of a selection, one after another (their Z is kept as focus points); a higher objective may mark inside a lower one",
-        "F: Keep Z here as a focus point of this area   Shift+F: Autofocus",
+        "A: Autofocus   K: Keep Z here as a focus point of this selection",
         "Y (or the box): Z follows the focus points of the area: when moving with the arrows and in the scan",
         "Selections (right, as layers 10x > 50x > 100x): click = choose, Go = drive there, x = delete;  , / . = previous / next;  Enter = drive",
-        "C: Cancel the new area / delete the chosen one (press twice)", "Space: Picture",
-        "0: Zero here (offset)", "R: Real coordinates (remove the offset)", "B: White balance (aim at an empty place)",
+        "C: Cancel the new selection / delete the chosen one (press twice)",
+        "S (twice): Scan the selections of this objective and stitch them, here in the window (Esc: stop)",
+        "V: Open the last scan in the view (crosses, squares, export); closing it brings you back here",
+        "F: Light on / off   W: White balance (aim at an empty place)   I: Laser on / off   Space: Picture",
+        "R or L: Ruler: click two points (distance, um)   0: Zero here   Shift+0: Real coordinates",
         "Wheel: zoom   Middle button or Shift+drag: move the zoomed picture   Z: whole frame",
         "T: Turn the camera picture by 180 degrees (remembered)",
         "[ / ]: Arrows left-right / up-down the other way; the mini map always follows the arrows (remembered)",
-        "O: check with the camera which way the picture moves", "L: Ruler: click two points (distance, um)   Shift+L: Light on / off",
+        "O: check with the camera which way the picture moves",
         "Ctrl+Z: undo (selections, focus points, moves: the stage drives back)   Ctrl+Y: redo", "H: Hide this help"]
 LEFT, UP, RIGHT, DOWN = {2424832, 65361}, {2490368, 65362}, {2555904, 65363}, {2621440, 65364}
 PGUP, PGDN = {2162688, 65365}, {2228224, 65366}
@@ -606,6 +611,103 @@ def run(m, fullscreen=True, _keys=None):
         car['order'] = order
         return items
 
+    def scan_here():
+        """S (дважды): снять выделения текущего объектива и сшить их, не выходя из окна. Полоса прогресса —
+        в окне поверх кадра камеры; Esc — остановить после текущего кадра. Потом V — открыть в просмотре."""
+        nonlocal msg, msg_t
+        import threading
+        from .util import Progress
+        from .stitch import stitch as _stitch
+        msg_t = time.monotonic()
+        ks = [k_ for k_, rg in enumerate(m._regions) if SM.obj(m, rg) == m.objective]
+        if not ks:
+            msg = f"No selection for {m.objective}x: mark one with 1 and 2 (or switch the objective, M)"
+            return
+        nfr = sum(int(np.prod(SM.frames_of(m, k_))) for k_ in ks)
+        fm_ = 'points' if m._use_fp else 'off'
+        est = sum(TM.estimate(m, int(np.prod(SM.frames_of(m, k_))), fm_ if m._regions[k_]['pts'] else 'off')[0] for k_ in ks)
+        if not (car.get('scan_ok') and time.monotonic() - car['scan_ok'] < 5):
+            car['scan_ok'] = time.monotonic()
+            msg = (f"Press S again: scan {len(ks)} selection{'s' if len(ks) > 1 else ''} of {m.objective}x, {nfr} frames, "
+                   f"{TM.fmt(est)}, then stitch. Esc stops the scan")
+            return
+        car['scan_ok'] = None
+        prog = dict(title="Scan", f=0.0, text="starting", eta=None)
+        res, t0 = {}, time.monotonic()
+
+        def hook(t, f, txt, el, eta):
+            prog.update(title=t, f=f, text=txt, eta=eta)
+
+        def work():
+            try:
+                folder = m.scan()
+                res['folder'] = folder
+                if res.get('stop'):
+                    return
+                subs_ = SM.samples(folder)
+                for i_, sf in enumerate(subs_):
+                    res['stitch'] = (i_ + 1, len(subs_))
+                    _stitch(sf, verbose=True)
+            except Exception as e:                          # показать в окне
+                res['e'] = e
+
+        m._abort = False
+        if live is not None:
+            live.paused = True                             # камера — скану
+        Progress.hook = hook
+        th = threading.Thread(target=work, daemon=True)
+        th.start()
+        try:
+            while th.is_alive():
+                fr_ = getattr(m, '_last_img', None)
+                Wl_ = W - SM.CAR_W
+                pic = render(fr_, Wl_, H, kz, zm['c'], 0.0) if fr_ is not None else np.zeros((H, Wl_, 3), np.uint8)
+                pic = (pic.astype(np.float32) * 0.75).astype(np.uint8)
+                sti = res.get('stitch')
+                ttl = (f"Stitching {sti[0]} of {sti[1]}" if sti else f"Scanning {len(ks)} selection{'s' if len(ks) > 1 else ''}"
+                       f" of {m.objective}x")
+                stg = prog['title'].replace("Stitch: ", "").capitalize()
+                UI.progress_panel(pic, ttl, stg, prog['f'], prog['text'], time.monotonic() - t0, prog['eta'],
+                                  "stopping after this frame..." if res.get('stop') else ("Esc: stop" if not sti else ""))
+                frame_ = np.zeros((H, W, 3), np.uint8)
+                frame_[:, :Wl_] = pic
+                frame_[:, Wl_:] = view[:, Wl_:] if view.shape[:2] == (H, W) else 30
+                cv2.imshow(WIN, frame_)
+                k__ = cv2.waitKeyEx(60) if keys is None else -1
+                if (k__ == 27 or exit_key(k__)) and not res.get('stitch'):
+                    m._abort, res['stop'] = True, True
+        finally:
+            Progress.hook = None
+            th.join()
+            if live is not None:
+                live.paused = False
+        msg_t = time.monotonic()
+        if 'e' in res:
+            msg = f"Scan / stitch failed: {res['e']}"
+        elif res.get('stop'):
+            msg = f"Scan stopped. Frames so far: {res.get('folder', '-')}"
+        else:
+            m._last_view = res['folder']
+            msg = f"Scanned and stitched in {TM.fmt(time.monotonic() - t0)}: V opens it in the view"
+
+    def open_view():
+        """V: открыть последний скан в просмотре (кресты, квадраты, экспорт); закрыли — снова ручной режим."""
+        nonlocal msg, msg_t
+        from .viewer import view as _view
+        f_ = getattr(m, '_last_view', None) or getattr(m, 'last_scan', None)
+        msg_t = time.monotonic()
+        if not f_ or not os.path.isdir(f_):
+            msg = "Nothing scanned yet: mark a selection (1, 2) and press S"
+            return
+        if live is not None:
+            live.paused = True
+        try:
+            _view(f_, fullscreen=fullscreen, _keys=keys)          # в тестах — те же нажатия
+        finally:
+            if live is not None:
+                live.paused = False
+        msg = "Back in manual mode"
+
     def go_region(k):
         nonlocal msg
         msg = SM.goto_area(m, k)
@@ -743,6 +845,12 @@ def run(m, fullscreen=True, _keys=None):
                 else:
                     b_ = q2 = None
                 UI.ruler(view, a_, b_, ruler_text(rul['pts'][0], q2) if q2 is not None else "")
+            if m.laser:                                    # лазер включён — видно всегда
+                t_ = f"LASER ON  {m.laser:g} mW   (I: off)"
+                tw_ = UI.size(t_, 0.7, 2)[0]
+                x_ = int((Wl - tw_) / 2)
+                cv2.rectangle(view, (x_ - 14, 12), (x_ + tw_ + 14, 52), (20, 20, 200), -1)
+                UI.put(view, t_, x_, 42, 0.7, (255, 255, 255), 2)
             p = m.position
             sc = max(0.7, H / 1100)
             line = f"Sharpness {sharp:.0f}"
@@ -1067,14 +1175,31 @@ def run(m, fullscreen=True, _keys=None):
                 msg = "Ruler off"
             elif key == 27:
                 msg = "Exit: Shift+Esc or close the window"
-            elif key in LEFT or ch == 'a':
+            elif key in LEFT:                              # движение — только стрелки
                 m.move(**{'d' + ah: -sh * steps[ah]}); msg = SM.follow_z(m)
-            elif key in RIGHT or ch == 'd':
+            elif key in RIGHT:
                 m.move(**{'d' + ah: sh * steps[ah]}); msg = SM.follow_z(m)
-            elif key in UP or ch == 'w':
+            elif key in UP:
                 m.move(**{'d' + av: -sv * steps[av]}); msg = SM.follow_z(m)
-            elif key in DOWN or ch == 's':
+            elif key in DOWN:
                 m.move(**{'d' + av: sv * steps[av]}); msg = SM.follow_z(m)
+            elif ch == 's':                                # снять и сшить (S дважды)
+                if hold:
+                    hold.__exit__(); hold = None           # камера нужна скану из другого потока
+                scan_here()
+            elif ch == 'v':                                # открыть последний скан в просмотре
+                if hold:
+                    hold.__exit__(); hold = None
+                open_view()
+            elif ch == 'i':                                # лазер вкл. / выкл.
+                if m.laser:
+                    m._laser_last = m.laser
+                    m.laser = 0
+                    msg = "Laser off"
+                else:
+                    m.laser = getattr(m, '_laser_last', 0) or 1
+                    msg = f"LASER ON: {m.laser:g} mW (I: off)"
+                L.event('MAN-007', msg + ".")
             elif ch == 'p':                                # левая панель: спрятать / показать
                 m._panel_hidden = not getattr(m, '_panel_hidden', False)
                 msg = "Panel hidden: P or the button shows it" if m._panel_hidden else ""
@@ -1119,12 +1244,15 @@ def run(m, fullscreen=True, _keys=None):
                 d0 = default_steps(m)
                 steps['x'], steps['y'] = d0['x'], d0['y']
                 msg = f"Steps X, Y = one frame: {steps['x']:g}, {steps['y']:g} um"
-            elif raw == 'F':                               # Shift+F: автофокус
+            elif ch == 'a':                                # автофокус
                 r = m.focus()
                 msg = f"Focused at Z {r['Z']}" + ("  (weak peak)" if 'Note' in r else "")
-            elif ch == 'f':                                # F: запомнить Z здесь как точку фокуса области
+            elif ch == 'k':                                # запомнить Z здесь как точку фокуса выделения
                 msg = SM.add_point(m)
                 L.event('MAN-006', msg + ".")
+            elif ch == 'f':                                # свет («огонь») вкл. / выкл.
+                m.light = 0 if m.light else 5
+                msg = "Light on" if m.light else "Light off"
             elif raw in (',', '.') and m._regions:         # предыдущая / следующая (в порядке дерева слоёв)
                 od_ = [k_ for k_, _d in SM.tree(m)]
                 i_ = od_.index(m._sel) if m._sel in od_ else 0
@@ -1135,23 +1263,20 @@ def run(m, fullscreen=True, _keys=None):
             elif ch == ' ':
                 m.photo()
                 msg = f"Picture saved: {m.last_photo}"
-            elif ch in '0r':                               # области хранятся в настоящих мкм: остаются на месте
-                if ch == '0':
+            elif raw in ('0', ')'):                        # выделения хранятся в настоящих мкм: остаются на месте
+                if raw == '0':
                     m.offset()
                     msg = "Zero is here. Real position " + repr(m.real_position)
                 else:
                     m.offset_clear()
                     msg = "Offset removed: real coordinates"
-            elif ch == 'b':
+            elif ch == 'w':                                # баланс белого (навести на пустое место)
                 m.white_balance()
                 msg = "White balance done"
-            elif raw == 'L':                               # Shift+L: свет
-                m.light = not m.light
-                msg = "Light on" if m.light else "Light off"
-            elif ch == 'l':                                # линейка: две точки на картинке -> расстояние
+            elif ch in 'lr' and ch:                        # линейка: две точки на картинке -> расстояние
                 rul['on'], rul['pts'] = not rul['on'], []
                 msg = ("Ruler: click two points on the picture (you may move the stage between them); "
-                       "L or Esc: off") if rul['on'] else "Ruler off"
+                       "R, L or Esc: off") if rul['on'] else "Ruler off"
             elif ch == 'h':
                 show_help = not show_help
             elif ch == 'c':                                # отменить новую область / удалить выбранную (дважды)

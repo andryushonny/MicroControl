@@ -118,7 +118,7 @@ def stitch(folder, engine='builtin', max_shift_um=40.0, sigma=None, alpha=0.01, 
                 raise
             L.event('STI-002', f"ASHLAR not used ({type(e).__name__}: {e}); built-in engine.", 20)
     if used is None:
-        pos, info = _builtin(st, pred, p, W, H, max_shift, sigma, alpha, verbose)
+        pos, info = _builtin(st, pred, p, W, H, max_shift, sigma, alpha, verbose, A=A)
         used = 'builtin'
     out = os.path.join(folder, 'join')
     os.makedirs(out, exist_ok=True)
@@ -175,7 +175,7 @@ def stitch(folder, engine='builtin', max_shift_um=40.0, sigma=None, alpha=0.01, 
 
 
 @timed_fn('Stitch: seams')
-def _builtin(st, pred, p, W, H, max_shift, sigma, alpha, verbose):
+def _builtin(st, pred, p, W, H, max_shift, sigma, alpha, verbose, A=None):
     n = len(pred)
     pad = int(max_shift)
     # 1) соседи
@@ -219,7 +219,8 @@ def _builtin(st, pred, p, W, H, max_shift, sigma, alpha, verbose):
     # 4) модель столик -> пиксели по принятым парам: d = A·Δp
     I = np.array([q[0] for q in pairs]); J = np.array([q[1] for q in pairs])
     dp = p[J] - p[I]
-    Ast = np.linalg.lstsq(p - p.mean(0), pred - pred.mean(0), rcond=None)[0].T   # -A по столику
+    Ast = -np.asarray(A, float) if A is not None else \
+        np.linalg.lstsq(p - p.mean(0), pred - pred.mean(0), rcond=None)[0].T   # -A по столику (один ряд — тоже)
     model = Ast
     # люфт: с какой стороны столик подъехал к кадру (знак последнего движения по каждой оси)
     sg = np.zeros((n, 2))
@@ -231,7 +232,7 @@ def _builtin(st, pred, p, W, H, max_shift, sigma, alpha, verbose):
     sg[0] = sg[1] if n > 1 else 0
     dsg = sg[J] - sg[I]
     Bl = np.zeros((2, 2))                                       # px на смену направления по X и по Y
-    if ok.sum() >= 3:                                           # d = M·Δp + Bl·Δs по принятым швам
+    if ok.sum() >= 3 and np.linalg.matrix_rank(dp[ok]) == 2:   # d = M·Δp + Bl·Δs по принятым швам (один ряд — нет)
         cols = [dp[ok]] + ([dsg[ok]] if np.abs(dsg[ok]).sum() > 0 else [])
         sol = np.linalg.lstsq(np.hstack(cols), meas[ok], rcond=None)[0]
         model = sol[:2].T

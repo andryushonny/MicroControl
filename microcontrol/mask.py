@@ -492,7 +492,7 @@ def export(folder, fmt='png', scale=1.0, cells=False, dxf=True, max_mb=2000, mar
     dxf=True — export/selection.dxf: квадраты в мкм (AutoCAD). Возвращает папку export/."""
     g = Grid(folder)
     if not g.ready() or not g.selected:
-        raise ValueError("Nothing to export: in mc.view(folder) mark the crosses (G) and select squares (S).")
+        raise ValueError("Nothing to export: in mc.view(folder) mark the crosses (C) and select squares (M).")
     fr = Frames(folder)
     px_um = fr.st.meta.get('pixel_size_um') or 1.0
     v1, v2 = g.cr.vectors()

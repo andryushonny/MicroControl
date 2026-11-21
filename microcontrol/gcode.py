@@ -357,6 +357,9 @@ def run(m, program, save=None, notes='', folder=None, extra=None, reuse=False):
     report = []
     try:
         for k_, (n, c, p) in enumerate(cmds):
+            if getattr(m, '_abort', False):                 # «Стоп» из окна (Esc во время скана)
+                m._abort = False
+                raise KeyboardInterrupt
             if pr:
                 pr.step = wts[k_]
             L.debug('GC-002', f"{n}: {'G53 ' if p.get('_machine') else ''}{c} " + " ".join(f"{k}{v:g}" for k, v in p.items() if k != '_machine'))

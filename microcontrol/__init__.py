@@ -12,7 +12,7 @@ Authors: Andrey Lyapeikov, Savely Domenko.
 
 Help: mc.help()
 """
-__version__ = "0.21.0"
+__version__ = "0.22.0"
 AUTHORS = ["Ляпейков Андрей", "Доменко Савелий"]
 
 from .errors import (MicroControlError, SafetyError, LimitError, CommError, CameraError,
@@ -59,31 +59,37 @@ WORKFLOW
   m.remove(N)                      Delete selection N completely (asks; confirm=False: no question)
   m.info()                         Device, and where the time goes: every action timed, longest first
 
-MANUAL WINDOW
-  Arrows / WASD    Move by Step X / Step Y  Tab     Edit the steps (or click a field)
-  E / Q            Stage up / down by Step Z (Shift: x5)
-  G                Steps X, Y = one frame   F       Keep Z here as a focus point (Shift+F: autofocus)
-  Y                Autofocus by corners during the scan (on / off)
-  M                Next objective (4x, 10x, 20x, 100x)
+MANUAL WINDOW (arrows move; letters do things)
+  Arrows           Move by Step X / Step Y  Tab     Edit the steps (or click a field)
+  E / Q            Stage up / down by Step Z (Shift: x5)   PgUp / PgDn too
+  A                Autofocus                K       Keep Z here as a focus point
+  G                Steps X, Y = one frame   Y       Z follows the focus points (on / off)
+  M                Next objective (4x, 10x, 20x, 50x, 100x)
   1 / 2            Corners of a selection, one after another; a higher objective may mark inside
                    a lower one (layers: map 10x > details 50x > 100x), one objective does not overlap
   Carousel, , / .  Selections as layers; Go / Enter: drive there; x or C (twice): delete it
-  Space            Picture                  Shift+L Light on / off
-  L                Ruler: click two points -> distance in um (also in mc.view)
-  0                Zero here (offset)       R       Real coordinates (remove the offset)
-  B                White balance
+  S (twice)        Scan the selections of this objective and stitch them, here in the window (Esc: stop)
+  V                Open the last scan in the view; closing it brings you back
+  F                Light ("fire") on / off  W       White balance (aim at an empty place)
+  I                Laser on / off (needs allow_laser=True; a red LASER ON banner while it is on)
+  R or L           Ruler: click two points -> distance in um (also in mc.view)
+  Space            Picture                  0 / Shift+0   Zero here / real coordinates
   Wheel, + / -     Zoom (Z: whole frame)    Drag    Move the zoomed picture (any button)
   Ctrl+Z / Ctrl+Y  Undo / redo any step (selections, focus points, moves: the stage drives back)
-  H                Help on the screen       Esc     Exit
+  H                Help on the screen       Shift+Esc     Exit
 
 VIEW WINDOW (mc.view)
-  Drag             Move (right / middle button in any mode; Ctrl+left in S and B)   Wheel, + / -, 0   Zoom
-  G                Two crosses in a row: the tilt; the picture turns level (far crosses: more exact; C: again)
-  S / B / P        Select squares: click and box / brush / polygon (Shift: unselect)   A / X  All / none
+  Arrows, drag     Move (right / middle button in any mode; Ctrl+left in M and B)   Wheel, + / -, 0   Zoom
+  S                Stitch this selection here (progress in the window), then the view reopens
+  C                Mark crosses: two in a row = the tilt, the picture turns level (Shift+C: start again)
+  F                Fit the grid to all crosses
+  M / B            Select squares: click and box / brush rectangles (Shift: unselect)   A / X  All / none
   Right click      On a green area: remove it
   N                Number a square: click it, type X Y (two squares in another row and column fix all numbers)
-  Y                Yellow hint: squares with something in them   Shift+Y / Ctrl+Y  Select the yellow ones
-  U, < / >         Hint sensitivity 0-100 (type it / -5 / +5)    R  Straight    E  Export
+  Y                Yellow hint: squares with something in them   Shift+Y  Select the yellow ones
+  U, < / >         Hint sensitivity 0-100 (type it / -5 / +5)    T  Straight / as shot
+  R or L           Ruler                    E       Export
+  Ctrl+Z / Ctrl+Y  Undo / redo any change
 
 STAGE (micrometres; +Z = stage up, towards the objective; moves go one after another)
   m.move(dx, dy, dz)               Move by (X/Y up to max_move, Z up to max_move_z)

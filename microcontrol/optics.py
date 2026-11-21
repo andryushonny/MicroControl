@@ -191,7 +191,7 @@ def measure_distortion(folder, save=True):
     from .util import Result
     g = Grid(folder)
     if not g.ready():
-        raise ValueError("Mark the crosses first: mc.view(folder), key G.")
+        raise ValueError("Mark the crosses first: mc.view(folder), key C.")
     st = ScanData(folder)
     st.fix = None                                             # мерить по невыпрямленным кадрам
     H, W = st.shape[:2]

@@ -146,3 +146,30 @@ def ruler(img, a, b, label, color=(0, 220, 255), scale=0.5):
         y0 = int(min(max(th + 10, my - 12), img.shape[0] - 6))
         panel(img, x0 - 6, y0 - th - 7, x0 + tw + 6, y0 + 6, 0.85, color)
         cv2.putText(img, label, (x0, y0), FONT, scale, (245, 245, 245), 1, cv2.LINE_AA)
+
+
+def progress_panel(img, title, stage, frac, text="", passed=0.0, left=None, footer=""):
+    """Полоса прогресса посреди окна (долгая работа прямо в окне: сшивка, скан): заголовок, этап, полоса
+    в процентах 0.00 … 100.00 %, что делается сейчас, сколько прошло и осталось."""
+    H, W = img.shape[:2]
+    pw, ph = min(700, W - 60), 206
+    x0, y0 = int((W - pw) / 2), int((H - ph) / 2)
+    panel(img, x0, y0, x0 + pw, y0 + ph, 0.94, LINE)
+    put(img, title, x0 + 22, y0 + 38, 0.7, ACCENT, 2)
+    pct = f"{100 * frac:.2f}% / 100.00%"
+    st_ = stage
+    while st_ and size(st_, 0.55)[0] > pw - 60 - size(pct, 0.5)[0]:
+        st_ = st_[:-2]
+    put(img, st_, x0 + 22, y0 + 74, 0.55, TEXT, 1)
+    put(img, pct, x0 + pw - 22 - size(pct, 0.5)[0], y0 + 74, 0.5, TEXT, 1)
+    bx0, bx1, by = x0 + 22, x0 + pw - 22, y0 + 92
+    cv2.rectangle(img, (bx0, by), (bx1, by + 18), (60, 60, 66), -1)
+    cv2.rectangle(img, (bx0, by), (bx0 + int((bx1 - bx0) * max(0.0, min(1.0, frac))), by + 18), (90, 200, 90), -1)
+    cv2.rectangle(img, (bx0, by), (bx1, by + 18), (110, 110, 118), 1)
+    t = text or ""
+    while t and size(t, 0.45)[0] > pw - 44:
+        t = t[:-2]
+    put(img, t, x0 + 22, y0 + 136, 0.45, DIM, 1)
+    tm = lambda s: f"{int(s // 60):02d}:{int(s % 60):02d}"
+    put(img, f"{tm(passed)} passed" + (f", this step {tm(left)} left" if left else "") + (f"   {footer}" if footer else ""),
+        x0 + 22, y0 + 176, 0.45, DIM, 1)

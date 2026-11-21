@@ -1343,6 +1343,7 @@ class Microscope:
         if self.turn_180:
             img = cv2.rotate(img, cv2.ROTATE_180)
         self._frame_px = (img.shape[1], img.shape[0])
+        self._last_img = img                       # последний кадр (окно показывает его во время скана)
         return img
 
     def photo(self, name=None):

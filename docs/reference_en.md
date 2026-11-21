@@ -511,7 +511,7 @@ st.export()                                    # PNG files and TileConfiguration
 2. Focus at the corners: at each corner bring the image into focus (`E`/`Q`) and press `1`/`2` (area corners) and `F` (other corners). The "Z follows the focus points" checkbox (`Y`, on by default): $Z$ of each scan frame from the 4 nearest points of its area with weights $1/d^2$; in manual mode, inside an area with at least 2 focus points, every arrow step also sets $Z$ this way (up by at most `max_move_z`). Unchecked — the arrows do not touch $Z$ and the scan keeps one $Z$.
 3. `folder = m.scan()` — frames with 30 % overlap, 35 % at 50x and 100x (`scan_overlap` in `config.py`). Before each picture two consecutive frames are compared by phase correlation: if the picture still moves by more than 1 px (the stage has not settled), the picture is postponed (`m.still_check`). Exposure and white balance are manual for the scan (they do not drift from frame to frame).
 4. `mc.stitch(folder)` — exact frame positions from the overlaps (12.1). Once per objective — `mc.distortion(folder)` (12.5).
-5–7. `mc.view(folder)` — crosses (`G`), level view (`R`), square selection (`S`, `B`, `P`), square numbers (`N`), hints (`Y`) (12.2).
+5–7. `mc.view(folder)` — stitch here (`S`), crosses (`C`), level view (`T`), square selection (`M`, `B`), square numbers (`N`), hints (`Y`), ruler (`R`) (12.2).
 8. `mc.export(folder)` — only the selected squares: PNG (transparent background) or JPG, DXF for AutoCAD (12.3).
 9. `mc.clean(folder)` — show, `mc.clean(folder, confirm=True)` — delete the frames and other work files.
 
@@ -546,25 +546,20 @@ Result: `join/positions_all.csv`, `join/stitch.json`, `join/preview_all.jpg` (re
 
 ![Close-up: squares numbered from two labels, selected squares, hints](img/view_zoom.jpg)
 
-| Key / mouse | Action |
+| Key | Action |
 |---|---|
-| drag with the right or middle button — in any mode; with the left one — in the look mode, `G`, `P`; `Ctrl`+left — in `S` and `B` | move |
-| wheel, `+` / `-`, `0` — whole scan | zoom |
-| `G` | crosses: click a cross, then its neighbour in the same row — the line through them gives the tilt, and the whole picture turns at once so that the rows are level; far crosses (anywhere) refine the tilt and the pitch; the mark is placed exactly where you click (shown as a «+» with an open centre), `Shift`+click — snapped to the cross centre found on the picture; drag a mark to move it; right button — remove a mark, `C` — start again |
-| `R` | level view on / off: the picture is turned by $-\theta$, the squares stand level |
-| `S` | select squares: click — a square; box (drag) — all squares it **touches** (no need to reach the centres); with `Shift` — unselect |
-| right click on green | remove this whole green area (connected squares); in the look mode, `S`, `B`, `P` |
-| `B` | brush: drag over the squares — all squares under the cursor are selected; with `Shift` — rub out |
-| `N` | square numbers: click a square, type two numbers `X Y`, `Enter` (with no digits — confirm the shown number); right button — remove a label |
-| `Y` | yellow hint on / off; `Shift`+`Y` or `Ctrl`+`Y` — select all yellow squares (make them green) and switch to the brush to correct them |
-| `U`; `<` / `>` | hint sensitivity 0…100: type a number; −5 / +5 |
-| `P` | polygon: clicks — vertices, `Enter` — select inside, `Del` — unselect, right button / `Backspace` — remove a vertex |
-| `A` / `X` | select all / none |
-| `E` | export the selection |
-| `,` / `.`; carousel on the right | previous / next sample; click — open, **x** — remove (to `_removed/`) |
-| `H` | all keys |
-| `Esc` | leave the mode (cancel) |
-| `Shift`+`Esc` (or `Ctrl`+`Esc`), the window's × | exit the viewer |
+| arrows, drag · wheel · `0` | move · zoom · whole picture |
+| `S` | stitch right here: progress in the window, then the view reopens stitched |
+| `C` · `F` | mark crosses (`Shift+C` — start again) · fit the grid to all crosses |
+| `N` | number a square |
+| `M` · `B` | select (click, box) · brush (rectangles); `Shift` — unselect; `A` / `X` — all / none |
+| `Y` · `Shift+Y` · `<` `>` | hints · take the hints · sensitivity |
+| `T` | picture level / as shot |
+| `R` or `L` | ruler: two clicks — the distance |
+| `E` | export |
+| `,` `.` | previous / next selection |
+| `Ctrl+Z` · `Ctrl+Y` | undo · redo any change |
+| `Esc` · `H` · `Shift+Esc` | leave the mode · all keys · exit |
 
 The lattice is always **square**: $\mathbf{v}_2$ is $\mathbf{v}_1$ turned by 90° (no skew, no "projection"); there are four unknowns — origin $\mathbf{O}$, pitch and tilt — found by least squares from the marks. Two neighbouring crosses are enough; far crosses reduce the tilt error in proportion to the distance. The `F` key optionally fits the same square lattice to all crosses of the mosaic. Simulator check (tilt 3.5°): 2 neighbouring crosses and 2 far ones — pitch 99.998 µm, tilt 3.494°. Marks and selection are stored in `grid.json` (in mosaic pixels; after a new stitch the marks must be made again).
 
@@ -712,9 +707,9 @@ The `F` (feed) parameter is not supported (`E902`): the speed is set by the cont
 
 **Selections and layers.** Keys `1`, `2` mark a *selection* (formerly "sample area"); it remembers the objective it was marked with and the frame size of that objective. Selections of one objective do not overlap; a selection of a higher objective may lie inside one of a lower objective — it is its detail (layer): map 10x → details 50x → details 100x. The parent is the lower-objective selection that contains its centre (the closest layer, the smallest one). `m.scan()` shoots only the selections of the objective in place (error `E706` if there are none); the others wait. Frames and the expected time in the list are counted for each selection's own objective (`timing.estimate(..., objective)`). `meta.json` of a scanned selection holds `selection`, `sample_uid`, `parent_uid`, `parent_selection`, `area_real_um`. `m.list()` shows all scanned selections as a tree (by `parent_uid`, for old scans by position on the stage), `m.open(N)` opens one in `mc.view`, `m.remove(N, confirm=True)` deletes its folder (and the session folder if nothing is left in it).
 
-**Stitch in the viewer** (`J`): `mc.stitch` of the open selection in a background thread; the window shows the step (1 of 4: light field, seams, frame brightness, saving), its progress bar in % and the time; then the viewer reopens with the stitched picture (crosses moved with the frames).
+**Stitch in the viewer** (`S`): `mc.stitch` of the open selection in a background thread; the window shows the step (1 of 4: light field, seams, frame brightness, saving), its progress bar in % and the time; then the viewer reopens with the stitched picture (crosses moved with the frames).
 
-**Ruler** (`L`, both windows): two clicks — the distance in µm and its projections; the points are placed exactly at the clicks (marked with «+»). In manual mode the points are on the sample (stage coordinates), so the stage may move between the clicks. In manual mode the light is `Shift+L`.
+**Ruler** (`R` or `L`, both windows): two clicks — the distance in µm and its projections; the points are placed exactly at the clicks (marked with «+»). In manual mode the points are on the sample (stage coordinates), so the stage may move between the clicks. In manual mode: `F` — light, `W` — white balance, `I` — laser; `S` (twice) scans the selections of the objective in place and stitches them in the window (`Esc` stops after the current frame), `V` opens the result in the viewer.
 
 **Undo** (`Ctrl+Z`, `Ctrl+Y` / `Ctrl+Shift+Z` — redo; both windows). After every action the window compares its state with the previous one and keeps the pair (before, after), up to 200 steps. Manual mode: selections, focus points, objective, zero offset and the stage position (undoing a move drives the stage back: down first, then X/Y in legs ≤ `max_jump`, then up in steps ≤ `max_move_z`). Viewer: crosses, grid, squares, numbers, hints, and a selection removed from the list (moved back from `_removed/`).
 
@@ -730,28 +725,25 @@ The camera is read in a separate thread: the window is redrawn at once (pan, zoo
 
 | Key | Action |
 |---|---|
-| arrows, WASD | move the field of view by Step X / Step Y (one frame by default) |
-| `Tab` or click on a field | edit Step X, Y, Z (µm), exposure (ms, fractions with `.` or `,`) and objective (4, 10, 20, 50, 100); digits, `Backspace`, `Enter` — accept, `Esc` — cancel |
-| `G` | Steps X, Y = one frame |
-| `M` | next objective; Steps X, Y — one new frame |
-| `E` / `Q` (PgUp / PgDn) | stage up / down by Step Z (100 µm by default) |
-| `Shift`+`E` / `Shift`+`Q` | the same, by five Steps Z (500 µm by default) |
-| `F` | keep $Z$ here as a focus point (3, 4, …) |
-| `Y` (or the checkbox) | $Z$ follows the focus points of the area: in the scan (each frame) and with the arrows inside an area |
-| `Shift`+`F` | autofocus |
-| wheel, `+` / `-`; `Z` | zoom (to the cursor / to the centre); whole frame |
-| drag the picture (any button; the left one — not on the fields) | move the zoomed picture |
-| `1` / `2` | corners of a sample area, strictly one area after another; $Z$ at that moment is kept as a focus point |
-| `C` | cancel the new area / delete the chosen one (press twice) |
-| `,` / `.`; `Enter` | previous / next area; drive to the chosen area |
-| `0` | working zero here (`m.offset()`); the area corners stay at their place on the sample |
-| `R` | remove the zero offset |
-| `B` | white balance on the current frame |
-| `L` | light on / off |
-| Space | picture |
-| `H` | help |
-| `Shift`+`Esc` (or `Ctrl`+`Esc`), the window's × | exit; the areas are kept for `m.scan()`. A single `Esc` only cancels — no exit by accident |
-| `P` or the `<` button | hide / show the left panel (the position then moves to the bottom line) |
+| Arrows | move by one frame (Step X, Y) |
+| `E` / `Q` (`PgUp` / `PgDn`) | stage up / down by Step Z (`Shift` — ×5) |
+| `A` · `K` | autofocus · keep $Z$ here as a focus point |
+| `1`, `2` | corners of a selection |
+| `Y` | "Z follows the focus points" on / off |
+| `,` `.` · `Enter` | previous / next selection · drive to it |
+| `C` | cancel the new selection / delete the chosen one (press twice) |
+| `S` (twice) | scan the selections of this objective and stitch them, in the window (`Esc` — stop) |
+| `V` | open the last scan in the viewer; closing it brings you back |
+| `F` · `W` · `I` | light ("fire") on / off · white balance · laser on / off |
+| `R` or `L` | ruler: two clicks — the distance |
+| `Space` | take a picture |
+| `0` · `Shift+0` | zero here · real coordinates |
+| `Ctrl+Z` · `Ctrl+Y` | undo · redo (moves too: the stage drives back) |
+| `Tab` or click a field | change steps, exposure, objective |
+| `G` · `M` | steps = one frame · next objective |
+| `P` | hide / show the left panel |
+| `T` · `O` · `[` `]` | turn the camera picture 180° · check directions with the camera · arrows (and the mini map with them) the other way (all remembered) |
+| `H` · `Shift+Esc` | all keys · exit |
 
 **Step fields** (top left, under the coordinates): Step X, Step Y, Step Z, µm. Only multiples of 5 µm are allowed; the number is rounded to the nearest multiple of 5 and capped by the per-command limit (`max_move` for X, Y; for Z the smaller of `max_move_z`, `max_move_down`). The steps are kept between entries into manual mode within a session.
 
@@ -781,7 +773,7 @@ Focus points are numbered through all areas: the first area has 1, 2 (its corner
 
 The stage coordinates are shown large in the top left corner; the status line at the bottom also has the frame number in the area ("Frame: row $r$/$n_y$, column $c$/$n_x$").
 
-**Scan viewer:** `mc.view(folder)` — move: drag with the mouse, arrows or WASD (faster with Shift), double click — put the spot in the centre; zoom — wheel, `+` `-`, PgUp / PgDn; `0` — the whole scan; `Shift`+`Esc` or the window's × — exit. While the picture is dragged it is drawn from reduced copies (smoothly), afterwards in full quality. Marking keys — section 12.2.
+**Scan viewer:** `mc.view(folder)` — move: drag with the mouse, arrows, double click — put the spot in the centre; zoom — wheel, `+` `-`, PgUp / PgDn; `0` — the whole scan; `Shift`+`Esc` or the window's × — exit. While the picture is dragged it is drawn from reduced copies (smoothly), afterwards in full quality. Marking keys — section 12.2.
 
 ---
 

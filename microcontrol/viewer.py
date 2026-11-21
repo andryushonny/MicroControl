@@ -114,33 +114,33 @@ class _Scene:
         return out
 
 
-HELP_V2 = "Drag: move  Wheel: zoom  0: whole  R: straight  , / .: selection  H: all keys  Shift+Esc: exit"
+HELP_V2 = "Arrows / drag: move  Wheel: zoom  0: whole  T: straight  , / .: selection  H: all keys  Shift+Esc: exit"
 HELP_MODE = {
-    'look': "J: stitch  L: ruler  G: mark crosses  F: fit grid  S: select  B: brush (rectangles)  N: number squares  Y: hints  E: export",
-    'cross': "Click: cross exactly there (2 in a row = tilt)  Shift+click: snap to centre  Drag a mark: move  Right click: remove  C: again  F: fit grid  Esc: done",
+    'look': "S: stitch  C: mark crosses  F: fit grid  M: select squares  B: brush  N: number squares  Y: hints  R / L: ruler  E: export",
+    'cross': "Click: cross exactly there (2 in a row = tilt)  Shift+click: snap to centre  Drag a mark: move  Right click: remove  Shift+C: again  F: fit grid  C / Esc: done",
     'select': "Click: square  Drag: box  Shift: unselect  Right click: remove green area  A: all  X: none  Esc: done",
     'paint': "Drag a rectangle: select all squares in it  Shift+drag: unselect  Click: one square  A: all  X: none  Esc: done",
     'label': "Click a square, type its number X Y  Enter: set  Esc: done",
-    'ruler': "Click two points: the distance (a third click starts again)  Drag: move  L or Esc: off",
+    'ruler': "Click two points: the distance (a third click starts again)  Drag: move  R, L or Esc: off",
 }
 HELP_HINTS = "Y: hints on / off  Shift+Y: select them  < / >: sensitivity  U: type it"
-HELP_V = ("G: 2 crosses in a row = tilt (right click = remove, C = again)   F: fit grid   S: select (click, box; Shift = "
-          "unselect; right click = remove the green area)   B: brush (rectangles)   N: number squares (X Y)   Y: hints "
-          "(yellow), Shift+Y: select them, U, < / >: sensitivity   A / X: all / none   E: export   Esc: exit")
+HELP_V = ("S: stitch   C: crosses (2 in a row = tilt; right click = remove, Shift+C = again)   F: fit grid   M: select "
+          "(click, box; Shift = unselect; right click = remove the green area)   B: brush   N: number squares (X Y)   "
+          "Y: hints, Shift+Y: select them, U, < / >: sensitivity   A / X: all / none   R / L: ruler   E: export   Esc: exit")
 HELP_ALL = [
-    ("Look", "Drag (right / middle in any mode): move   Wheel, + / -: zoom   0: whole   Arrows, W A S D: move"),
-    ("", "R: straight / as shot   , / .: previous / next selection   H: this help   Esc: leave the mode"),
+    ("Look", "Arrows or drag (right / middle in any mode): move   Wheel, + / -: zoom   0: whole"),
+    ("", "T: straight / as shot   , / .: previous / next selection   H: this help   Esc: leave the mode"),
     ("Undo", "Ctrl+Z: undo any change (crosses, grid, squares, numbers, hints, removed selection)   Ctrl+Y: redo"),
     ("Exit", "Shift+Esc (or Ctrl+Esc), or close the window"),
-    ("Stitch", "J: stitch this selection right here (progress in the window), then the view reopens"),
-    ("Ruler", "L: click two points -> distance in um (a third click starts again); L or Esc: off"),
-    ("Grid", "G: mark crosses: click two neighbouring crosses in one row = tilt; more crosses far apart = more exact"),
+    ("Stitch", "S: stitch this selection right here (progress in the window), then the view reopens"),
+    ("Ruler", "R or L: click two points -> distance in um (a third click starts again); R, L or Esc: off"),
+    ("Crosses", "C: mark crosses: click two neighbouring crosses in one row = tilt; more crosses far apart = more exact"),
     ("", "The mark goes exactly where you click   Shift+click: snap to the cross centre   Drag a mark: move it"),
-    ("", "Right click: remove a cross   Backspace: undo   C: start again   F: fit the grid to all crosses"),
+    ("", "Right click: remove a cross   Backspace: the last one   Shift+C: start again   F: fit the grid to all crosses"),
     ("Numbers", "N: click a square, type the number written next to it (X Y), Enter. Two squares fix all numbers"),
-    ("Select", "S: click / drag a box (Shift: unselect)   B: brush (drag rectangles)   A / X: all / none"),
+    ("Select", "M: click / drag a box (Shift: unselect)   B: brush (drag rectangles)   A / X: all / none"),
     ("", "Right click on green: remove that green area"),
-    ("Hints", "Y: yellow hints on / off   Shift+Y or Ctrl+Y: select them   < / >: sensitivity -/+ 5   U: type it"),
+    ("Hints", "Y: yellow hints on / off   Shift+Y: select them   < / >: sensitivity -/+ 5   U: type it"),
     ("Export", "E: export the selected squares (PNG + DXF)"),
 ]
 
@@ -190,7 +190,7 @@ def _car_items(subs, cur, car):
             except Exception:
                 pass
         else:
-            lines.append("no grid yet (G)")
+            lines.append("no grid yet (C)")
         items.append(dict(title=f"Selection {SM.sample_index(f)}", color=SM.sample_color(f),
                           lines=lines, thumbs=[_preview(f, SM.CAR_W - 36)], confirm=car.get('confirm') == f, go=False))
     return items
@@ -329,32 +329,14 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
         try:
             while th.is_alive():
                 img = base.copy()
-                Wv, Hv = img.shape[1], img.shape[0]
-                pw, ph = min(680, Wv - 60), 200
-                x0, y0 = int((Wv - pw) / 2), int((Hv - ph) / 2)
-                UI.panel(img, x0, y0, x0 + pw, y0 + ph, 0.94, UI.LINE)
-                UI.put(img, f"Stitching Selection {SM.sample_index(folder)}" if len(subs) > 1 else "Stitching",
-                       x0 + 22, y0 + 38, 0.7, UI.ACCENT, 2)
                 nm_ = prog['title'].replace("Stitch: ", "").lower()
                 order_ = ['light', 'seams', 'brightness', 'saving']
                 stage = (f"Step {order_.index(nm_) + 1} of 4:  " if nm_ in order_ else "") + \
                     {'light': "light field (uneven lighting)", 'seams': "seams (where each frame really is)",
                      'brightness': "frame brightness", 'saving': "saving the preview and small copies"}.get(nm_, nm_)
-                UI.put(img, stage, x0 + 22, y0 + 74, 0.55, UI.TEXT, 1)
-                bx0, bx1, by = x0 + 22, x0 + pw - 22, y0 + 92
-                cv2.rectangle(img, (bx0, by), (bx1, by + 18), (60, 60, 66), -1)
-                cv2.rectangle(img, (bx0, by), (bx0 + int((bx1 - bx0) * prog['f']), by + 18), (90, 200, 90), -1)
-                cv2.rectangle(img, (bx0, by), (bx1, by + 18), (110, 110, 118), 1)
-                pct = f"{100 * prog['f']:.2f}% / 100.00%"
-                UI.put(img, pct, bx1 - UI.size(pct, 0.5)[0], y0 + 74, 0.5, UI.TEXT, 1)
-                txt = prog['text'] or ""
-                while txt and UI.size(txt, 0.45)[0] > pw - 44:
-                    txt = txt[:-2]
-                UI.put(img, txt, x0 + 22, y0 + 136, 0.45, UI.DIM, 1)
-                el = _t.monotonic() - t0
-                left_ = f", this step {int(prog['eta'] // 60):02d}:{int(prog['eta'] % 60):02d} left" if prog['eta'] else ""
-                UI.put(img, f"{int(el // 60):02d}:{int(el % 60):02d} passed{left_}   (the view reopens by itself)",
-                       x0 + 22, y0 + 172, 0.45, UI.DIM, 1)
+                UI.progress_panel(img, f"Stitching Selection {SM.sample_index(folder)}" if len(subs) > 1 else "Stitching",
+                                  stage, prog['f'], prog['text'], _t.monotonic() - t0, prog['eta'],
+                                  "(the view reopens by itself)")
                 cv2.imshow(WIN, np.hstack([img, pan]) if pan.shape[0] == img.shape[0] else img)
                 cv2.waitKey(60)
         finally:
@@ -833,7 +815,7 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
             continue
         ch = chr(key & 0xFF) if 0 <= key < 256 else ''
         raw = ch
-        step = (0.8 if ch in 'WASD' and ch else 0.25) * min(st['Wv'], st['Hv']) / st['s']
+        step = 0.25 * min(st['Wv'], st['Hv']) / st['s']    # стрелки — четверть окна
         ch = ch.lower()
         if key == 27:
             if st.get('help'):
@@ -845,30 +827,36 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
             st['dirty'] = True
         elif raw in (',', '.') and len(subs) > 1:           # предыдущий / следующий образец
             st['switch'] = subs[(subs.index(folder) + (1 if raw == '.' else -1)) % len(subs)]
-        elif ch == 'c' and st['mode'] == 'cross':           # кресты заново
+        elif raw == 'C':                                     # Shift+C: кресты заново (Ctrl+Z вернёт)
             g.cr.clear(); g.refined = None; set_straight(False); g.save(px_um)
-            st['msg'] = "Crosses cleared. Click a cross, then its neighbour in the same row"
-        elif ch == 'j':                                      # сшить прямо здесь; окно потом откроется заново
+            st['mode'] = 'cross'
+            st['msg'] = "Crosses cleared (Ctrl+Z brings them back). Click a cross, then its neighbour in the same row"
+        elif ch in 'sj' and ch:                              # S: сшить прямо здесь; окно потом откроется заново
             stitch_here()
             break
-        elif ch == 'l':                                      # линейка: две точки -> расстояние
+        elif ch in 'lr' and ch:                              # L или R: линейка, две точки -> расстояние
             if st['mode'] == 'ruler':
                 st['mode'], st['ruler'] = 'look', []
                 st['msg'] = "Ruler off"
             else:
                 st['mode'], st['ruler'] = 'ruler', []
-                st['msg'] = "Ruler: click two points (a third click starts again). L or Esc: off"
-        elif ch == 'g':
-            st['mode'] = 'cross'
-            st['msg'] = "Click a cross, then its neighbour in the same row: the picture turns level. C: start again"
-        elif ch == 's' and not raw.isupper():
+                st['msg'] = "Ruler: click two points (a third click starts again). L, R or Esc: off"
+        elif ch == 'c':                                      # C: отмечать кресты (ещё раз C — выйти)
+            if st['mode'] == 'cross':
+                st['mode'] = 'look'
+                st['msg'] = ""
+            else:
+                st['mode'] = 'cross'
+                st['msg'] = ("Click a cross, then its neighbour in the same row: the picture turns level. "
+                             "Shift+C: start again")
+        elif ch == 'm':                                      # M: маска — выбирать квадраты
             st['mode'] = 'select' if g.ready() else st['mode']
             st['msg'] = "Click = square, drag = box (Shift = unselect), right button = move" if g.ready() \
-                else "Mark at least 2 crosses first (G)"
+                else "Mark at least 2 crosses first (C)"
         elif ch == 'b':
             st['mode'] = 'paint' if g.ready() else st['mode']
             st['msg'] = "Brush: drag a rectangle: all squares in it are selected (Shift = unselect)" if g.ready() \
-                else "Mark at least 2 crosses first (G)"
+                else "Mark at least 2 crosses first (C)"
         elif key == 25 or raw == 'Y':                       # Ctrl+Y / Shift+Y: жёлтое -> зелёное
             if g.ready():
                 if not g.useful and not getattr(g, 'scores', None):
@@ -897,7 +885,7 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
             st['mode'] = 'label' if g.ready() else st['mode']
             st['msg'] = ("Click a square with a number written on it and type the number X Y. Two squares in another "
                          "row and column fix the directions; right click = remove a label") if g.ready() \
-                else "Mark at least 2 crosses first (G)"
+                else "Mark at least 2 crosses first (C)"
         elif key == 8:
             if st['mode'] == 'cross':
                 g.cr.undo(); g.save(px_um); st['msg'] = "Last cross mark removed"
@@ -910,7 +898,7 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
                 f"   hints: {len(g.useful)} squares (Y)"
         elif ch == 'h':
             st['help'] = not st.get('help')
-        elif ch == 'r':
+        elif ch == 't':                                      # T: ровно / как снято
             set_straight(not st['straight'])
             st['msg'] = "Straight: squares stand level" if st['straight'] else "Picture as shot"
         elif ch == 'a' and st['mode'] in ('select', 'paint') and g.ready():
@@ -931,13 +919,13 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
             zoom(0.8)
         elif ch == '0':
             fit()
-        elif key in {2424832, 65361} or (ch == 'a' and st['mode'] in ('look', 'cross')):
+        elif key in {2424832, 65361}:                       # только стрелки двигают картинку
             st['cx'] -= step
-        elif key in {2555904, 65363} or ch == 'd':
+        elif key in {2555904, 65363}:
             st['cx'] += step
-        elif key in {2490368, 65362} or ch == 'w':
+        elif key in {2490368, 65362}:
             st['cy'] -= step
-        elif key in {2621440, 65364} or (ch == 's' and raw.isupper()):
+        elif key in {2621440, 65364}:
             st['cy'] += step
         st['dirty'] = True
     if os.path.isdir(folder) and not st.get('stitched'):   # после сшивки разметку уже записала она (кресты — за кадрами)
@@ -957,7 +945,7 @@ def hints(folder, sensitivity=None, model=None):
     from .util import Result
     g = Grid(folder)
     if not g.ready():
-        raise ValueError("No grid yet: mark the crosses in mc.view(folder) (G).")
+        raise ValueError("No grid yet: mark the crosses in mc.view(folder) (C).")
     sc = _Scene(folder)
     info = {}
     g.find_useful(sc.render, sc.size, sensitivity=sensitivity, model=model or _AD.default_model(sc.st.meta.get('objective')), info=info)
@@ -978,7 +966,7 @@ def train_hints(folder, default=False):
     from .util import Result
     g = Grid(folder)
     if not g.ready():
-        raise ValueError("No grid yet: mark the crosses in mc.view(folder) (G).")
+        raise ValueError("No grid yet: mark the crosses in mc.view(folder) (C).")
     sc = _Scene(folder)
     info = {}
     g.find_useful(sc.render, sc.size, info=info)

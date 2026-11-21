@@ -130,9 +130,9 @@ print(m.measure_speed(1000)); assert m.motor_speed <= 0.8 * 5000 * 1.05
 m.offset()
 m.focus()
 # ноль и баланс белого из ручного режима: зона не сдвигается
-m.manual(fullscreen=False, _keys=[ord('1'), ord('d'), ord('0'), ord('2'), ord('b'), ord('r'), ord('c'), 27])
+m.manual(fullscreen=False, _keys=[ord('1'), 65363, ord('0'), ord('2'), ord('w'), ord(')'), ord('c'), 27])
 assert not any(m._off.values()); m.goto(x=0, y=0)
-area = m.manual(fullscreen=False, _keys=[ord('F'), ord('1')] + [65363] * 4 + [65364] * 3 + [ord('2'), 27])
+area = m.manual(fullscreen=False, _keys=[ord('a'), ord('1')] + [65363] * 4 + [65364] * 3 + [ord('2'), 27])
 print(area)
 prog = m.plan(focus='plane'); print(prog)
 folder = m.scan(name='test sample', focus='plane')
@@ -285,8 +285,8 @@ fr.close()
 typed = lambda t: [ord(ch) for ch in t] + [13, -1]
 clk = lambda ij: [('click', *view_xy(world(*ij)), 'shift'), -1]     # Shift+щелчок рядом — к центру креста
 # два креста в ряду -> наклон, полотно само докручивается (R — вернуть как снято, чтобы щёлкать по расчёту)
-keys = [ord('g')] + clk((2, 2)) + clk((3, 2)) + [ord('r'), -1] + clk((9, 2)) + clk((8, 6))   # дальние уточняют
-keys += [ord('r'), -1, ord('r'), -1, ord('s'), -1, ('drag', 560, 380, 720, 520), -1]
+keys = [ord('c')] + clk((2, 2)) + clk((3, 2)) + [ord('t'), -1] + clk((9, 2)) + clk((8, 6))   # дальние уточняют
+keys += [ord('t'), -1, ord('t'), -1, ord('m'), -1, ('drag', 560, 380, 720, 520), -1]
 keys += [ord('n'), -1, ('click', *view_xy(world(2.5, 2.5))), -1] + typed('12 7') + \
         [('click', *view_xy(world(4.5, 3.5))), -1] + typed('14 6')      # номера литографии: X вдоль i, Y — против j
 keys += [ord('y'), -1, ord('e'), -1, 27, 27]
@@ -313,7 +313,7 @@ assert len(gg.useful) <= 0.6 * gg.hint_squares and all(gg.useful[c] >= med for c
 Wsc_ = 1280 - mc.samples.CAR_W
 n0 = len(gg.cr.marks)
 u0, v0 = view_xy(world(5, 5)); u0, v0 = u0 - 3, v0 + 2
-mc.view(f, _keys=[ord('g'), -1, ('click', u0, v0), -1, ('drag', u0, v0, u0 + 10, v0 + 4), -1, 27, 27])
+mc.view(f, _keys=[ord('c'), -1, ('click', u0, v0), -1, ('drag', u0, v0, u0 + 10, v0 + 4), -1, 27, 27])
 g2 = Grid(f)
 assert len(g2.cr.marks) == n0 + 1, (n0, len(g2.cr.marks))
 fr = Frames(f); size_ = np.array(fr.size, float); fr.close()
@@ -321,12 +321,12 @@ sv = min(Wsc_ / size_[0], 900 / size_[1]) * 0.95
 exp_ = size_ / 2 + (np.array([u0 + 10.5, v0 + 4.5]) - (Wsc_ / 2, 450)) / sv
 assert np.hypot(*(g2.cr.marks[-1] - exp_)) < 0.6 / sv + 0.5, (g2.cr.marks[-1], exp_)
 u1, v1 = view_xy(world(6, 5)); u1, v1 = u1 - 3, v1 + 2
-mc.view(f, _keys=[ord('g'), -1, ('click', u1, v1), -1, ('drag', u1, v1, u1 + 6, v1), -1, 26, -1, 26, -1, 25, -1,
+mc.view(f, _keys=[ord('c'), -1, ('click', u1, v1), -1, ('drag', u1, v1, u1 + 6, v1), -1, 26, -1, 26, -1, 25, -1,
                   26, -1, ord('l'), -1, ('click', 300, 300), -1, ('click', 420, 380), -1, 27, 27])
 assert len(Grid(f).cr.marks) == n0 + 1, (n0, len(Grid(f).cr.marks))              # крест, сдвиг -> Ctrl+Z x2, Ctrl+Y, Ctrl+Z
 print("Cross marks: exactly at the click, draggable, Ctrl+Z / Ctrl+Y: OK")
 n0 = len(json.load(open(os.path.join(f, 'grid.json')))['selected'])
-mc.view(f, _keys=[ord('s'), -1, ('rclick', 640, 450), -1, 27, 27])      # правый щелчок по зелёному — убрать область
+mc.view(f, _keys=[ord('m'), -1, ('rclick', 640, 450), -1, 27, 27])      # правый щелчок по зелёному — убрать область
 n1 = len(json.load(open(os.path.join(f, 'grid.json')))['selected'])
 assert n1 < n0, (n0, n1)
 mc.clean(f, confirm=True)
@@ -339,7 +339,7 @@ import microcontrol.manual as M
 m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp())
 m._world.size = (640, 480); m.focus()
 R_, D_, L_, U_ = 65363, 65364, 65361, 65362
-keys = [ord('1'), -1, R_, -1, R_, -1, D_, -1, ord('f'), -1, ord('2'), -1]          # образец 1: 3 x 2 кадра, точки 1-3
+keys = [ord('1'), -1, R_, -1, R_, -1, D_, -1, ord('k'), -1, ord('2'), -1]          # образец 1: 3 x 2 кадра, точки 1-3
 keys += [R_, -1, R_, -1, ord('1'), -1, R_, -1, D_, -1, ord('2'), -1]                 # образец 2: точки 4-5
 keys += [L_, -1, L_, -1, ord('1'), -1]                                              # внутри образца 2 -> отказ
 keys += [L_, -1, L_, -1, L_, -1, U_, -1, U_, -1, U_, -1, ord('1'), -1,                # новый угол 1 над образцом 1,
@@ -595,9 +595,9 @@ assert 'Where the time goes' in txt and 'Camera: picture' in inf['Time'] and inf
 print(txt.split("\n\n")[1].splitlines()[2])
 r = m.remove(2, confirm=False); print(r)
 assert not os.path.exists(det) and len(m.list()) == 1 and os.path.isdir(mapf)
-mc.view(mapf, _keys=[-1, ord('j'), -1, -1, 27, 27])                                # J: сшить прямо в просмотре
+mc.view(mapf, _keys=[-1, ord('s'), -1, -1, 27, 27])                                # S: сшить прямо в просмотре
 assert os.path.exists(os.path.join(mapf, 'join', 'positions_all.csv'))
-m.close(); print("Layers 10x > 50x, list, remove, time report, stitch from the viewer (J): OK")
+m.close(); print("Layers 10x > 50x, list, remove, time report, stitch from the viewer (S): OK")
 
 # ------------------------------------------------------------------ 23. Ctrl+Z / Ctrl+Y в ручном режиме
 import microcontrol.manual as M
@@ -613,4 +613,7 @@ M.run(m, fullscreen=False, _keys=[ord('l'), -1, (600, 300), -1, (700, 300), -1, 
                                   (600, 300), -1, R_, -1, (600, 300), -1, -1])     # линейка; точка 2 — после сдвига
 d_ = np.hypot(*(np.array(m._ruler['pts'][1]) - m._ruler['pts'][0]))
 assert len(m._ruler['pts']) == 2 and abs(d_ - m.frame_size[0]) < 0.1 * m.frame_size[0], (m._ruler, d_, m.frame_size)
-m.close(); print("Undo / redo in manual mode (selections and moves), ruler: OK")
+M.run(m, fullscreen=False, _keys=[ord('1'), -1, R_, -1, ord('2'), -1, ord('s'), -1, ord('s'), -1, -1, ord('v'), 27, 27, -1])
+sf = m._last_view
+assert os.path.exists(os.path.join(sf, 'join', 'positions_all.csv')), sf              # S, S: снято и сшито в окне
+m.close(); print("Undo / redo in manual mode (selections and moves), ruler, scan + stitch (S) and view (V) from the window: OK")

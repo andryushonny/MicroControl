@@ -733,7 +733,7 @@ The camera is read in a separate thread: the window is redrawn at once (pan, zoo
 |---|---|
 | Arrows | move by one frame (Step X, Y) |
 | `E` / `Q` (`PgUp` / `PgDn`) | stage up / down by Step Z (`Shift` — ×5) |
-| `A` · `K` | autofocus · keep $Z$ here as a focus point |
+| `F` · `K` | autofocus · keep $Z$ here as a focus point |
 | `1`, `2` | corners of a selection |
 | `Y` | "Z follows the focus points" on / off |
 | `,` `.` · `Enter` | previous / next selection · drive to it |
@@ -868,7 +868,7 @@ Dependencies: `pyserial`, `numpy`, `opencv-python`, `h5py`, `psutil`. The MindVi
 3. Connect without the camera: `m = mc.Microscope(objective=10, camera=False)`; expect the Mapping type and the cooling fan noise. Then `m.move(dx=200)`.
 4. Connect with the camera, `m.manual()`. Key `Q`: the stage must go **down** (the image blurs slightly). If it goes up — `Shift`+`Esc` at once, then `m.reverse_z = True`.
 5. Arrow `→`: the image must shift **left** by a frame width; likewise `↓` — up. If not — `mirror_x`, `mirror_y` or `reverse_x`, `reverse_y`.
-6. `A` — autofocus; `Shift`+`Esc`; `m.measure_speed()` in focus on an area with details.
+6. `F` — autofocus; `Shift`+`Esc`; `m.measure_speed()` in focus on an area with details.
 7. Check the emergency stop: while `m.manual()` runs, execute `python -m microcontrol stop` in another window.
 8. Set the home at a noticeable mark: `m.set_home()`. Disconnect, connect, `m.confirm_position()`, `m.go_home()` — expect "matches the home photo".
 9. Mark the corners of a small area (`1`, `2`), `folder = m.scan()`, `mc.stitch(folder)`, `mc.view(folder)`.

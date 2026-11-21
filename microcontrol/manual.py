@@ -5,7 +5,7 @@
 
   Стрелки             На шаг X / Y в сторону (буквы — для действий)
   E / Q (PgUp/PgDn)   Столик вверх / вниз на шаг Z (Shift — x5)
-  A                   Автофокус;  K — точка фокуса (Z здесь)
+  F                   Автофокус;  K — точка фокуса (Z здесь)
   1 / 2               Углы выделения;  C — удалить выделение (дважды)
   S (дважды)          Снять выделения этого объектива и сшить, прямо в окне (Esc — стоп)
   V                   Открыть последний скан в просмотре, после — снова сюда
@@ -42,7 +42,7 @@ HELP = ["Shift+Esc: Exit (or close the window)", "P: Hide / show the left panel"
         "Tab or click a field: steps (multiple of 5 um), exposure (ms), objective; Enter",
         "G: Steps X, Y = one frame", "M: Next objective (4x, 10x, 20x, 50x, 100x)",
         "1 / 2: Corners of a selection, one after another (their Z is kept as focus points); a higher objective may mark inside a lower one",
-        "A: Autofocus   K: Keep Z here as a focus point of this selection",
+        "F: Autofocus   K: Keep Z here as a focus point of this selection",
         "Y (or the box): Z follows the focus points of the area: when moving with the arrows and in the scan",
         "Selections (right, as layers 10x > 50x > 100x): click = choose, Go = drive there, x = delete;  , / . = previous / next;  Enter = drive",
         "C: Cancel the new selection / delete the chosen one (press twice)",
@@ -1381,13 +1381,13 @@ def run(m, fullscreen=False, _keys=None):
                 d0 = default_steps(m)
                 steps['x'], steps['y'] = d0['x'], d0['y']
                 msg = f"Steps X, Y = one frame: {steps['x']:g}, {steps['y']:g} um"
-            elif ch == 'a':                                # автофокус
+            elif ch in 'fa' and ch:                        # F (и A): автофокус
                 r = m.focus()
                 msg = f"Focused at Z {r['Z']}" + ("  (weak peak)" if 'Note' in r else "")
             elif ch == 'k':                                # запомнить Z здесь как точку фокуса выделения
                 msg = SM.add_point(m)
                 L.event('MAN-006', msg + ".")
-            elif ch in 'lf' and ch:                        # L (и F): свет вкл. / выкл.
+            elif ch == 'l':                                # L: свет вкл. / выкл.
                 m.light = 0 if m.light else 5
                 msg = "Light on" if m.light else "Light off"
             elif raw in (',', '.') and m._regions:         # предыдущая / следующая (в порядке дерева слоёв)

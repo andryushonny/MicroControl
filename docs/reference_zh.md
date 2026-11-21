@@ -734,7 +734,7 @@ I' = \frac{I - D}{E - D}\,\langle E - D \rangle,
 |---|---|
 | 方向键 | 移动一帧（步长 X、Y） |
 | `E` / `Q`（`PgUp` / `PgDn`） | 载物台按步长 Z 上升 / 下降（`Shift` —— ×5） |
-| `A` · `K` | 自动对焦 · 把此处的 $Z$ 记为对焦点 |
+| `F` · `K` | 自动对焦 · 把此处的 $Z$ 记为对焦点 |
 | `1`、`2` | 选区的角点 |
 | `Y` | 「Z 跟随对焦点」开 / 关 |
 | `,` `.` · `Enter` | 上一个 / 下一个选区 · 移动过去 |
@@ -869,7 +869,7 @@ jupyter notebook
 3. 不带相机连接：`m = mc.Microscope(objective=10, camera=False)`；应显示 Mapping 类型并听到制冷风扇声。然后 `m.move(dx=200)`。
 4. 带相机连接，`m.manual()`。按 `Q`：载物台应**下降**（图像略微变模糊）。若上升 —— 立即按 `Shift`+`Esc`，然后 `m.reverse_z = True`。
 5. 方向键 `→`：图像应**向左**移动一个画面宽度；同样 `↓` —— 向上。否则 —— `mirror_x`、`mirror_y` 或 `reverse_x`、`reverse_y`。
-6. `A` —— 自动对焦；`Shift`+`Esc`；在对焦状态下、在有细节的区域执行 `m.measure_speed()`。
+6. `F` —— 自动对焦；`Shift`+`Esc`；在对焦状态下、在有细节的区域执行 `m.measure_speed()`。
 7. 检查紧急停止：在 `m.manual()` 运行时，在另一个窗口执行 `python -m microcontrol stop`。
 8. 在明显的标记处设置原点：`m.set_home()`。断开、连接、`m.confirm_position()`、`m.go_home()` —— 应显示「与原点照片一致」。
 9. 标记一个小区域的角点（`1`、`2`），`folder = m.scan()`，`mc.stitch(folder)`，`mc.view(folder)`。

@@ -45,7 +45,7 @@ Both windows close with **Shift+Esc** or the window's ×. A single `Esc` only ca
 
 ![Manual mode](docs/img/manual.jpg)
 
-`m.manual()` opens the live camera. Move with the arrows (one press = one frame), focus with `E` / `Q` (or `A` — autofocus). Letters do things: `L` light, `I` laser, `W` white balance, `R` ruler, `S` (twice) scan and stitch right in the window, `V` open the result in the viewer.
+`m.manual()` opens the live camera. Move with the arrows (one press = one frame), focus with `E` / `Q` (or `F` — autofocus). Letters do things: `L` light, `I` laser, `W` white balance, `R` ruler, `S` (twice) scan and stitch right in the window, `V` open the result in the viewer.
 
 - **Mini map** (top right): one cell = one camera frame; the yellow cell is where you are. It moves with the arrows: arrow up — the cell goes up.
 - **Selection:** go to one corner of the sample, focus, press `1`; go to the opposite corner, focus, press `2`. The selection appears in its colour; corners snap to whole frames. Each selection remembers the objective it was marked with.
@@ -226,7 +226,7 @@ Arrows move; letters do things. As much as possible is done right in the window.
 |---|---|
 | Arrows | move by one frame (Step X, Y) |
 | `E` / `Q` (`PgUp` / `PgDn`) | stage up / down by Step Z (`Shift` — ×5) |
-| `A` · `K` | autofocus · keep $Z$ here as a focus point |
+| `F` · `K` | autofocus · keep $Z$ here as a focus point |
 | `1`, `2` | corners of a selection |
 | `Y` | "Z follows the focus points" on / off |
 | `,` `.` · `Enter` | previous / next selection · drive to it |

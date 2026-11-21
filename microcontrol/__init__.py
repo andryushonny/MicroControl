@@ -72,7 +72,7 @@ WORKFLOW
 MANUAL WINDOW (arrows move; letters do things)
   Arrows           Move by Step X / Step Y  Tab     Edit the steps (or click a field)
   E / Q            Stage up / down by Step Z (Shift: x5)   PgUp / PgDn too
-  A                Autofocus                K       Keep Z here as a focus point
+  F                Autofocus                K       Keep Z here as a focus point
   G                Steps X, Y = one frame   Y       Z follows the focus points (on / off)
   M                Next objective (4x, 10x, 20x, 50x, 100x)
   1 / 2            Corners of a selection, one after another; a higher objective may mark inside

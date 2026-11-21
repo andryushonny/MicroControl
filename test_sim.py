@@ -193,7 +193,7 @@ r = m.go_home(correct=True); print(r)
 assert all(abs(m._world.p[a] - home_true[a]) < 0.5 for a in 'xy'), m._world.p   # на самом деле дома
 m._remember(moving=True); m._ser.close(); m._lock.release(); m._lock = None; m._ser = None   # «убили» во время движения
 m = mc.Microscope('sim', objective=10, folder=hd)
-assert m._uncertain == {'x', 'y', 'z'}
+assert not m._uncertain                                             # без подтверждения: положению верим
 m.set_home(replace=True); assert not m._uncertain
 m.close()
 hd2 = tempfile.mkdtemp()                                            # без дома: координаты тоже продолжаются
@@ -371,7 +371,7 @@ assert all(json.load(open(os.path.join(x, 'meta.json')))['sample_index'] == i + 
 r = mc.stitch(ses, verbose=False)
 assert len(r) == 2, r
 Wsc = 1280 - mc.samples.CAR_W
-mc.view(ses, _keys=[-1, ord('.'), -1, -1, ('click', 1280 - 25, 64), -1, ('click', 1280 - 25, 64), -1, -1, 27])
+mc.view(ses, _keys=[-1, ord('.'), -1, -1, ('click', 1280 - 25, 64), -1, -1, -1, 27])
 left = mc.samples.samples(ses)
 assert [x.split(os.sep)[-3] for x in left] == ['S02_10x'] and \
     os.path.isdir(os.path.join(os.path.dirname(subs[0]), '_removed', os.path.basename(subs[0])))   # x у 1-го
@@ -636,7 +636,7 @@ M.run(m, fullscreen=False, _keys=[ord('r'), -1, (600, 300), -1, (700, 300), -1, 
                                   (600, 300), -1, R_, -1, (600, 300), -1, -1])     # линейка; точка 2 — после сдвига
 d_ = np.hypot(*(np.array(m._ruler['pts'][1]) - m._ruler['pts'][0]))
 assert len(m._ruler['pts']) == 2 and abs(d_ - m.frame_size[0]) < 0.1 * m.frame_size[0], (m._ruler, d_, m.frame_size)
-M.run(m, fullscreen=False, _keys=[ord('1'), -1, R_, -1, ord('2'), -1, ord('s'), -1, ord('s'), -1, -1, ord('v'), 27, 27, -1])
+M.run(m, fullscreen=False, _keys=[ord('1'), -1, R_, -1, ord('2'), -1, ord('s'), -1, -1, ord('v'), 27, 27, -1])
 sf = m._last_view
 assert os.path.exists(os.path.join(sf, 'join', 'positions_all.csv')), sf              # S, S: снято и сшито в окне
 m.close()
@@ -767,3 +767,25 @@ M.run(m, fullscreen=False, _keys=list(_Slow(150)))
 sh = SEL.marked_squares(f)['shift_um']
 assert np.hypot(*sh) < 1.0, sh
 m.close(); print("Mask snaps to the real crosses by itself:", np.round(sh, 2), "OK")
+
+# ------------------------------------------------------------------ 28. Без подтверждений: x у части маски — сразу, Ctrl+Z — назад
+import microcontrol.manual as M
+from microcontrol import samples as SM
+SEL = sys.modules['microcontrol.selections']
+from microcontrol.mask import Grid
+m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp()); m.focus()
+fw, fh = m.frame_size
+m.area = mc.Area(0, 0, 3 * fw, 2 * fh)
+f = m.scan(); mc.stitch(f, verbose=False)
+px_um = json.load(open(os.path.join(f, 'meta.json')))['pixel_size_um']
+g = Grid(f); p0 = np.array([150.0, 120.0]); a_ = 100 / px_um
+g.cr.add(p0); g.cr.add(p0 + (a_, 0)); g.cr.add(p0 + (0, a_))
+g.selected |= {(0, 0), (1, 0)}; g.save(px_um)
+gj = lambda: json.load(open(os.path.join(f, 'grid.json')))['selected']
+M.run(m, fullscreen=False, _keys=[-1, ord('j'), -1, ('car', 1251, 163), -1, -1])
+assert gj() == [], gj()                                             # один щелчок — удалено
+M.run(m, fullscreen=False, _keys=[-1, ord('j'), -1, ('car', 1251, 163), -1, 26, -1, -1])   # нечего удалять; Ctrl+Z
+g = Grid(f); g.selected |= {(0, 0), (1, 0)}; g.save(px_um)
+M.run(m, fullscreen=False, _keys=[-1, ord('j'), -1, ('car', 1251, 163), -1, 26, -1, -1])
+assert sorted(map(tuple, gj())) == [(0, 0), (1, 0)], gj()
+m.close(); print("No confirmations: mask part deleted at once, Ctrl+Z brings it back: OK")

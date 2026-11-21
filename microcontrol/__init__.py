@@ -67,7 +67,7 @@ WORKFLOW
   mc.join(folder)                  Simple whole mosaic in one picture (small scans)
   m.list()                         Scanned selections as layers (map 10x > details 50x > 100x), numbered
   m.open(N)                        Look at selection N again (mc.view)
-  m.remove(N)                      Delete selection N completely (asks; confirm=False: no question)
+  m.remove(N)                      Delete selection N completely (no question; confirm=True: ask)
   m.info()                         Device, and where the time goes: every action timed, longest first
 
 MANUAL WINDOW (arrows move; letters do things)

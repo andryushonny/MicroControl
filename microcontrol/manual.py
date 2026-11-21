@@ -45,8 +45,8 @@ HELP = ["Shift+Esc: Exit (or close the window)", "P: Hide / show the left panel"
         "F: Autofocus   K: Keep Z here as a focus point of this selection",
         "Y (or the box): Z follows the focus points of the area: when moving with the arrows and in the scan",
         "Selections (right, as layers 10x > 50x > 100x): click = choose, Go = drive there, x = delete;  , / . = previous / next;  Enter = drive",
-        "C: Cancel the new selection / delete the chosen one (press twice)",
-        "S (twice): Scan the selections of this objective and stitch them, here in the window (Esc: stop)",
+        "C: Cancel the new selection / delete the chosen one (Ctrl+Z brings it back)",
+        "S: Scan the selections of this objective and stitch them, here in the window (Esc: stop)",
         "V: Open the last scan in the view (crosses, squares, export); closing it brings you back here",
         "L: Light on / off   I: Laser on / off   W: White balance (aim at an empty place)   Space: Picture",
         "R: Ruler: click two points (distance, um)   0: Zero here   Shift+0: Real coordinates",
@@ -535,6 +535,13 @@ def _run(m, fullscreen=False, _keys=None):
     car = dict(scroll=0, hits=[], confirm=None, t=0.0)   # карусель справа
     mdr = dict(on=False)                                 # Shift + тянуть: сдвиг маски (папка съёмки, начало, сдвиг)
     mshift, mshift0 = {}, {}                             # сдвиги масок за сеанс (для Ctrl+Z) и исходные
+    msel, msel0 = {}, {}                                 # выбранные квадраты масок (удаление части — Ctrl+Z)
+
+    def mask_sel(fd_):
+        try:
+            return [list(c_) for c_ in json.load(open(os.path.join(fd_, 'grid.json'), encoding='utf-8')).get('selected', [])]
+        except (OSError, ValueError):
+            return []
     A = B = None
     if not getattr(m, '_manual_steps', None):
         m._manual_steps = default_steps(m)
@@ -794,12 +801,7 @@ def _run(m, fullscreen=False, _keys=None):
         nfr = sum(int(np.prod(SM.frames_of(m, k_))) for k_ in ks)
         fm_ = 'points' if m._use_fp else 'off'
         est = sum(TM.estimate(m, int(np.prod(SM.frames_of(m, k_))), fm_ if m._regions[k_]['pts'] else 'off')[0] for k_ in ks)
-        if not (car.get('scan_ok') and time.monotonic() - car['scan_ok'] < 5):
-            car['scan_ok'] = time.monotonic()
-            msg = (f"Press S again: scan {len(ks)} selection{'s' if len(ks) > 1 else ''} of {m.objective}x, {nfr} frames, "
-                   f"{TM.fmt(est)}, then stitch. Esc stops the scan")
-            return
-        car['scan_ok'] = None
+        L.event('MAN-011', f"Scan from the window: {len(ks)} selection(s) of {m.objective}x, {nfr} frames, ~{TM.fmt(est)}.")
         prog = dict(title="Scan", f=0.0, text="starting", eta=None)
         res, t0 = {}, time.monotonic()
 
@@ -873,7 +875,7 @@ def _run(m, fullscreen=False, _keys=None):
             sc_ = P_.Selection(m.sample, m._regions[m._sel]).latest
             f_ = sc_.folder if sc_ else None
             if f_ is None:
-                msg = (f"Selection {m._regions[m._sel]['num']} is not scanned yet: S twice scans it"
+                msg = (f"Selection {m._regions[m._sel]['num']} is not scanned yet: S scans it"
                        + ("" if not P_.latest_scans(m.sample.folder) else " (Scans in the menu: the others)"))
                 return
         if f_ is None and lv and os.path.isdir(lv) and P_.sample_of(lv) == m.sample.folder:
@@ -882,7 +884,7 @@ def _run(m, fullscreen=False, _keys=None):
             ls = sorted(P_.latest_scans(m.sample.folder), key=os.path.basename)
             f_ = ls[-1] if ls else None
         if not f_:
-            msg = "Nothing scanned in this sample yet: mark a selection (1, 2) and press S twice"
+            msg = "Nothing scanned in this sample yet: mark a selection (1, 2) and press S"
             return
         if live is not None:
             live.paused = True
@@ -954,13 +956,15 @@ def _run(m, fullscreen=False, _keys=None):
     def h_sig():
         strip = lambda r: None if r is None else {k_: v_ for k_, v_ in r.items() if k_ != 'thumbs'}
         return json.dumps([[strip(r) for r in m._regions], strip(m._pending), m._sel, getattr(m, '_area_seq', 0),
-                           m._p, m.objective, m._off, mshift], sort_keys=True, default=str)
+                           m._p, m.objective, m._off, mshift, msel], sort_keys=True, default=str)
 
     def h_snap():
         return dict(regions=copy.deepcopy(m._regions), pending=copy.deepcopy(m._pending), sel=m._sel,
-                    seq=getattr(m, '_area_seq', 0), p=dict(m._p), obj=m.objective, off=dict(m._off), ms=dict(mshift))
+                    seq=getattr(m, '_area_seq', 0), p=dict(m._p), obj=m.objective, off=dict(m._off), ms=dict(mshift), sel_=copy.deepcopy(msel))
 
     def h_label(a_, b_):
+        if a_.get('sel_') != b_.get('sel_'):
+            return "delete a mask part"
         if a_.get('ms') != b_.get('ms'):
             return "move a mask"
         if a_['p'] != b_['p'] and json.dumps(a_['regions'], default=str) == json.dumps(b_['regions'], default=str):
@@ -976,6 +980,23 @@ def _run(m, fullscreen=False, _keys=None):
         что Go: сначала вниз, потом X/Y отрезками, потом вверх)."""
         m._regions[:] = copy.deepcopy(t['regions'])
         m._pending, m._sel, m._area_seq = copy.deepcopy(t['pending']), t['sel'], t['seq']
+        for fd_, s0_ in msel0.items():                      # удалённые части масок
+            to_ = t.get('sel_', {}).get(fd_, s0_)
+            if mask_sel(fd_) != to_:
+                gp_ = os.path.join(fd_, 'grid.json')
+                d_ = json.load(open(gp_, encoding='utf-8'))
+                d_['selected'] = to_
+                with open(gp_, 'w', encoding='utf-8') as f_:
+                    json.dump(d_, f_, indent=1)
+                SM._MASKS.pop(fd_, None)
+                import importlib
+                SEL_ = importlib.import_module('.selections', __package__)   # mc.selections — функция-список
+                SEL_._SQ.pop(fd_, None)
+                SEL_._ALL.clear()
+            if fd_ in t.get('sel_', {}):
+                msel[fd_] = to_
+            else:
+                msel.pop(fd_, None)
         for fd_, sh0_ in mshift0.items():                   # сдвиги масок
             to_ = t.get('ms', {}).get(fd_, sh0_)
             if mshift.get(fd_, sh0_) != to_:
@@ -1433,16 +1454,17 @@ def _run(m, fullscreen=False, _keys=None):
                         if act == 'sel':
                             car['confirm'] = None
                             car['mask'] = km
-                            msg = (f"Mask {SM.num(m, km)}.{kp + 1}: Go drives to its nearest square, x deletes only it, "
+                            msg = (f"Mask {SM.num(m, km)}.{kp + 1}: Go drives to its nearest square, x deletes only it (Ctrl+Z: back), "
                                    "Shift + drag on the picture moves the whole mask")
-                        elif act == 'del':
-                            if car['confirm'] == k:
-                                msg = SM.delete_mask(m, km, kp)
-                                car['confirm'] = None
+                        elif act == 'del':                          # сразу, без подтверждения (Ctrl+Z вернёт)
+                            ps_ = SM.mask_parts(m, km)
+                            if kp < len(ps_):
+                                fd_ = ps_[kp]['folder']
+                                if fd_ not in msel0:
+                                    msel0[fd_] = mask_sel(fd_)
+                                msg = SM.delete_mask(m, km, kp) + " (Ctrl+Z: back)"
+                                msel[fd_] = mask_sel(fd_)
                                 L.event('MAN-008', msg + ".")
-                            else:
-                                car['confirm'] = k
-                                msg = f"Click x again to delete mask {SM.num(m, km)}.{kp + 1} (the other parts stay)"
                         elif act == 'go':
                             car['confirm'] = None
                             hold_ = live.hold() if live is not None else None
@@ -1463,12 +1485,8 @@ def _run(m, fullscreen=False, _keys=None):
                             m._sel = k
                             msg, msg_t = (f"Selection {SM.num(m, k)} chosen ({SM.layer_name(m, k)}; Go or Enter: "
                                           "drive there)"), time.monotonic()
-                    elif act == 'del':
-                        if car['confirm'] == k:
-                            delete_region(k)
-                        else:
-                            car['confirm'] = k
-                            msg = f"Click x again to delete Selection {SM.num(m, k)}"
+                    elif act == 'del':                              # сразу, без подтверждения (Ctrl+Z вернёт)
+                        delete_region(k)
                         msg_t = time.monotonic()
                     elif act == 'go' and k < len(m._regions):
                         car['confirm'] = None
@@ -1692,12 +1710,8 @@ def _run(m, fullscreen=False, _keys=None):
             elif ch == 'c':                                # отменить новую область / удалить выбранную (дважды)
                 if m._pending:
                     delete_region(len(m._regions))
-                elif m._sel is not None:
-                    if car['confirm'] == m._sel and time.monotonic() - car['t'] < 4:
-                        delete_region(m._sel)
-                    else:
-                        car['confirm'], car['t'] = m._sel, time.monotonic()
-                        msg = f"Press C again to delete Selection {SM.num(m, m._sel)}"
+                elif m._sel is not None:                   # сразу (Ctrl+Z вернёт)
+                    delete_region(m._sel)
             elif ch in '12':                               # углы области: строго по очереди 1, потом 2
                 msg = SM.corner(m, int(ch), img)
                 L.event('MAN-003', msg + ".")

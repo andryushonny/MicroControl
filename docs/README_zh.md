@@ -21,7 +21,7 @@ s = mc.Project("Graphene", "flakes for transport").sample("Chip 1", "SiO2 285 nm
 m = mc.Microscope(objective=10, sample=s)   # 1. 连接   （mc.Microscope('sim', objective=10) —— 模拟器）
 
 m.manual()                   # 2. 绿色区域：在两个对角按 1 和 2，每处对焦
-folder = m.scan()            #    逐帧拍摄（或在窗口内按两次 S）
+folder = m.scan()            #    逐帧拍摄（或在窗口内按 S）
 mc.stitch(folder)            #    把各帧拼接成一张图（或在 mc.view 中按 S）
 
 mc.view(folder)              # 3. 按 C：点击两个相邻的十字 -> 红色网格
@@ -232,8 +232,8 @@ z = \frac{\min_k \sqrt{(\mathbf f-\boldsymbol\mu_k)^{\mathsf T}\Sigma_k^{-1}(\ma
 | `1`、`2` | 选区的角点 |
 | `Y` | 「Z 跟随对焦点」开 / 关 |
 | `,` `.` · `Enter` | 上一个 / 下一个选区 · 移动过去 |
-| `C` | 取消新选区 / 删除所选选区（按两次） |
-| `S`（按两次） | 在窗口内拍摄当前物镜的选区并拼接（`Esc` —— 停止） |
+| `C` | 取消新选区 / 删除所选选区（Ctrl+Z 可恢复） |
+| `S` | 在窗口内拍摄当前物镜的选区并拼接（`Esc` —— 停止） |
 | `V` | 在查看器中打开最近一次扫描；关闭后回到这里 |
 | `L` · `I` · `W` | 开 / 关照明 · 开 / 关激光 · 白平衡 |
 | `R` | 标尺：点击两点 —— 距离 |

@@ -284,20 +284,16 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
             car['confirm'] = None
             if f != folder:
                 st['switch'] = f
-        elif act == 'del':
-            if car.get('confirm') == f:
-                car['confirm'] = None
-                g.save(px_um) if f == folder else None
-                if f == folder:
-                    sc.st.close()
-                dst = SM.remove_sample(f)
-                car['hist'].push(f"remove Selection {SM.sample_index(dst)}", None, None, kind='remove', src=f, dst=dst)
-                rest = [s_ for s_ in subs if s_ != f]
-                st['msg'] = f"Selection {SM.sample_index(dst)} removed to {dst} (Ctrl+Z: bring it back)"
-                st['switch'] = (folder if f != folder else (rest[min(k, len(rest) - 1)] if rest else False))
-            else:
-                car['confirm'] = f
-                st['msg'] = f"Click x again to remove Selection {SM.sample_index(f)} (its folder goes to _removed/)"
+        elif act == 'del':                                  # сразу, без подтверждения (Ctrl+Z вернёт)
+            car['confirm'] = None
+            g.save(px_um) if f == folder else None
+            if f == folder:
+                sc.st.close()
+            dst = SM.remove_sample(f)
+            car['hist'].push(f"remove Selection {SM.sample_index(dst)}", None, None, kind='remove', src=f, dst=dst)
+            rest = [s_ for s_ in subs if s_ != f]
+            st['msg'] = f"Selection {SM.sample_index(dst)} removed to {dst} (Ctrl+Z: bring it back)"
+            st['switch'] = (folder if f != folder else (rest[min(k, len(rest) - 1)] if rest else False))
         st['dirty'] = True
 
     def R():

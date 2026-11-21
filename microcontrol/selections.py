@@ -208,9 +208,9 @@ def open_selection(which, root=None, **kw):
     return view(resolve(which, root), **kw)
 
 
-def remove_selection(which, root=None, confirm=True):
+def remove_selection(which, root=None, confirm=False):
     """Удалить отснятое выделение совсем (папку со всеми кадрами). Пустая после этого папка сеанса — тоже.
-    confirm=True — сначала спросить (ввести yes)."""
+    Сразу; confirm=True — сначала спросить (ввести yes)."""
     from .util import Result
     f = resolve(which, root)
     lst = list_selections(root)

@@ -21,7 +21,7 @@ s = mc.Project("Graphene", "flakes for transport").sample("Chip 1", "SiO2 285 nm
 m = mc.Microscope(objective=10, sample=s)   # 1. connect   (mc.Microscope('sim', objective=10) — simulator)
 
 m.manual()                   # 2. green area: keys 1 and 2 at two opposite corners, focus at each
-folder = m.scan()            #    shoot the area frame by frame (or S twice right in the window)
+folder = m.scan()            #    shoot the area frame by frame (or S right in the window)
 mc.stitch(folder)            #    join the frames into one picture (or S in mc.view)
 
 mc.view(folder)              # 3. key C: click two neighbouring crosses -> the red grid
@@ -106,7 +106,7 @@ The selections nest like Russian dolls: in the list on the right of manual mode 
 ```python
 m.list()          # all scanned selections as layers, numbered
 m.open(3)         # look at number 3 again (mc.view)
-m.remove(3)       # delete number 3 completely (asks first)
+m.remove(3)       # delete number 3 completely (no question)
 m.info()          # where the time goes: every action is timed, longest first
 ```
 
@@ -232,8 +232,8 @@ Arrows move; letters do things. As much as possible is done right in the window.
 | `1`, `2` | corners of a selection |
 | `Y` | "Z follows the focus points" on / off |
 | `,` `.` · `Enter` | previous / next selection · drive to it |
-| `C` | cancel the new selection / delete the chosen one (press twice) |
-| `S` (twice) | scan the selections of this objective and stitch them, in the window (`Esc` — stop) |
+| `C` | cancel the new selection / delete the chosen one (Ctrl+Z brings it back) |
+| `S` | scan the selections of this objective and stitch them, in the window (`Esc` — stop) |
 | `V` | open the last scan in the viewer; closing it brings you back |
 | `L` · `I` · `W` | light on / off · laser on / off · white balance |
 | `R` | ruler: two clicks — the distance |

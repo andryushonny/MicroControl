@@ -660,9 +660,9 @@ class Microscope:
         from .selections import open_selection
         return open_selection(which, self.dirs['scans'], **kw)
 
-    def remove(self, which, confirm=True):
+    def remove(self, which, confirm=False):
         """Удалить отснятое выделение совсем (все кадры, сетку, экспорт): номер из m.list(), папка или часть
-        имени. confirm=True — спросить (yes). Выделения внутри него остаются."""
+        имени — сразу, без вопроса (confirm=True — спросить yes). Выделения внутри него остаются."""
         from .selections import remove_selection
         return remove_selection(which, self.dirs['scans'], confirm)
 
@@ -1073,14 +1073,12 @@ class Microscope:
         # картинка камеры ещё сверяется с кадром конца прошлого сеанса (_check_last_view): сдвинули столик —
         # координаты поправляются по картинке.
         self._p = {a: int(mem.last['p'][a]) for a in AXES}
-        broken = mem.last.get('moving')
-        if broken:
-            self._uncertain = set(AXES)
+        broken = mem.last.get('moving')                    # без подтверждения: верим положению (только заметка)
         L.event('CON-004', f"Position {self.position} restored from {mem.last['time']}"
                            + (" (that session ended during a move: not confirmed)" if broken else "") + ".",
                 30 if broken else 20)
-        return ("The last session ended DURING A MOVE: the position may be off. Check with m.go_home() "
-                "(compares the picture with the home photo), then m.confirm_position()." if broken else None)
+        return ("The last session ended during a move: the position is taken as it was (masks snap to the crosses "
+                "by themselves)." if broken else None)
 
     def _save_last_view(self):
         """Кадр камеры здесь и сейчас — в память прибора (для сверки при следующем подключении)."""
@@ -1120,11 +1118,11 @@ class Microscope:
         same = float(np.corrcoef(a4.ravel(), b4.ravel())[0, 1])  # картинка та же (без сдвига)
         if resp < 0.1 and same > 0.9:
             sx = sy = 0.0
-        elif resp < 0.1:
-            self._uncertain = set(AXES)
-            L.event('CON-009', f"The picture differs from the end of the last session (response {resp:.2f}).", 30)
-            return ("The camera picture differs from the end of the last session: was the stage moved or the sample "
-                    "changed? Selections may be off. Check: m.go_home(), then m.confirm_position().")
+        elif resp < 0.1:                                       # без подтверждения: положение — как было
+            L.event('CON-009', f"The picture differs from the end of the last session (response {resp:.2f}); "
+                               "the position is kept.", 20)
+            return ("The camera picture differs from the end of the last session (another sample?): the position "
+                    "is kept as it was.")
         e = np.linalg.solve(self._pixels_per_step(), np.array([sx, sy]))
         d = {'x': int(round(e[0])), 'y': int(round(e[1]))}
         if not d['x'] and not d['y']:

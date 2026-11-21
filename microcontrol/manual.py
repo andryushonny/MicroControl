@@ -23,7 +23,7 @@ import cv2
 import numpy as np
 from . import log as L
 from .errors import MicroControlError
-from .util import wheel_delta, open_window, window_size, exit_key, EXIT
+from .util import wheel_delta, open_window, window_size, exit_key, EXIT, set_icon
 from . import focus as F_
 import threading
 from .scan import Area, focus_z
@@ -837,6 +837,8 @@ def run(m, fullscreen=True, _keys=None):
             car['hits'], car['content'] = hits_, cont_
             view[:, W - SM.CAR_W:] = pan_
             cv2.imshow(WIN, view)
+            if n == 1:                                    # окно уже на экране: значок программы (Windows)
+                set_icon(WIN)
         key = next(keys, EXIT) if keys is not None else cv2.waitKeyEx(8 if live is not None else 30)
         if keys is not None:
             cv2.waitKey(1)

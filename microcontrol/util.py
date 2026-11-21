@@ -136,23 +136,74 @@ def icon_path():
     return None
 
 
-def set_icon(title):
-    """Значок окна OpenCV и панели задач (Windows); на других системах — ничего."""
-    p = icon_path()
-    if not p:
-        return
+def _app_id():
+    """Своя группа на панели задач Windows (иначе значок берётся у python.exe). Ставится один раз,
+    до создания окон — поэтому вызывается при импорте библиотеки."""
     try:
         import ctypes
-        u = ctypes.windll.user32
-        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("MicroControl")   # своя кнопка на панели задач
-        hwnd = u.FindWindowW(None, title)
-        if not hwnd:
-            return
-        u.LoadImageW.restype = ctypes.c_void_p
-        big = u.LoadImageW(None, p, 1, 32, 32, 0x10)          # IMAGE_ICON, LR_LOADFROMFILE
-        small = u.LoadImageW(None, p, 1, 16, 16, 0x10)
-        u.SendMessageW.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_void_p, ctypes.c_void_p]
-        u.SendMessageW(hwnd, 0x80, 1, big)                    # WM_SETICON, ICON_BIG
-        u.SendMessageW(hwnd, 0x80, 0, small)                  # ICON_SMALL
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("MicroControl.Microscope")
     except Exception:
         pass
+
+
+def _windows_of_process(title):
+    """Окна верхнего уровня этого процесса с таким заголовком (Windows)."""
+    import ctypes
+    from ctypes import wintypes
+    u = ctypes.windll.user32
+    out, pid = [], os.getpid()
+    proto = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+
+    def cb(h, _):
+        p_ = wintypes.DWORD()
+        u.GetWindowThreadProcessId(h, ctypes.byref(p_))
+        if p_.value == pid:
+            n = u.GetWindowTextLengthW(h)
+            buf = ctypes.create_unicode_buffer(n + 1)
+            u.GetWindowTextW(h, buf, n + 1)
+            if buf.value == title:
+                out.append(h)
+        return True
+    u.EnumWindows(proto(cb), 0)
+    return out
+
+
+def set_icon(title):
+    """Значок окна OpenCV (заголовок, Alt+Tab, панель задач) — только Windows. Возвращает, что получилось
+    (для проверки: mc.util.set_icon('MicroControl') при открытом окне)."""
+    p = icon_path()
+    if not p:
+        return "no icon file (microcontrol/icon.ico or ~/.microcontrol/icon.ico)"
+    try:
+        import ctypes
+        from ctypes import wintypes
+        u = ctypes.windll.user32
+    except Exception:
+        return "not Windows: nothing to do"
+    try:
+        u.LoadImageW.restype = wintypes.HANDLE
+        u.LoadImageW.argtypes = [wintypes.HINSTANCE, wintypes.LPCWSTR, wintypes.UINT, ctypes.c_int, ctypes.c_int,
+                                 wintypes.UINT]
+        u.SendMessageW.restype = ctypes.c_ssize_t
+        u.SendMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+        u.FindWindowW.restype = wintypes.HWND
+        set_cls = getattr(u, 'SetClassLongPtrW', None) or u.SetClassLongW
+        set_cls.restype = ctypes.c_size_t
+        set_cls.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_ssize_t]
+        hw = _windows_of_process(title) or [u.FindWindowW(None, title)]
+        hw = [h for h in hw if h]
+        if not hw:
+            return f"no window {title!r} yet"
+        LR_LOADFROMFILE = 0x10
+        big = u.LoadImageW(None, p, 1, u.GetSystemMetrics(11), u.GetSystemMetrics(12), LR_LOADFROMFILE)
+        small = u.LoadImageW(None, p, 1, u.GetSystemMetrics(49), u.GetSystemMetrics(50), LR_LOADFROMFILE)
+        if not big or not small:
+            return f"could not load {p}"
+        for h in hw:
+            u.SendMessageW(h, 0x80, 1, big)                   # WM_SETICON, ICON_BIG: Alt+Tab, панель задач
+            u.SendMessageW(h, 0x80, 0, small)                 # ICON_SMALL: заголовок окна
+            set_cls(h, -14, big)                              # GCLP_HICON
+            set_cls(h, -34, small)                            # GCLP_HICONSM
+        return f"icon set on {len(hw)} window(s)"
+    except Exception as e:
+        return f"failed: {e}"

@@ -27,6 +27,8 @@ from .mask import export, clean
 from .optics import measure_distortion as distortion
 from .viewer import view, hints, train_hints
 from .agent import Agent
+from .util import _app_id as _a
+_a()                                     # своя кнопка на панели задач Windows (значок MicroControl)
 from . import agent
 
 _HELP = """MicroControl {v}. Authors: Lyapeikov A., Domenko S.

@@ -15,7 +15,7 @@ from collections import OrderedDict
 import cv2
 import numpy as np
 from .storage import ScanData, THUMB, meta_A
-from .util import wheel_delta, open_window, window_size, exit_key, EXIT
+from .util import wheel_delta, open_window, window_size, exit_key, EXIT, set_icon
 from . import ui as UI
 from . import anomaly as _AD
 
@@ -578,6 +578,9 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
         if st['dirty']:
             cv2.imshow(WIN, render())
             st['dirty'] = st['car_dirty'] = False
+            if not st.get('icon'):                          # окно уже на экране: значок программы (Windows)
+                st['icon'] = True
+                set_icon(WIN)
         elif st.get('car_dirty') and st.get('scene') is not None:   # только карусель (наведение мыши)
             cv2.imshow(WIN, np.hstack([st['scene'], carousel_img()]))
             st['car_dirty'] = False

@@ -2,7 +2,7 @@
 
 **Software control of the Optosky ATR8300 Raman microscope (MP / Mapping version): stage, illumination, laser, camera, autofocus, area scanning, stitching and preparation of images for training datasets.**
 
-**Authors:** A. Lyapeikov, S. Domenko. **Version:** 0.18.0. Русская версия: [README_ru.md](README_ru.md).
+**Authors:** A. Lyapeikov, S. Domenko. **Version:** 0.18.0. Русский: [docs/README_ru.md](docs/README_ru.md) · 中文: [docs/README_zh.md](docs/README_zh.md) · PDF: [EN](docs/MicroControl_en.pdf), [RU](docs/MicroControl_ru.pdf), [中文](docs/MicroControl_zh.pdf).
 
 ---
 
@@ -199,20 +199,20 @@ No other command codes are ever sent to the controller (allow-list; error `E305`
 
 ### 5.5. Connect and disconnect sequences
 
-| Step | Stock Optosky program | MicroControl | Same |
-|---|---|---|---|
-| Port | 115200 8N1, DTR = 0, RTS = 0, reply timeout 5 s | same | yes |
-| Serial number | `AA 55 00 04 04 08` | same; up to 3 retries if there is no reply | yes |
-| Model | `AA 55 00 04 03 07` | same | yes |
-| Max laser power | `AA 55 00 04 66 6A` | same | yes |
-| Calibration | `AA 55 00 05 31 09 3F` | same | yes |
-| Instrument type | `AA 55 00 04 26 2A` | same | yes |
-| Light, level 5 | `AA 55 00 06 2D 00 05 38` | same | yes |
-| Cooling −5 °C | `AA 55 00 06 12 FF 05 1C` | same (`cooling=False` — do not turn on) | yes |
-| Motors on (before the first move on any axis) | `AA 55 00 05 24 01 2A` | same | yes |
-| Move X "backward", 36 steps | `AA 55 00 07 2E FF 00 24 58` (recorded) | `AA 55 00 07 2E FF 00 24 58` | byte for byte |
-| Pause after a move | 50 ms; does not wait for the motion to end | $t = N\delta/v + \tau$ (section 6) | no, on purpose |
-| Disconnect | laser 0 → motors off → light 0 → cooling 20 °C → close the port | same | yes |
+| Step | Stock Optosky program | MicroControl |
+|---|---|---|
+| Port | 115200 8N1, DTR = 0, RTS = 0, reply timeout 5 s | same |
+| Serial number | `AA 55 00 04 04 08` | same; up to 3 retries if there is no reply |
+| Model | `AA 55 00 04 03 07` | same |
+| Max laser power | `AA 55 00 04 66 6A` | same |
+| Calibration | `AA 55 00 05 31 09 3F` | same |
+| Instrument type | `AA 55 00 04 26 2A` | same |
+| Light, level 5 | `AA 55 00 06 2D 00 05 38` | same |
+| Cooling −5 °C | `AA 55 00 06 12 FF 05 1C` | same (`cooling=False` — do not turn on) |
+| Motors on (before the first move on any axis) | `AA 55 00 05 24 01 2A` | same |
+| Move X "backward", 36 steps | `AA 55 00 07 2E FF 00 24 58` (recorded) | `AA 55 00 07 2E FF 00 24 58` |
+| Pause after a move | 50 ms; does not wait for the motion to end | $t = N\delta/v + \tau$ (section 6) (different on purpose) |
+| Disconnect | laser 0 → motors off → light 0 → cooling 20 °C → close the port | same |
 
 Confirmed by a recording: the controller answers the serial number (`ATR30007`) and model (`25312082531`) requests within 1–4 ms.
 

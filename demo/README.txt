@@ -11,4 +11,4 @@ demo_6_home.py           microscope home: set_home / new session / go_home
 On the instrument Z is never raised blindly: focus in m.manual() first (keys E / Q, Shift+F).
 
 Русский: короткие примеры; по умолчанию работают на симуляторе, для прибора PORT = 'auto'.
-Подробное описание — README_ru.md, раздел 23.
+Подробное описание — docs/README_ru.md, раздел 23. 中文说明：docs/README_zh.md，第 23 节。

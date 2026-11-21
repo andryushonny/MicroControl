@@ -54,6 +54,9 @@ class Grid:
             self.arm = d.get('arm_px')
             self.useful = {(int(a), int(b)): f for a, b, f in d.get('useful', [])}
             self.sensitivity = d.get('sensitivity', SENSITIVITY)
+            if 'hint_scores' in d:
+                self.scores = {(int(a), int(b)): f for a, b, f in d['hint_scores']}
+                self.hint_squares = d.get('hint_squares', len(self.scores))
 
     def save(self, px_um=None):
         v1, v2 = self.cr.vectors()
@@ -68,6 +71,10 @@ class Grid:
         d['sensitivity'] = self.sensitivity
         if self.useful:
             d['useful'] = [[i, j, f] for (i, j), f in sorted(self.useful.items())]
+        sc_ = getattr(self, 'scores', None)
+        if sc_:                                             # доли всех квадратов: чувствительность — мгновенно
+            d['hint_scores'] = [[i, j, round(f, 5)] for (i, j), f in sorted(sc_.items()) if f > 0]
+            d['hint_squares'] = getattr(self, 'hint_squares', len(sc_))
         if self.refined:
             d['refined'] = self.refined
         if v1 is not None:
@@ -185,56 +192,73 @@ class Grid:
         X, Y = P @ np.array([i, j]) + t
         return int(X), int(Y)
 
-    def find_useful(self, render, size, n=96, thr=12.0, sensitivity=None, dark=False):
-        """Подсказка: квадраты, в которых что-то есть (чешуйки, кристаллы). Простой и быстрый способ для
-        слабого ПК: вся мозаика одним уменьшенным снимком (квадрат ≈ n px), каждый квадрат выпрямляется,
-        фон квадрата — медиана цвета (неровная подсветка не мешает), «что-то» — пиксели, отличающиеся от фона
-        в Lab больше чем на thr. Углы с крестами и номерами не считаются. Тёмные точки (пыль) не считаются,
-        если dark=False. Квадрат — подсказка, если доля таких пикселей > min_frac и заметно выше,
-        чем у типичного квадрата. sensitivity 0…100 (по умолчанию 50; больше — больше подсказок):
-        доля квадрата, которую должно занять «что-то», от 5 % (0) до 0,05 % (100), логарифмически.
-        render(cx, cy, s, w, h) -> кусок мозаики в масштабе s.
-        Доля «пустого» квадрата — 0 (шум и пыль отсекаются по размеру пятна). Возвращает {(i, j): доля}."""
+    def find_useful(self, render, size, n=160, sensitivity=None, dark=False, model=None, info=None):
+        """Подсказка: квадраты, в которых что-то есть (чешуйки, кристаллы, любые предметы) — поиск аномалий
+        (mask -> anomaly.py, принцип PaDiM): подложка описывается смесью гауссиан признаков маленьких участков,
+        «что-то» — участки, далёкие от неё. Учится без разметки на самой мозаике (почти все квадраты пустые)
+        или берёт модель пустой подложки (model: файл hint_model.npz / папка скана с ним / anomaly.Normal).
+        Для слабого ПК вся мозаика — один уменьшенный снимок (≤ ~6 Мпикс). Кресты с номерами (около узлов
+        решётки), края скана и пыль (мелкие тёмные бесцветные точки; dark=True — считать и их) не считаются.
+        sensitivity 0…100 (по умолчанию 50; больше — больше подсказок): доля квадрата, которую должно занять
+        «что-то», от 5 % (0) до 0,05 % (100). render(cx, cy, s, w, h) -> кусок мозаики в масштабе s.
+        Возвращает {(i, j): доля}; info (dict) получает время, число патчей и модель."""
+        import time as _t
+        from . import anomaly as AD
         if not self.ready():
             return {}
+        t0 = _t.monotonic()
         v1, v2 = self.cr.vectors()
+        pitch = min(np.hypot(*v1), np.hypot(*v2))
         cells = list(self.cells_range((0, 0), size))
         n = int(min(n, max(32, (6e6 / max(1, len(cells))) ** 0.5)))   # слабый ПК: вся мозаика ≤ ~6 Мпикс
-        s = min(1.0, n / min(np.hypot(*v1), np.hypot(*v2)))
+        s = min(1.0, n / pitch)
         W, H = int(np.ceil(size[0] * s)), int(np.ceil(size[1] * s))
         big = render(size[0] / 2, size[1] / 2, s, W, H)
-        void = (big <= 22).all(2)                             # вне кадров (фон просмотра, чёрные поля обзора)
-        lab = cv2.cvtColor(big, cv2.COLOR_BGR2LAB)
-        yy, xx = np.mgrid[0:n, 0:n]
-        e = 0.25 * n                                          # углы: крест и номера рядом с ним
-        corner = np.zeros((n, n), bool)
-        for cx_, cy_ in ((0, 0), (n, 0), (0, n), (n, n)):
-            corner |= (np.abs(xx - cx_) < e) & (np.abs(yy - cy_) < e)
-        out = {}
+        void = (big <= 22).all(2).astype(np.uint8)            # вне кадров (фон просмотра, чёрные поля обзора)
+        net = AD.load_backbone()
+        F = AD.features(big, 0.75 * n, net)
+        del big
+        Hp, Wp = F.shape[:2]
+        p = AD.PATCH
+        valid = cv2.resize(void, (Wp, Hp), interpolation=cv2.INTER_AREA) == 0
+        del void
+        # кресты и номера у них: круг около каждого узла решётки
+        cm = np.zeros((Hp, Wp), np.uint8)
+        r = max(1, int(round(0.25 * n / p)))
         for i, j in cells:
-            O = self.cr.point(i, j) * s
-            M = np.float32(np.c_[v1 * s / n, v2 * s / n, O])  # (u, v) квадрата -> пиксель снимка
-            q = cv2.warpAffine(lab, M, (n, n), flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP,
-                               borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0))
-            vq = cv2.warpAffine(void.astype(np.uint8), M, (n, n), flags=cv2.INTER_NEAREST | cv2.WARP_INVERSE_MAP,
-                                borderMode=cv2.BORDER_CONSTANT, borderValue=1)
-            use = (vq == 0) & ~corner
-            if use.mean() < 0.6:                              # квадрат почти вне скана
+            q = self.cr.point(i, j) * s / p
+            if -r <= q[0] < Wp + r and -r <= q[1] < Hp + r:
+                cv2.circle(cm, (int(round(q[0])), int(round(q[1]))), r, 1, -1)
+        valid &= cm == 0
+        if isinstance(model, str):
+            path = os.path.join(model, AD.MODEL_FILE) if os.path.isdir(model) else model
+            model = AD.Normal.load(path)
+        if model is None:
+            model = AD.Normal.fit(F[valid], kind='cnn' if net is not None else 'hand')
+        m, _z = AD.anomaly_mask(F, model, valid, dust=not dark)
+        # доля «чего-то» в каждом квадрате: центр патча -> квадрат решётки
+        yy, xx = np.mgrid[0:Hp, 0:Wp]
+        P = np.stack([(xx.ravel() + 0.5) * p / s, (yy.ravel() + 0.5) * p / s], 1) - self.cr.O
+        del xx, yy
+        ij = np.floor(P @ np.linalg.inv(np.column_stack([v1, v2])).T).astype(np.int64)
+        del P
+        i0, j0 = ij.min(0)
+        key = (ij[:, 0] - i0) * (ij[:, 1].max() - j0 + 1) + (ij[:, 1] - j0)
+        nk = int(key.max()) + 1
+        tot = np.bincount(key, minlength=nk)                       # все патчи квадрата
+        good = np.bincount(key, weights=valid.ravel(), minlength=nk)
+        hit = np.bincount(key, weights=m.ravel(), minlength=nk)
+        out = {}
+        nj = ij[:, 1].max() - j0 + 1
+        for kk in np.nonzero(good)[0]:
+            if good[kk] < 0.5 * tot[kk] or tot[kk] < 0.5 * (pitch * s / p) ** 2:   # квадрат почти вне скана
                 continue
-            f = q.astype(np.float32)
-            bg = np.median(f[use], axis=0)
-            d = f - bg
-            dist = np.sqrt((d ** 2).sum(2))
-            du = dist[use]
-            t_ = max(thr, 4 * 1.48 * float(np.median(np.abs(du - np.median(du)))))   # шумный / узорчатый фон —
-            m = (dist > t_) & use                                                 # порог выше
-            if not dark:                                      # тёмное без цвета — пыль, метки: не считать
-                m &= ~((d[..., 0] < -thr / 2) & (np.hypot(d[..., 1], d[..., 2]) < 1.5 * thr))
-            m = cv2.morphologyEx(m.astype(np.uint8), cv2.MORPH_OPEN, np.ones((2, 2), np.uint8))
-            k_, lab_, st_, _ = cv2.connectedComponentsWithStats(m, connectivity=8)
-            big_ = st_[1:, cv2.CC_STAT_AREA]
-            out[(i, j)] = float(big_[big_ >= max(4, 0.001 * n * n)].sum() / max(1, use.sum()))
-        self.scores = out
+            out[(int(kk // nj + i0), int(kk % nj + j0))] = float(hit[kk] / good[kk])
+        self.scores, self.hint_squares = out, len(out)
+        self.hint_model = model
+        if info is not None:
+            info.update(seconds=round(_t.monotonic() - t0, 2), patches=int(valid.sum()), square_px=n,
+                        model='CNN (ONNX)' if net is not None else 'colour + texture', components=len(model.means))
         return self.pick_useful(sensitivity)
 
     def pick_useful(self, sensitivity=None):

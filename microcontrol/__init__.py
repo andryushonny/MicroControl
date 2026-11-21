@@ -12,7 +12,7 @@ Authors: Andrey Lyapeikov, Savely Domenko.
 
 Help: mc.help()
 """
-__version__ = "0.19.0"
+__version__ = "0.20.0"
 AUTHORS = ["Ляпейков Андрей", "Доменко Савелий"]
 
 from .errors import (MicroControlError, SafetyError, LimitError, CommError, CameraError,
@@ -25,7 +25,9 @@ from .join import join
 from .stitch import stitch
 from .mask import export, clean
 from .optics import measure_distortion as distortion
-from .viewer import view, hints
+from .viewer import view, hints, train_hints
+from .agent import Agent
+from . import agent
 
 _HELP = """MicroControl {v}. Authors: Lyapeikov A., Domenko S.
 
@@ -42,6 +44,9 @@ WORKFLOW
   mc.stitch(folder)                Exact positions of all frames by their overlaps (like ASHLAR)
   mc.view(folder)                  Mark crosses on the mosaic, straighten it, select the squares you need
   mc.hints(folder, sensitivity=50) Yellow hint without the window: squares with something in them (0-100)
+  mc.train_hints(folder, default=True)  Model of the empty substrate for the hints (scan of a clean substrate)
+  ag = mc.Agent(m)                 Tools for AI agents (ag.call('get_status')); mc.agent.chat(m, model='qwen3:8b')
+  python -m microcontrol.agent --mcp --port COM3   MCP server for local models; actions need the operator's Allow
   mc.distortion(folder)            Measure the lens distortion by the crosses (once per objective)
   mc.export(folder)                Only the selected squares: PNG/JPG + DXF for AutoCAD
   mc.clean(folder)                 Delete the frames and the rest of the work files (shows first)
@@ -142,6 +147,6 @@ def help():
     print(_HELP.format(v=__version__))
 
 
-__all__ = ["Microscope", "ports", "Area", "Program", "ScanData", "join", "view", "hints", "help", "imread", "imwrite",
+__all__ = ["Microscope", "Agent", "ports", "Area", "Program", "ScanData", "join", "view", "hints", "train_hints", "help", "imread", "imwrite",
            "MicroControlError", "SafetyError", "LimitError", "CommError", "CameraError", "FocusError",
            "StoreError", "GcodeError", "StopError", "ERRORS"]

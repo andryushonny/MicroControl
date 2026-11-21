@@ -16,6 +16,8 @@ import cv2
 import numpy as np
 from .storage import ScanData, THUMB, meta_A
 from .util import wheel_delta, open_window, window_size
+from . import ui as UI
+from . import anomaly as _AD
 
 WIN = "MicroControl scan"
 
@@ -109,9 +111,30 @@ class _Scene:
         return out
 
 
-HELP_V2 = "Move: drag (right / middle in any mode, Ctrl+drag in S, B), arrows   Zoom: wheel, + / -, 0 = whole   R: straight   , / .: sample"
-HELP_V = ("G: 2 crosses in a row = tilt (right click = remove, C = again)   F: fit grid   S: select (click, box; Shift = unselect; right click = remove the green area)   B: brush   "
-          "P: polygon   N: number squares (X Y)   Y: hints (yellow), Shift+Y: select them, U, < / >: sensitivity   A / X: all / none   E: export   Esc: exit")
+HELP_V2 = "Drag: move  Wheel: zoom  0: whole  R: straight  , / .: sample  H: all keys  Esc: exit"
+HELP_MODE = {
+    'look': "G: mark crosses  F: fit grid  S: select  B: brush  P: polygon  N: number squares  Y: hints  E: export",
+    'cross': "Click: cross (2 in a row = tilt)  Right click: remove  Backspace: undo  C: start again  F: fit grid  Esc: done",
+    'select': "Click: square  Drag: box  Shift: unselect  Right click: remove green area  A: all  X: none  Esc: done",
+    'paint': "Drag: paint  Shift+drag: erase  A: all  X: none  Esc: done",
+    'poly': "Click: corner  Enter: select inside  Del: unselect inside  Backspace: undo corner  Esc: done",
+    'label': "Click a square, type its number X Y  Enter: set  Esc: done",
+}
+HELP_HINTS = "Y: hints on / off  Shift+Y: select them  < / >: sensitivity  U: type it"
+HELP_V = ("G: 2 crosses in a row = tilt (right click = remove, C = again)   F: fit grid   S: select (click, box; Shift = "
+          "unselect; right click = remove the green area)   B: brush   P: polygon   N: number squares (X Y)   Y: hints "
+          "(yellow), Shift+Y: select them, U, < / >: sensitivity   A / X: all / none   E: export   Esc: exit")
+HELP_ALL = [
+    ("Look", "Drag (right / middle in any mode): move   Wheel, + / -: zoom   0: whole   Arrows, W A S D: move"),
+    ("", "R: straight / as shot   , / .: previous / next sample   H: this help   Esc: leave the mode, then exit"),
+    ("Grid", "G: mark crosses: click two neighbouring crosses in one row = tilt; more crosses far apart = more exact"),
+    ("", "Right click: remove a cross   Backspace: undo   C: start again   F: fit the grid to all crosses"),
+    ("Numbers", "N: click a square, type the number written next to it (X Y), Enter. Two squares fix all numbers"),
+    ("Select", "S: click / drag a box (Shift: unselect)   B: brush   P: polygon   A / X: all / none"),
+    ("", "Right click on green: remove that green area"),
+    ("Hints", "Y: yellow hints on / off   Shift+Y or Ctrl+Y: select them   < / >: sensitivity -/+ 5   U: type it"),
+    ("Export", "E: export the selected squares (PNG + DXF)"),
+]
 
 
 _PREV = {}
@@ -282,7 +305,7 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
 
     def hints():
         """Жёлтая подсказка: квадраты, где что-то есть (mask.Grid.find_useful) — по уменьшенной мозаике."""
-        g.find_useful(sc.render, sc.size)
+        g.find_useful(sc.render, sc.size, model=_AD.default_model(sc.st.meta.get('objective')))
         st['hints'] = True
 
     def set_sens(S):
@@ -419,8 +442,9 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
             v1, v2 = g.cr.vectors()
             step = min(np.hypot(*v1), np.hypot(*v2)) * st['s']
             lo, hi = np.maximum(lo, 0), np.minimum(hi, sc.size)            # решётка — только над мозаикой
+            e_ = 0.25 * min(np.hypot(*v1), np.hypot(*v2))                   # квадрат почти весь над мозаикой
             cells = [c for c in g.cells_range(lo, hi)                       # (до ~40 тыс. квадратов на экране)
-                     if (lambda q: 0 <= q[0] <= sc.size[0] and 0 <= q[1] <= sc.size[1])(
+                     if (lambda q: e_ <= q[0] <= sc.size[0] - e_ and e_ <= q[1] <= sc.size[1] - e_)(
                          g.cr.point(c[0] + 0.5, c[1] + 0.5))] if step >= 1.5 else []
             if cells and (g.selected or (st.get('hints', True) and g.useful)):   # зелёные — выделены,
                 ov = img.copy()                                                   # жёлтые — подсказка
@@ -443,21 +467,23 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
                 if st.get('lab'):                           # вводимый номер — у квадрата
                     pts = np.array([to_view(q) for q in g.corners(*st['lab'][0])])
                     cv2.polylines(img, [np.int32(pts)], True, (0, 230, 255), 2, cv2.LINE_AA)
-            if cells:                                       # линии решётки через кресты
-                # мелко: сплошные линии без сглаживания (сглаженная линия в 1 px на дробной позиции бледнеет),
+            if cells and step >= 7:                         # крупно: контур каждого квадрата над мозаикой
+                polys = [np.int32(np.round([to_view(q) for q in g.corners(*c)])) for c in cells]
+                cv2.polylines(img, polys, True, red, 1, cv2.LINE_AA if step >= 30 else cv2.LINE_8)
+            elif cells:                                     # мелко: линии через кресты
+                # сплошные линии без сглаживания (сглаженная линия в 1 px на дробной позиции бледнеет),
                 # совсем мелко — каждая k-я, чтобы не слиться в сплошной красный
                 k_ = max(1, int(math.ceil(6 / step)))
-                aa = cv2.LINE_AA if step >= 30 else cv2.LINE_8
                 I = sorted({c[0] for c in cells} | {cells[-1][0] + 1})
                 J = sorted({c[1] for c in cells} | {cells[-1][1] + 1})
                 for i in I:
                     if i % k_ == 0:
                         a_, b_ = to_view(g.cr.point(i, J[0])), to_view(g.cr.point(i, J[-1]))
-                        cv2.line(img, tuple(np.int32(np.round(a_))), tuple(np.int32(np.round(b_))), red, 1, aa)
+                        cv2.line(img, tuple(np.int32(np.round(a_))), tuple(np.int32(np.round(b_))), red, 1, cv2.LINE_8)
                 for j in J:
                     if j % k_ == 0:
                         a_, b_ = to_view(g.cr.point(I[0], j)), to_view(g.cr.point(I[-1], j))
-                        cv2.line(img, tuple(np.int32(np.round(a_))), tuple(np.int32(np.round(b_))), red, 1, aa)
+                        cv2.line(img, tuple(np.int32(np.round(a_))), tuple(np.int32(np.round(b_))), red, 1, cv2.LINE_8)
             elif g.selected:
                 st['msg'] = st['msg'] if 'zoom in' in st['msg'] else st['msg']
         for q in g.cr.marks:
@@ -468,23 +494,61 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
         if st['box']:
             bx0, by0, bx1, by1, shb = st['box']
             cv2.rectangle(img, (bx0, by0), (bx1, by1), (0, 140, 255) if shb else yellow, 1)
-        mode = {'look': 'look', 'cross': 'MARK CROSSES', 'select': 'SELECT SQUARES', 'poly': 'POLYGON',
+        mode = {'look': 'LOOK', 'cross': 'MARK CROSSES', 'select': 'SELECT', 'poly': 'POLYGON',
                 'paint': 'BRUSH', 'label': 'NUMBER SQUARES'}[st['mode']]
+        mcol = {'look': (200, 200, 200), 'cross': (90, 90, 255), 'select': (90, 210, 90), 'poly': (90, 210, 90),
+                'paint': (90, 210, 90), 'label': UI.ACCENT}[st['mode']]
         if st.get('lab'):
             st['msg'] = f"Square number X Y: {st['lab'][1]}_   (Enter = set, Esc = cancel)"
         if st.get('sens') is not None:
             st['msg'] = f"Hint sensitivity 0-100 (now {g.sensitivity:g}, more = more yellow): {st['sens']}_   Enter / Esc"
         um = px_um / st['s']
-        top = f"{mode}   {len(sc.st)} frames   {um:.2f} um / screen px" + \
-              (f"   pitch {np.hypot(*g.cr.vectors()[0]) * px_um:.1f} x {np.hypot(*g.cr.vectors()[1]) * px_um:.1f} um"
-               f"   turn {g.cr.angle():+.3f} deg" if g.ready() else "") + f"   selected {len(g.selected)}" + \
-              ("   STRAIGHT" if st['straight'] else "") + \
-              (f"   hints {len(g.useful)} (sensitivity {g.sensitivity:g})" if g.useful and st.get('hints', True) else "")
-        for k_, (txt, y_) in enumerate(((top, 22), (st['msg'], 46), (HELP_V2, Hv - 36), (HELP_V, Hv - 12))):
-            cv2.rectangle(img, (0, y_ - 17), (min(Wv, 9 * len(txt) + 10), y_ + 6), (0, 0, 0), -1)
-            cv2.putText(img, txt, (8, y_), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (235, 235, 235), 1, cv2.LINE_AA)
+        fs = 0.5
+        th_ = UI.size("Xg", fs)[1]
+        bh = th_ + 22                                       # высота верхней и нижней полос
+        UI.panel(img, 0, 0, Wv, bh, 0.82)                   # верх: режим и главное о скане
+        x_ = UI.chip(img, mode, 10, bh - 11, fs, mcol) + 14
+        it = [f"{len(sc.st)} frames", f"{um:.2f} um / px"]
+        if g.ready():
+            it += [f"pitch {np.hypot(*g.cr.vectors()[0]) * px_um:.1f} um", f"tilt {g.cr.angle():+.2f} deg"]
+        else:
+            it += ["no grid yet: G"]
+        it += [f"selected {len(g.selected)}"]
+        if g.useful and st.get('hints', True):
+            it += [f"hints {len(g.useful)} (sensitivity {g.sensitivity:g})"]
+        UI.facts(img, it, x_, bh - 11, fs)
+        if st['straight']:
+            w_ = UI.size("STRAIGHT", fs, 2)[0] + 14
+            UI.chip(img, "STRAIGHT", Wv - w_ - 10, bh - 11, fs, (235, 170, 60))
+        hl = [HELP_MODE[st['mode']]] + ([HELP_HINTS] if g.useful and st['mode'] == 'look' else []) + [HELP_V2]
+        hb = len(hl) * (th_ + 12) + 12
+        UI.panel(img, 0, Hv - hb, Wv, Hv, 0.82)             # низ: клавиши этого режима
+        for k_, h_ in enumerate(hl):
+            UI.keys_line(img, h_, 12, Hv - hb + 6 + (k_ + 1) * (th_ + 12) - 4, fs, Wv - 10)
+        import time as _t
+        if st['msg'] != st.get('_lm'):
+            st['_lm'], st['_lt'] = st['msg'], _t.monotonic()
+        prompt = bool(st.get('lab')) or st.get('sens') is not None
+        if st['msg'] and (prompt or _t.monotonic() - st['_lt'] < 8):
+            low = st['msg'].lower()
+            kind = 'err' if (st['msg'].startswith('[E') or 'no ' in low[:4] or 'not ' in low or 'disagree' in low) \
+                else ('info' if st.get('lab') or st.get('sens') is not None else 'ok')
+            UI.toast(img, st['msg'], Wv / 2, Hv - hb - 18, 0.55, kind, Wv - 40)
+        if st.get('help'):                                  # H: все клавиши
+            fsh = 0.52
+            lh = UI.size("Xg", fsh)[1] + 14
+            wl = max(UI.size(a_, fsh, 2)[0] for a_, _b in HELP_ALL) + 24
+            wh = min(Wv - 60, wl + max(UI.size(b_, fsh)[0] for _a, b_ in HELP_ALL) + 40)
+            hh = lh * len(HELP_ALL) + 50
+            x0_, y0_ = int((Wv - wh) / 2), int((Hv - hh) / 2)
+            UI.panel(img, x0_, y0_, x0_ + wh, y0_ + hh, 0.92, UI.LINE)
+            UI.put(img, "Keys", x0_ + 18, y0_ + 30, 0.6, UI.ACCENT, 2)
+            for k_, (a_, b_) in enumerate(HELP_ALL):
+                yy = y0_ + 30 + (k_ + 1) * lh
+                UI.put(img, a_, x0_ + 18, yy, fsh, UI.ACCENT, 1)
+                UI.put(img, b_, x0_ + 18 + wl, yy, fsh, UI.TEXT)
         pan_, car['hits'], car['content'] = SM.carousel(Hv, _car_items(subs, folder, car), subs.index(folder),
-                                                        car['scroll'], title="Samples  (, / .)", go=False)
+                                                        car['scroll'], title="Samples", go=False)
         return np.hstack([img, pan_])
 
     cv2.setMouseCallback(WIN, mouse)
@@ -562,7 +626,9 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
         step = (0.8 if ch in 'WASD' and ch else 0.25) * min(st['Wv'], st['Hv']) / st['s']
         ch = ch.lower()
         if key == 27:
-            if st['poly']:
+            if st.get('help'):
+                st['help'] = False
+            elif st['poly']:
                 st['poly'] = []
             elif st['mode'] != 'look':
                 st['mode'] = 'look'
@@ -631,6 +697,8 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
             g.save(px_um)
             st['msg'] = f"Grid fitted to all {n_} crosses" + (f": {rms:.2f} px off" if rms is not None else ": too few") + \
                 f"   hints: {len(g.useful)} squares (Y)"
+        elif ch == 'h':
+            st['help'] = not st.get('help')
         elif ch == 'r':
             set_straight(not st['straight'])
             st['msg'] = "Straight: squares stand level" if st['straight'] else "Picture as shot"
@@ -668,17 +736,50 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
 
 
 @_per_sample
-def hints(folder, sensitivity=None):
-    """Жёлтая подсказка без окна: квадраты, где что-то есть. Нужна решётка (кресты в mc.view).
-    sensitivity 0…100 (больше — больше квадратов). Пишется в grid.json, видна в mc.view (Y)."""
+def hints(folder, sensitivity=None, model=None):
+    """Жёлтая подсказка без окна: квадраты, где что-то есть (поиск аномалий: всё, что не похоже на пустую
+    подложку). Нужна решётка (кресты в mc.view). sensitivity 0…100 (больше — больше квадратов).
+    model — модель пустой подложки (папка скана после mc.train_hints или файл); по умолчанию учится на самом
+    скане. Пишется в grid.json, видна в mc.view (Y)."""
     from .mask import Grid
     from .util import Result
     g = Grid(folder)
     if not g.ready():
         raise ValueError("No grid yet: mark the crosses in mc.view(folder) (G).")
     sc = _Scene(folder)
-    g.find_useful(sc.render, sc.size, sensitivity=sensitivity)
+    info = {}
+    g.find_useful(sc.render, sc.size, sensitivity=sensitivity, model=model or _AD.default_model(sc.st.meta.get('objective')), info=info)
     g.save(sc.st.meta.get('pixel_size_um') or 1.0)
     sc.st.close()
-    return Result("Hints", Squares=len(g.useful), Sensitivity=g.sensitivity,
+    return Result("Hints", Squares=len(g.useful), Sensitivity=g.sensitivity, Model=info.get('model'),
+                  Time=f"{info.get('seconds')} s",
                   List=", ".join("{},{}".format(*g.name(*c)) for c in sorted(g.useful)) or "-")
+
+
+@_per_sample
+def train_hints(folder, default=False):
+    """Модель пустой подложки для подсказок: снимите скан чистой подложки (без чешуек, с крестами) и
+    отметьте на нём кресты (mc.view, G). Модель пишется в <скан>/hint_model.npz; default=True — ещё и как модель
+    по умолчанию для этого объектива (~/.microcontrol/hint_model_<объектив>x.npz): все подсказки с этим
+    объективом будут сравнивать с ней. Без модели подсказка учится на самом скане (тоже работает)."""
+    from .mask import Grid
+    from .util import Result
+    g = Grid(folder)
+    if not g.ready():
+        raise ValueError("No grid yet: mark the crosses in mc.view(folder) (G).")
+    sc = _Scene(folder)
+    info = {}
+    g.find_useful(sc.render, sc.size, info=info)
+    path = os.path.join(folder, _AD.MODEL_FILE)
+    g.hint_model.save(path)
+    out = Result("Hint model", File=path, Components=len(g.hint_model.means), Time=f"{info.get('seconds')} s",
+                 Found=f"{len(g.useful)} squares with something (should be ~0 on an empty substrate)")
+    if default:
+        obj = sc.st.meta.get('objective')
+        d = os.path.join(os.path.expanduser('~'), '.microcontrol')
+        os.makedirs(d, exist_ok=True)
+        dp = os.path.join(d, f"hint_model_{obj}x.npz")
+        g.hint_model.save(dp)
+        out['Default'] = f"{dp} (objective {obj}x)"
+    sc.st.close()
+    return out

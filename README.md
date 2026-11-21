@@ -2,7 +2,7 @@
 
 **Software control of the Optosky ATR8300 Raman microscope (MP / Mapping version): stage, illumination, laser, camera, autofocus, area scanning, stitching and preparation of images for training datasets.**
 
-**Authors:** A. Lyapeikov, S. Domenko. **Version:** 0.19.0. Русский: [docs/README_ru.md](docs/README_ru.md) · 中文: [docs/README_zh.md](docs/README_zh.md) · PDF: [EN](docs/MicroControl_en.pdf), [RU](docs/MicroControl_ru.pdf), [中文](docs/MicroControl_zh.pdf).
+**Authors:** A. Lyapeikov, S. Domenko. **Version:** 0.20.0. Русский: [docs/README_ru.md](docs/README_ru.md) · 中文: [docs/README_zh.md](docs/README_zh.md) · PDF: [EN](docs/MicroControl_en.pdf), [RU](docs/MicroControl_ru.pdf), [中文](docs/MicroControl_zh.pdf).
 
 ![Viewer: red grid of squares, selection (green), hints (yellow), carousel of samples](docs/img/view.jpg)
 
@@ -36,6 +36,7 @@
 22. Reference: parameters, commands, errors, log
 23. Demo programs
 24. What is not verified on the instrument
+25. AI agents
 
 ---
 
@@ -558,6 +559,7 @@ Result: `join/positions_all.csv`, `join/stitch.json`, `join/preview_all.jpg` (re
 | `A` / `X` | select all / none |
 | `E` | export the selection |
 | `,` / `.`; carousel on the right | previous / next sample; click — open, **x** — remove (to `_removed/`) |
+| `H` | all keys |
 | `Esc` | leave the mode, then the viewer |
 
 The lattice is always **square**: $\mathbf{v}_2$ is $\mathbf{v}_1$ turned by 90° (no skew, no "projection"); there are four unknowns — origin $\mathbf{O}$, pitch and tilt — found by least squares from the marks. Two neighbouring crosses are enough; far crosses reduce the tilt error in proportion to the distance. The `F` key optionally fits the same square lattice to all crosses of the mosaic. Simulator check (tilt 3.5°): 2 neighbouring crosses and 2 far ones — pitch 99.998 µm, tilt 3.494°. Marks and selection are stored in `grid.json` (in mosaic pixels; after a new stitch the marks must be made again).
@@ -572,13 +574,28 @@ The lattice is always **square**: $\mathbf{v}_2$ is $\mathbf{v}_1$ turned by 90�
 
 $P$ is a signed permutation of the axes (8 variants: which lattice axis is $X$ and which way it grows). $P$ and $\mathbf{t}$ are chosen so that all labels hold exactly. One label gives only $\mathbf{t}$ (the directions are the defaults: $X$ to the right, $Y$ down on the screen); a label on a second square **in another row and column** fixes the directions of both axes — and the numbers of all squares. The number is written in the top left corner of each square (labelled ones in yellow); inconsistent labels give a warning. The numbers go to `selection.json` (`names`), to the DXF (layer LABELS) and to the file names of the squares (`square_X+012_Y+007.png`). No digit recognition is needed: two labels are enough.
 
-**Yellow hint** — squares with something in them (flakes, crystals). A simple method for a weak PC: the whole mosaic as one reduced image (a square ≈ 96 px, smaller for a large grid — ≤ 6 Mpx in total), each square is straightened, the background is the median colour of the square (uneven illumination does not matter), "something" are pixels that differ from the background in Lab by more than $\max(12,\ 4 \cdot 1.48\,\mathrm{MAD})$ (the threshold rises on a noisy background). Not counted: the square corners (crosses and numbers), dark colourless spots (dust), spots smaller than $0.1\,\%$ of the square. A square is yellow if the share of "something" is larger than
+**Yellow hint** — squares with something in them (flakes, crystals, any object). It is an anomaly search (the PaDiM principle): the empty substrate is described by a mixture of a few Gaussians of small-patch features, and everything far from it is "something". Steps:
+
+1. The whole mosaic as one reduced image (a square ≈ 160 px, smaller for a large grid — ≤ 6 Mpx in total), cut into 4 × 4 px patches.
+2. Features of a patch, $\mathbf{f} \in \mathbb{R}^8$: deviation of the colour from the local background in Lab (3, uneven illumination removed), chroma of the deviation (1), edges and texture — Laplacian, gradient, local standard deviation of brightness, difference of Gaussians (4).
+3. The norm: a mixture of $K = 3$ Gaussians (EM in OpenCV) fitted on the patches of the scan itself (almost all squares are empty); the farthest 12 % are dropped and the fit is repeated. The patch distance is the Mahalanobis distance to the nearest Gaussian, in units of the spread of the norm:
+
+```math
+z = \frac{\min_k \sqrt{(\mathbf{f}-\boldsymbol{\mu}_k)^{\mathsf T}\Sigma_k^{-1}(\mathbf{f}-\boldsymbol{\mu}_k)} - \mathrm{med}}{1.48\,\mathrm{MAD}},
+```
+
+   a patch is "something" if $z > 8$.
+4. Not counted: patches near the lattice nodes (crosses and their numbers), the edges of the scan, dust (small spots with a dark colourless core), spots smaller than 2 patches.
+
+A square is yellow if the share of "something" is larger than
 
 ```math
 f(S) = 5\,\% \cdot 10^{-2S/100},
 ```
 
-$S$ — sensitivity 0…100 (50 — 0.5 %; 0 — 5 %; 100 — 0.05 %). Computed automatically when the lattice is set (≈ 5 s per 5000 squares), changing the sensitivity is instant. Without the window: `mc.hints(folder, sensitivity=50)`. On sample images: all 5 squares with flakes found, no empty ones; on a sample without flakes — 20 of 480 (large dust particles, coloured debris), removable by the sensitivity.
+$S$ — sensitivity 0…100 (50 — 0.5 %; 0 — 5 %; 100 — 0.05 %). Computed automatically when the lattice is set (≈ 2.5 s for 4400 squares, memory ≈ 0.3 GB), changing the sensitivity is instant. Without the window: `mc.hints(folder, sensitivity=50)`. On sample images the crystals and flakes are found, the regular marking dots, crosses and dust are not.
+
+**Model of the empty substrate** (optional): shoot a clean substrate, mark the crosses, `mc.train_hints(folder, default=True)` — the model is saved for this objective and all hints compare with it. **Neural network features** (optional, the original PaDiM): `mc.anomaly.export_backbone()` once on any PC with `torch`, `torchvision` and internet, copy `backbone.onnx` and `backbone.json` to `~/.microcontrol/` on the microscope PC; OpenCV runs it, `torch` is not needed there.
 
 **Performance** (30 × 30 frame grid, 900 frames of 1296 × 972, 2 cores): stitching 67 s, memory ≤ 0.6 GB; opening the viewer 0.1 s; a window frame at any zoom 7–63 ms, while dragging 2–25 ms. Small zoom is drawn from the overview mosaic `join/preview_all.jpg`, medium from the reduced frame copies `viewer/levels/` (written at stitching), large from the frames; the copy cache is limited to 400 MB.
 
@@ -949,6 +966,7 @@ Read `m.photo_pause`, change `m.photo_pause = 0.5`, table of all parameters `m.s
 | `m.info()`, `m` | instrument info, state | — |
 | `m.close()` | disconnect | — |
 | `mc.stitch()`, `mc.view()`, `mc.hints()`, `mc.export()`, `mc.distortion()`, `mc.clean()` | stitching, marking, hints, export, lens distortion, clean-up | — |
+| `mc.train_hints()`, `mc.Agent()`, `mc.agent.chat()` | model of the empty substrate for hints; tools for AI agents (section 25) | — |
 | `mc.join()`, `mc.ScanData()` | simple mosaic, access to the frames | — |
 | `mc.help()` | short help | — |
 
@@ -1083,6 +1101,41 @@ On the instrument, do not raise the stage "blindly" with commands like `m.move(d
 - Illumination levels above 5.
 
 ---
+
+## 25. AI agents
+
+A local language model can use MicroControl completely: look through the camera and at stitched mosaics, drive the stage, set sample areas, scan, stitch, mark crosses, number and select squares, find hints and export. Everything that moves the stage or removes the operator's work is shown to the operator first and runs only after **Allow**.
+
+**Start.**
+
+| How | Command |
+|---|---|
+| Python / Jupyter | `ag = mc.Agent(m)`; `ag.call('get_status')`; `ag.tools()` — tool list in OpenAI / Ollama format |
+| Chat with a local model (Ollama) | `mc.agent.chat(m, model='qwen3:8b')`; the model may run on another PC: `host='http://192.168.1.20:11434'`; `vision=True` sends pictures to models that see |
+| MCP server (stdio) for any MCP client (ollmcp, LM Studio, Claude Desktop, …) | `python -m microcontrol.agent --mcp --port COM3 --objective 10`; without the microscope: `--scans <folder>` |
+
+The lab PC (old i5) runs the microscope; the language model itself is better run on a stronger PC in the network (Ollama with a tool-calling model: Qwen3 8B or larger, Gemma, Llama 3.1+). Small models (≤ 4B) confuse tool arguments more often.
+
+**Tools** (26; every one has a strict JSON schema, units in the names: `dx_um`, `x_px`):
+
+| Group | Tools |
+|---|---|
+| State and help | `get_status`, `get_settings`, `get_manual` (manual for the model: units, coordinates, workflow, safety) |
+| Seeing | `look`: `camera` (frame now, centre cross, scale bar), `mosaic` (part of a stitched scan with the red grid, square names, selection, hints and a ruler in mosaic px), `map` (stage map: areas, focus points, position) |
+| Stage | `move_stage`, `goto_position`, `autofocus`, `take_photo`, `change_setting` |
+| Sample areas | `area_corner` (like keys 1 and 2), `add_focus_point`, `goto_area`, `delete_area`, `scan` (`dry_run` — count frames and time) |
+| Scans on disk | `list_scans`, `scan_info` (with the suggested next step), `stitch`, `remove_sample` |
+| Grid and squares | `mark_cross`, `undo_cross`, `fit_grid`, `label_square`, `list_squares`, `select_squares`, `find_hints`, `export` |
+
+**Approval.** Needed for: moving the stage, autofocus, changing a setting, scanning, deleting an area, removing a sample folder, replacing the selection. A window on the lab PC shows what exactly will happen (from where to where, $+Z$ towards the objective is stated) and the agent's reason: **Allow**, **Allow for this session** (this tool), **Deny** (the agent is told not to repeat it). `approve='console'` asks in the console, `approve='deny'` makes a read-only agent.
+
+**Protection against mistakes.**
+
+- Arguments are checked strictly: unknown, missing, wrong type, out of range — refused with the list of what is allowed; an unknown tool — with the closest names.
+- Every answer is JSON: `{"ok": true, "result": …}` or `{"ok": false, "error": {"code", "message", "hint"}}`; the hint says what to do. After 3 failures in a row: "stop and ask the operator".
+- The laser is not available to agents. Agents may change only light, exposure, objective, focus and frame-storage settings; safety limits, orientation and motor settings are for the operator only. All limits of the instrument (section 7) stay in force.
+- At most 30 actions per minute and 500 calls per session. Every call is written to `logs/agent_<date>.jsonl`.
+- Names of folders and squares come only from tool results; the manual tells the model never to invent numbers and to ask the operator when unsure.
 
 ## Disclaimer
 

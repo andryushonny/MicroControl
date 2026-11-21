@@ -228,6 +228,7 @@ logs/
 photos/
 references/
 scans/
+agent/
 demo_out/
 demo/demo_out/
 *.tmp

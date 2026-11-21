@@ -38,7 +38,7 @@ HELP = ["Shift+Esc: Exit (or close the window)", "P: Hide / show the left panel"
         "G: Steps X, Y = one frame", "M: Next objective (4x, 10x, 20x, 100x)",
         "1 / 2: Corners of a sample area, one area after another (their Z is kept as focus points)",
         "F: Keep Z here as a focus point of this area   Shift+F: Autofocus",
-        "Y (or the box): Z follows the focus points of the area — when moving with the arrows and in the scan",
+        "Y (or the box): Z follows the focus points of the area: when moving with the arrows and in the scan",
         "Samples (right): click = choose, Go = drive there, x = delete;  , / . = previous / next;  Enter = drive",
         "C: Cancel the new area / delete the chosen one (press twice)", "Space: Picture",
         "0: Zero here (offset)", "R: Real coordinates (remove the offset)", "B: White balance (aim at an empty place)",

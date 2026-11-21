@@ -207,3 +207,21 @@ def set_icon(title):
         return f"icon set on {len(hw)} window(s)"
     except Exception as e:
         return f"failed: {e}"
+
+
+def named_folder(scans, objective, name, reuse=False):
+    """Папка для скана с именем name: новая «<дата>_<время>_<объектив>x_<имя>»; reuse=True и такая уже есть
+    (то же имя и объектив) — та же папка, старое содержимое заменяется. Возвращает путь (папка не создаётся)."""
+    import re as _re
+    import shutil as _sh
+    from datetime import datetime as _dt
+    safe = _re.sub(r'[^\w\-]+', '_', name or '').strip('_') or 'scan'
+    if reuse and os.path.isdir(scans):
+        pat = _re.compile(r"^\d{4}-\d\d-\d\d_\d{6}_" + _re.escape(f"{objective}x_{safe}") + "$")
+        old = sorted(d for d in os.listdir(scans) if pat.match(d))
+        if old:
+            path = os.path.join(scans, old[-1])
+            _sh.rmtree(path)
+            print(f"Writing into the existing folder {old[-1]} (the previous scan with this name is replaced)")
+            return path
+    return os.path.join(scans, _dt.now().strftime("%Y-%m-%d_%H%M%S") + f"_{objective}x_{safe}")

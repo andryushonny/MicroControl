@@ -425,3 +425,15 @@ d2 = SM.remove_sample(os.path.join(ses, 'sample_02'))
 assert os.path.isdir(d1) and os.path.isdir(d2) and d1 != d2, (d1, d2)   # ранее убранное не стёрто
 m.close(); print("Sample numbers stay, uid, remove without overwrite: OK")
 
+# ------------------------------------------------------------------ 19. То же имя скана — та же папка
+m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp())
+m.focus()
+fw, fh = m.frame_size
+m.area = mc.Area(0, 0, fw, fh)
+f1 = m.scan(name='Same')
+f2 = m.scan(name='Same')
+f3 = m.scan()
+print(os.path.basename(f1), os.path.basename(f2), os.path.basename(f3))
+assert f1 == f2 and f3 != f1 and len(os.listdir(m.dirs['scans'])) == 2
+m.close(); print("Same name -> same folder: OK")
+

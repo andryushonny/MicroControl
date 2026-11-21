@@ -1,5 +1,5 @@
 """Microscope — управление ATR8300 как 3D-принтером: движение, свет, лазер, камера, фокус, G-код, скан."""
-import atexit, math, os, re, time, warnings
+import atexit, math, os, time, warnings
 from datetime import datetime
 import numpy as np
 import cv2
@@ -1435,7 +1435,7 @@ class Microscope:
         from .config import scan_overlap
         prog = plan(self, area=area, focus=focus, overlap=scan_overlap(self.objective) if overlap is None else overlap, path=path,
                     pts=pts)
-        r = self.gcode(prog, save=name or 'scan', notes=notes)
+        r = self.gcode(prog, save=name or 'scan', notes=notes, reuse=bool(name))   # то же имя — та же папка
         r.title = "Scan finished" if r.title == "Program finished" else "Scan stopped"
         print(r)
         return r['Folder']
@@ -1453,8 +1453,8 @@ class Microscope:
                 print(r)
         ov = scan_overlap(self.objective) if overlap is None else overlap
         off = self._off
-        safe = re.sub(r'[^\w\-]+', '_', name or 'samples').strip('_') or 'samples'
-        ses = os.path.join(self.dirs['scans'], _dt.now().strftime("%Y-%m-%d_%H%M%S") + f"_{self.objective}x_{safe}")
+        from .util import named_folder
+        ses = named_folder(self.dirs['scans'], self.objective, name or 'samples', reuse=bool(name))   # то же имя — та же папка
         os.makedirs(ses, exist_ok=True)
         info = dict(project="MicroControl", name=name, notes=notes, objective=self.objective,
                     date=_dt.now().isoformat(timespec='seconds'), samples=[])
@@ -1481,9 +1481,9 @@ class Microscope:
         print(f"Session: {ses}")
         return ses
 
-    def gcode(self, program, save=None, notes='', folder=None, extra=None):
+    def gcode(self, program, save=None, notes='', folder=None, extra=None, reuse=False):
         """Выполнить G-код (строка или путь к файлу .gcode). Единицы — мкм.
         save='имя' — все снимки (M240) пишутся в новую папку скана; без save — в photos/.
         Перед запуском программа целиком проверяется: при ошибке столик не двигается."""
         from .gcode import run
-        return run(self, program, save=save, notes=notes, folder=folder, extra=extra)
+        return run(self, program, save=save, notes=notes, folder=folder, extra=extra, reuse=reuse)

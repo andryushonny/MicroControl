@@ -114,16 +114,15 @@ class _Scene:
 
 HELP_V2 = "Drag: move  Wheel: zoom  0: whole  R: straight  , / .: sample  H: all keys  Shift+Esc: exit"
 HELP_MODE = {
-    'look': "G: mark crosses  F: fit grid  S: select  B: brush  P: polygon  N: number squares  Y: hints  E: export",
+    'look': "G: mark crosses  F: fit grid  S: select  B: brush (rectangles)  N: number squares  Y: hints  E: export",
     'cross': "Click: cross (2 in a row = tilt)  Right click: remove  Backspace: undo  C: start again  F: fit grid  Esc: done",
     'select': "Click: square  Drag: box  Shift: unselect  Right click: remove green area  A: all  X: none  Esc: done",
-    'paint': "Drag: paint  Shift+drag: erase  A: all  X: none  Esc: done",
-    'poly': "Click: corner  Enter: select inside  Del: unselect inside  Backspace: undo corner  Esc: done",
+    'paint': "Drag a rectangle: select all squares in it  Shift+drag: unselect  Click: one square  A: all  X: none  Esc: done",
     'label': "Click a square, type its number X Y  Enter: set  Esc: done",
 }
 HELP_HINTS = "Y: hints on / off  Shift+Y: select them  < / >: sensitivity  U: type it"
 HELP_V = ("G: 2 crosses in a row = tilt (right click = remove, C = again)   F: fit grid   S: select (click, box; Shift = "
-          "unselect; right click = remove the green area)   B: brush   P: polygon   N: number squares (X Y)   Y: hints "
+          "unselect; right click = remove the green area)   B: brush (rectangles)   N: number squares (X Y)   Y: hints "
           "(yellow), Shift+Y: select them, U, < / >: sensitivity   A / X: all / none   E: export   Esc: exit")
 HELP_ALL = [
     ("Look", "Drag (right / middle in any mode): move   Wheel, + / -: zoom   0: whole   Arrows, W A S D: move"),
@@ -132,7 +131,7 @@ HELP_ALL = [
     ("Grid", "G: mark crosses: click two neighbouring crosses in one row = tilt; more crosses far apart = more exact"),
     ("", "Right click: remove a cross   Backspace: undo   C: start again   F: fit the grid to all crosses"),
     ("Numbers", "N: click a square, type the number written next to it (X Y), Enter. Two squares fix all numbers"),
-    ("Select", "S: click / drag a box (Shift: unselect)   B: brush   P: polygon   A / X: all / none"),
+    ("Select", "S: click / drag a box (Shift: unselect)   B: brush (drag rectangles)   A / X: all / none"),
     ("", "Right click on green: remove that green area"),
     ("Hints", "Y: yellow hints on / off   Shift+Y or Ctrl+Y: select them   < / >: sensitivity -/+ 5   U: type it"),
     ("Export", "E: export the selected squares (PNG + DXF)"),
@@ -355,19 +354,11 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
                 st['down'] = (x0, y0, cx, cy, ev0, sh0, True)
                 # сдвиг: правой / средней кнопкой — в любом режиме; левой — везде, кроме рамки (S) и кисти (B),
                 # а там — с Ctrl
-                pan = ev0 != cv2.EVENT_LBUTTONDOWN or st['mode'] in ('look', 'cross', 'poly', 'label') or st.get('ctrl')
-                if st['mode'] == 'paint' and ev0 == cv2.EVENT_LBUTTONDOWN and g.ready() and not st.get('ctrl'):
-                    for t_ in np.linspace(0, 1, 8):          # мазок: все квадраты на отрезке от прошлой точки
-                        q_ = np.array(st.get('last', (x0, y0)), float) * (1 - t_) + np.array([x, y], float) * t_
-                        c_ = g.cell_at(from_view(q_))
-                        (g.selected.discard if sh0 else g.selected.add)(c_)
-                    st['last'] = (x, y)
-                    st['dirty'] = True
-                    return
+                pan = ev0 != cv2.EVENT_LBUTTONDOWN or st['mode'] in ('look', 'cross', 'label') or st.get('ctrl')
                 if pan:
                     c = np.array([cx, cy]) - R().T @ (np.array([x - x0, y - y0], float) / st['s'])
                     st['cx'], st['cy'] = c
-                elif st['mode'] == 'select':
+                elif st['mode'] in ('select', 'paint'):        # рамка: всё, чего она касается
                     st['box'] = (x0, y0, x, y, sh0)
                 st['dirty'] = True
         elif ev in (cv2.EVENT_LBUTTONUP, cv2.EVENT_RBUTTONUP, cv2.EVENT_MBUTTONUP) and st['down']:
@@ -378,12 +369,11 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
                 st['box'] = None
                 if g.ready():                               # рамка берёт всё, чего касается
                     apply_poly([(bx0, by0), (bx1, by0), (bx1, by1), (bx0, by1)], not shb, touch=True)
-            elif st['mode'] == 'paint' and ev0 == cv2.EVENT_LBUTTONDOWN and not (moved and st.get('ctrl')):
-                if not moved and g.ready():
+            elif st['mode'] == 'paint' and ev0 == cv2.EVENT_LBUTTONDOWN and not moved:
+                if g.ready():                               # щелчок кистью: один квадрат (Shift — снять)
                     c_ = g.cell_at(from_view((x, y)))
                     (g.selected.discard if sh0 else g.selected.add)(c_)
-                st.pop('last', None)
-                g.save(px_um)
+                    g.save(px_um)
                 st['msg'] = f"Selected {len(g.selected)} squares"
             elif not moved and ev0 == cv2.EVENT_LBUTTONDOWN:
                 if st['mode'] == 'cross':
@@ -393,8 +383,6 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
                     g.selected.symmetric_difference_update({c})
                     g.save(px_um)
                     st['msg'] = f"Square {c} {'selected' if c in g.selected else 'unselected'}, total {len(g.selected)}"
-                elif st['mode'] == 'poly':
-                    st['poly'].append((x, y))
                 elif st['mode'] == 'label' and g.ready():
                     c = g.cell_at(from_view((x, y)))
                     X, Y = g.labels.get(c, g.name(*c))
@@ -408,9 +396,7 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
                         g.cr.remove(k)
                         g.save(px_um)
                         st['msg'] = "Cross mark removed"
-                elif st['mode'] == 'poly' and st['poly']:
-                    st['poly'].pop()
-                elif st['mode'] in ('look', 'select', 'paint', 'poly') and g.ready() and g.selected:
+                elif st['mode'] in ('look', 'select', 'paint') and g.ready() and g.selected:
                     c = g.cell_at(from_view((x, y)))        # правый щелчок по зелёному — убрать всю эту область
                     if c in g.selected:
                         area, todo = set(), [c]
@@ -501,15 +487,12 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
         img[void_] = base_[void_]
         for q in g.cr.marks:
             cv2.circle(img, tuple(np.int32(to_view(q))), 6, red, 1, cv2.LINE_AA)
-        if st['poly']:
-            pts = np.int32(st['poly'] + ([st['hover']] if st.get('hover') else []))
-            cv2.polylines(img, [pts], False, yellow, 1, cv2.LINE_AA)
         if st['box']:
             bx0, by0, bx1, by1, shb = st['box']
             cv2.rectangle(img, (bx0, by0), (bx1, by1), (0, 140, 255) if shb else yellow, 1)
-        mode = {'look': 'Look', 'cross': 'Mark crosses', 'select': 'Select', 'poly': 'Polygon',
+        mode = {'look': 'Look', 'cross': 'Mark crosses', 'select': 'Select',
                 'paint': 'Brush', 'label': 'Number squares'}[st['mode']]
-        mcol = {'look': (170, 170, 178), 'cross': (90, 90, 255), 'select': (90, 210, 90), 'poly': (90, 210, 90),
+        mcol = {'look': (170, 170, 178), 'cross': (90, 90, 255), 'select': (90, 210, 90),
                 'paint': (90, 210, 90), 'label': UI.ACCENT}[st['mode']]
         if st.get('lab'):
             st['msg'] = f"Square number X Y: {st['lab'][1]}_   (Enter = set, Esc = cancel)"
@@ -654,8 +637,6 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
         if key == 27:
             if st.get('help'):
                 st['help'] = False
-            elif st['poly']:
-                st['poly'] = []
             elif st['mode'] != 'look':
                 st['mode'] = 'look'
             else:
@@ -675,7 +656,7 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
                 else "Mark at least 2 crosses first (G)"
         elif ch == 'b':
             st['mode'] = 'paint' if g.ready() else st['mode']
-            st['msg'] = "Brush: drag over the squares (Shift = rub out), right button = move" if g.ready() \
+            st['msg'] = "Brush: drag a rectangle: all squares in it are selected (Shift = unselect)" if g.ready() \
                 else "Mark at least 2 crosses first (G)"
         elif key == 25 or raw == 'Y':                       # Ctrl+Y / Shift+Y: жёлтое -> зелёное
             if g.ready():
@@ -686,7 +667,7 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
                 g.save(px_um)
                 st['mode'] = 'paint'                        # сразу кисть: поправить выделение руками
                 st['msg'] = f"Hints selected: +{len(g.selected) - n0} squares, total {len(g.selected)}. " \
-                            "Brush: drag to add, Shift+drag to erase"
+                            "Brush: drag rectangles to add, Shift+drag to unselect"
         elif ch == 'y' and g.ready():                       # Y: подсказка вкл. / выкл. (первый раз — посчитать)
             if not st.get('hints', _cfg.AUTO_HINTS) and not getattr(g, 'scores', None):
                 st['msg'] = "Looking for squares with something in them..."
@@ -706,18 +687,8 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
             st['msg'] = ("Click a square with a number written on it and type the number X Y. Two squares in another "
                          "row and column fix the directions; right click = remove a label") if g.ready() \
                 else "Mark at least 2 crosses first (G)"
-        elif ch == 'p':
-            st['mode'] = 'poly' if g.ready() else st['mode']
-            st['poly'] = []
-            st['msg'] = "Click the corners, Enter = select inside, Del = unselect inside, right click = undo a corner"
-        elif key in (13, 10) and st['mode'] == 'poly' and len(st['poly']) >= 3:
-            apply_poly(st['poly'], True); st['poly'] = []
-        elif key in (3014656, 65535, 127) and st['mode'] == 'poly' and len(st['poly']) >= 3:
-            apply_poly(st['poly'], False); st['poly'] = []
         elif key == 8:
-            if st['mode'] == 'poly' and st['poly']:
-                st['poly'].pop()
-            elif st['mode'] == 'cross':
+            if st['mode'] == 'cross':
                 g.cr.undo(); g.save(px_um); st['msg'] = "Last cross mark removed"
         elif ch == 'f' and g.ready():
             n_, rms = g.refine(lambda x, y, w, h: sc.render(x, y, 1.0, w, h), sc.size, px_um)
@@ -731,11 +702,11 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
         elif ch == 'r':
             set_straight(not st['straight'])
             st['msg'] = "Straight: squares stand level" if st['straight'] else "Picture as shot"
-        elif ch == 'a' and st['mode'] in ('select', 'poly', 'paint') and g.ready():
+        elif ch == 'a' and st['mode'] in ('select', 'paint') and g.ready():
             W_, H_ = sc.size
             g.selected |= g.cells_in([(0, 0), (W_, 0), (W_, H_), (0, H_)], sc.size)
             g.save(px_um); st['msg'] = f"All {len(g.selected)} squares selected"
-        elif ch == 'x' and st['mode'] in ('select', 'poly', 'paint'):
+        elif ch == 'x' and st['mode'] in ('select', 'paint'):
             g.selected.clear(); g.save(px_um); st['msg'] = "Selection cleared"
         elif ch == 'e':
             try:

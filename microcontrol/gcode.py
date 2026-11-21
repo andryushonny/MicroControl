@@ -209,7 +209,7 @@ def _points(a, b, step):
 
 class _Recorder:
     """Запись скана: каждый M240 — кадр в ScanData + проверка резкости и перефокус мутных кадров."""
-    def __init__(self, m, name, program, notes, area, folder=None, extra=None):
+    def __init__(self, m, name, program, notes, area, folder=None, extra=None, reuse=False):
         from .storage import ScanData
         from . import __version__, AUTHORS
         os.makedirs(m.dirs['scans'], exist_ok=True)
@@ -218,8 +218,8 @@ class _Recorder:
         need = n * m._frame_px[0] * m._frame_px[1] * 3 * m.frame_scale ** 2 * (0.7 if m.frame_format == 'h5' else 0.08) / 2 ** 20
         if free < 1.5 * need + 500:
             raise SafetyError('E702', f"Need about {need:.0f} MB, free {free:.0f} MB.")
-        safe = re.sub(r'[^\w\-]+', '_', name).strip('_') or 'scan'
-        self.folder = folder or os.path.join(m.dirs['scans'], datetime.now().strftime("%Y-%m-%d_%H%M%S") + f"_{m.objective}x_{safe}")
+        from .util import named_folder
+        self.folder = folder or named_folder(m.dirs['scans'], m.objective, name, reuse)   # то же имя — та же папка
         if hasattr(m.cam, 'freeze'):
             m.cam.freeze()                                       # одна экспозиция на весь скан
         w, h = m.frame_size
@@ -312,7 +312,7 @@ class _Recorder:
         self.store.close()
 
 
-def run(m, program, save=None, notes='', folder=None, extra=None):
+def run(m, program, save=None, notes='', folder=None, extra=None, reuse=False):
     if isinstance(program, str) and '\n' not in program and program.lower().endswith(('.gcode', '.nc', '.txt')) \
             and os.path.exists(program):
         with open(program, encoding='utf-8') as f:
@@ -321,7 +321,7 @@ def run(m, program, save=None, notes='', folder=None, extra=None):
     cmds = parse(program)
     area = m.area
     _preflight(m, cmds, area)
-    rec = _Recorder(m, save, program, notes, area, folder, extra) if save else None
+    rec = _Recorder(m, save, program, notes, area, folder, extra, reuse) if save else None
     L.event('GC-001', f"Program of {len(cmds)} commands" + (f", recording to {rec.folder}" if rec else "") + ".")
     absolute, status, done, t0 = True, 'done', 0, time.monotonic()
     import re as _re

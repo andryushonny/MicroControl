@@ -197,6 +197,7 @@ Options: train the normal model once on a clean substrate — `mc.train_hints(fo
 | `Space` | take a picture |
 | `Tab` or click a field | change steps, exposure, objective |
 | `P` | hide / show the left panel |
+| `T` · `O` · `[` `]` | turn the camera picture 180° · check directions with the camera · turn the mini map over (all remembered) |
 | `H` · `Shift+Esc` | all keys · exit |
 
 **Viewer** (`mc.view(folder)`)

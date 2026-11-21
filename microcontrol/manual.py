@@ -43,6 +43,7 @@ HELP = ["Shift+Esc: Exit (or close the window)", "P: Hide / show the left panel"
         "C: Cancel the new area / delete the chosen one (press twice)", "Space: Picture",
         "0: Zero here (offset)", "R: Real coordinates (remove the offset)", "B: White balance (aim at an empty place)",
         "Wheel: zoom   Middle button or Shift+drag: move the zoomed picture   Z: whole frame",
+        "T: Turn the camera picture by 180 degrees (remembered)",
         "[ / ]: Turn the mini map over left-right / up-down (remembered)",
         "O: check with the camera which way the picture moves", "L: Light on / off", "H: Hide this help"]
 LEFT, UP, RIGHT, DOWN = {2424832, 65361}, {2490368, 65362}, {2555904, 65363}, {2621440, 65364}
@@ -961,6 +962,11 @@ def run(m, fullscreen=True, _keys=None):
             elif ch == 'p':                                # левая панель: спрятать / показать
                 m._panel_hidden = not getattr(m, '_panel_hidden', False)
                 msg = "Panel hidden: P or the button shows it" if m._panel_hidden else ""
+            elif ch == 't':                                # повернуть картинку камеры на 180° (помнится для прибора)
+                m.turn_180 = not m.turn_180
+                m._map_win = None
+                msg = (f"Camera picture turned by 180 deg ({'on' if m.turn_180 else 'off'}, remembered). "
+                       "Now aim at the crosses and press O to check the directions")
             elif raw in ('[', ']'):                        # отразить мини-карту по горизонтали / вертикали
                 k_ = 'map_flip_x' if raw == '[' else 'map_flip_y'
                 setattr(m, k_, not getattr(m, k_))

@@ -37,6 +37,21 @@ class MVCamera:
         self.mono = cap.sIspCapacity.bMonoSensor != 0
         mv.CameraSetIspOutFormat(self.h, mv.CAMERA_MEDIA_TYPE_MONO8 if self.mono
                                  else mv.CAMERA_MEDIA_TYPE_BGR8)
+        # Отражение и поворот кадра в самой камере: другие программы (штатная Optosky) могут оставить их
+        # включёнными, и картинка придёт перевёрнутой. Всегда сбрасываем — ориентацию задаёт только MicroControl
+        # (turn_180, в ручном режиме клавиша T). Что было — в self.was (для журнала).
+        self.was = {}
+        for d_, name_ in ((0, 'mirror_h'), (1, 'mirror_v')):
+            try:
+                self.was[name_] = bool(mv.CameraGetMirror(self.h, d_))
+                mv.CameraSetMirror(self.h, d_, 0)
+            except Exception:
+                pass
+        try:
+            self.was['rotate'] = int(mv.CameraGetRotate(self.h))
+            mv.CameraSetRotate(self.h, 0)
+        except Exception:
+            pass
         mv.CameraSetTriggerMode(self.h, 0)            # непрерывный поток
         mv.CameraSetSharpness(self.h, 0)              # без программной резкости (важно для автофокуса)
         mv.CameraSetAeState(self.h, 0)                # ручная экспозиция

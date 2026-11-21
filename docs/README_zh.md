@@ -197,6 +197,7 @@ z = \frac{\min_k \sqrt{(\mathbf f-\boldsymbol\mu_k)^{\mathsf T}\Sigma_k^{-1}(\ma
 | `Space` | 拍照 |
 | `Tab` 或点击输入框 | 修改步长、曝光、物镜 |
 | `P` | 隐藏 / 显示左侧面板 |
+| `T` · `O` · `[` `]` | 相机图像旋转 180° · 用相机检查方向 · 翻转小地图（均会记住） |
 | `H` · `Shift+Esc` | 所有按键 · 退出 |
 
 **查看器**（`mc.view(folder)`）

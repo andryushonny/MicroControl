@@ -310,6 +310,12 @@ class Microscope:
                     'E505', "No picture in 15 s. Unplug and plug in the camera USB, restart the kernel."))
                 _step_msg(f"  Camera       {self.cam.info()['model']}, frame {self._frame_px[0]} x {self._frame_px[1]} px")
                 L.event('CON-001', f"Camera {self.cam.info()['model']}, frame {self._frame_px[0]} x {self._frame_px[1]} px.")
+                was = getattr(self.cam, 'was', {})
+                if any(was.values()):                          # другая программа оставила камеру перевёрнутой
+                    _step_msg(f"  Camera       its own mirror / rotation was on ({was}): switched off")
+                    L.event('CON-006', f"Camera mirror / rotation was on: {was}; switched off.", 30)
+            o_ = {k: bool(self._cfg.get(k)) for k in ('turn_180', 'swap_xy', 'mirror_x', 'mirror_y', 'map_flip_x', 'map_flip_y')}
+            _step_msg("  Orientation  " + (", ".join(k for k, v in o_.items() if v) or "default") + "   (manual: T, O, [ and ])")
             for k, v in settings.items():                      # те же проверки, что при m.<имя> = ...
                 setattr(self, k, v)
             self.light = 5                                     # как штатное ПО при подключении

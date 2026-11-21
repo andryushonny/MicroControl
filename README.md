@@ -109,20 +109,36 @@ There are three coordinate systems.
 
 1. **Motor steps** $(N_x, N_y, N_z)$ — the internal position, integers.
 2. **Real coordinates** $(X, Y, Z)$, µm, `m.real_position`:
-$$X = \delta \cdot N_x,\quad Y = \delta \cdot N_y,\quad Z = \delta \cdot N_z,$$
+
+```math
+X = \delta \cdot N_x,\quad Y = \delta \cdot N_y,\quad Z = \delta \cdot N_z,
+```
+
 counted from the microscope **home** (section 16); if no home is set — from the connection point.
 3. **Working coordinates** $(x, y, z)$, µm, `m.position` — real coordinates minus the zero offset $(x_0, y_0, z_0)$ set by `m.offset()` (G-code `G92`):
-$$x = X - x_0,\quad y = Y - y_0,\quad z = Z - z_0.$$
+
+```math
+x = X - x_0,\quad y = Y - y_0,\quad z = Z - z_0.
+```
+
 The zero offset is for convenience; travel limits and home do not depend on it.
 
 **Directions.** $+Z$ — stage up, towards the objective. In the stock program code the direction is a byte: X `00` — "forward", `FF` — "backward"; Y `00` — "left", `FF` — "right"; Z `00` — down, `FF` — up. The correspondence of X, Y to the image on the screen is checked at the first start (section 20) and changed if needed with `reverse_x`, `reverse_y`, `reverse_z` (motor) and `mirror_x`, `mirror_y`, `swap_xy` (camera).
 
 **Camera rotation.** On the ATR8300 the camera is turned by 90°: the screen horizontal is the stage $Y$ axis, the vertical is $X$. This is handled by `m.swap_xy` (`True` by default on the instrument, `False` in the simulator). With `swap_xy` the step-to-pixel matrix is anti-diagonal,
-$$K = \begin{pmatrix} 0 & k_y \\ k_x & 0 \end{pmatrix},\qquad k_{x,y} = \mp\frac{\delta}{p},$$
+
+```math
+K = \begin{pmatrix} 0 & k_y \\ k_x & 0 \end{pmatrix},\qquad k_{x,y} = \mp\frac{\delta}{p},
+```
+
 where $p$ is the pixel size on the sample and the signs are set by `mirror_x`, `mirror_y`; the frame size in stage axes is $(h, w)$ instead of $(w, h)$. The ATR8300 camera image is upside down (mirrored in both axes); `m.turn_180` (`True` by default on the instrument) turns it by 180° when shooting, and $K$ changes sign, so the arrow directions on the screen stay the same. The orientation parameters (`turn_180`, `swap_xy`, `mirror_*`, `reverse_*`) are remembered for each microscope by its serial number (section 16).
 
 **Micrometres to steps.** A requested move $\Delta$ (µm) becomes an integer number of steps
-$$N = \mathrm{round}\!\left(\frac{\Delta}{\delta}\right),\qquad |N\delta - \Delta| \le \frac{\delta}{2} \approx 2.8\ \text{µm}.$$
+
+```math
+N = \mathrm{round}\!\left(\frac{\Delta}{\delta}\right),\qquad |N\delta - \Delta| \le \frac{\delta}{2} \approx 2.8\ \text{µm}.
+```
+
 If $|N\delta - \Delta| > 0.05$ µm, the reply reports the actual move. A move $|\Delta| < \delta/2$ (giving $N = 0$) is refused (error `E214`), and so is a zero move (`E213`).
 
 ---
@@ -136,9 +152,17 @@ Virtual COM port: 115 200 bit/s, 8 data bits, no parity, 1 stop bit. DTR and RTS
 ### 5.2. Frame
 
 Every command and every reply is a frame
-$$\mathtt{AA}\ \mathtt{55}\ \ L_{hi}\ L_{lo}\ \ C\ \ D_1 \dots D_n\ \ S,$$
+
+```math
+\mathtt{AA}\ \mathtt{55}\ \ L_{hi}\ L_{lo}\ \ C\ \ D_1 \dots D_n\ \ S,
+```
+
 where $C$ is the command code, $D_1\dots D_n$ the data, $L = n + 4$ the length (2 bytes, high byte first), $S$ the checksum:
-$$S = \left(L_{hi} + L_{lo} + C + \sum_{i=1}^{n} D_i\right) \mathrm{mod} 256.$$
+
+```math
+S = \left(L_{hi} + L_{lo} + C + \sum_{i=1}^{n} D_i\right) \mathrm{mod} 256.
+```
+
 The full frame length is $L + 2$ bytes. Example: serial number request `AA 55 00 04 04 08`, $S = 00 + 04 + 04 = 08$.
 
 The reply repeats the command code and carries the data. The controller replies 1–4 ms after receiving a command, **before the motion ends**: a reply to a motion command means "command accepted", not "move finished".
@@ -205,7 +229,11 @@ A frame with a wrong length leaves the controller waiting for the missing bytes;
 ## 6. Motion model and timing
 
 Since the controller confirms a command before the motion ends and never reports its end, the end of a move is determined by time. A move of $N$ steps is split into parts of at most $N_{\max} = 180$ steps (1 mm); after each part the program waits
-$$t = \frac{|N|\,\delta}{v} + \tau,$$
+
+```math
+t = \frac{|N|\,\delta}{v} + \tau,
+```
+
 where $v$ is the assumed motor speed (`m.motor_speed`) and $\tau$ the settling pause (`m.move_pause`). At least 0.06 s passes between any two commands.
 
 The axes move strictly one after another, never together, in the order: Z down → X → Y → Z up. Thus the rise towards the objective is done last, when the stage is already at the right point of the plane.
@@ -215,7 +243,11 @@ The axes move strictly one after another, never together, in the order: Z down �
 **Measuring $v$:** `m.measure_speed(distance=1000)`. The stage moves by `distance` in X; the camera records frames until the image stops changing (difference of neighbouring frames below the $3\sigma$ noise threshold for 1 s). $v = 0.8\,v_{\text{meas}}$ is taken. The result is rejected (`E212`, $v$ unchanged) if the motion is seen in fewer than three frames, if the last frame does not differ from the first, or if $v_{\text{meas}} > 20$ mm/s: in all these cases the speed would be overestimated. Measure in focus, on an area with details, with the light on.
 
 **Scan time.** For a frame step $s$ (section 10) the time per frame is
-$$t_{\text{frame}} \approx \frac{s}{v} + \tau + \tau_{\text{photo}} + t_{\text{exp}} + t_{\text{write}},$$
+
+```math
+t_{\text{frame}} \approx \frac{s}{v} + \tau + \tau_{\text{photo}} + t_{\text{exp}} + t_{\text{write}},
+```
+
 where $\tau_{\text{photo}}$ is `photo_pause` and $t_{\text{exp}}$ the exposure. With $v = 3000$ µm/s and $s = 570$ µm (10x) the move takes about 0.2 s; after measuring the speed — several times less.
 
 ---
@@ -311,7 +343,10 @@ Reference frames are saved in `references/` as 16-bit PNG; the pixel value is th
 ### 9.0. Autofocus by depth of field (default)
 
 Depth of field of the objective (wave part plus geometric part, $e = 2.2$ µm — sensor pixel, $\lambda = 0.55$ µm):
-$$d = \frac{\lambda n}{\mathrm{NA}^2} + \frac{n\,e}{M\cdot\mathrm{NA}}.$$
+
+```math
+d = \frac{\lambda n}{\mathrm{NA}^2} + \frac{n\,e}{M\cdot\mathrm{NA}}.
+```
 
 | Objective | NA | $d$, µm | search step $d/2$, µm |
 |---|---|---|---|
@@ -358,7 +393,11 @@ The depth of field may be smaller than the search step (10x: about 8 µm with a 
 The stage approaches the best position from above: it first rises $s_f$ higher, then goes down. This removes the mechanism backlash.
 
 **Peak contrast**
-$$C = \frac{F_{\max}}{\mathrm{median}(F)}$$
+
+```math
+C = \frac{F_{\max}}{\mathrm{median}(F)}
+```
+
 over the coarse pass points. With $C < 1.3$ the maximum is considered uncertain (few details in the frame): the reply has a warning and the log a WARNING record.
 
 Default window and step:
@@ -383,9 +422,17 @@ The Z motor step $\delta = 5.56$ µm is larger than the depth of field of 20x (�
 The area is given by two corners $A = (x_A, y_A)$ and $B = (x_B, y_B)$ — the centres of the corner frames, usually with keys `1` and `2` in manual mode (section 15); or explicitly: `m.area = mc.Area(x0, y0, x1, y1)`.
 
 The grid step for overlap $q$ (`overlap`, $0 \le q \le 0.5$; by default 20 %, 25 % at 50x and 100x — `SCAN_OVERLAP`) is rounded down to a whole number of motor steps, so there are no gaps between frames:
-$$s_x = \delta \left\lfloor \frac{W(1 - q)}{\delta} \right\rfloor,\qquad s_y = \delta \left\lfloor \frac{H(1 - q)}{\delta} \right\rfloor.$$
+
+```math
+s_x = \delta \left\lfloor \frac{W(1 - q)}{\delta} \right\rfloor,\qquad s_y = \delta \left\lfloor \frac{H(1 - q)}{\delta} \right\rfloor.
+```
+
 Number of frames
-$$n_x = \left\lceil \frac{|x_B - x_A|}{s_x} - 0.05 \right\rceil + 1,\qquad n_y = \left\lceil \frac{|y_B - y_A|}{s_y} - 0.05 \right\rceil + 1;$$
+
+```math
+n_x = \left\lceil \frac{|x_B - x_A|}{s_x} - 0.05 \right\rceil + 1,\qquad n_y = \left\lceil \frac{|y_B - y_A|}{s_y} - 0.05 \right\rceil + 1;
+```
+
 the 0.05 tolerance avoids an extra frame due to rounding. The path is a "snake" (`path='snake'`, even rows reversed) or row by row (`path='rows'`).
 
 ### 10.2. Focus during a scan
@@ -401,7 +448,11 @@ the 0.05 tolerance avoids an extra frame due to rounding. The path is a "snake" 
 Points with contrast $C < 1.3$ are not used for the plane (the number skipped is reported). With fewer than three good points the plane is horizontal; with none the scan does not start (`E603`). If the points deviate from the plane by more than `focus_step`, `focus='each'` is recommended.
 
 **Re-shooting blurred frames** (`refocus=True`). Frame $k$ is blurred if
-$$F_k < 0.5\,\mathrm{median}(F_{k-20}, \dots, F_{k-1})$$
+
+```math
+F_k < 0.5\,\mathrm{median}(F_{k-20}, \dots, F_{k-1})
+```
+
 (with at least 5 previous frames). Such a frame is shot again after autofocus; the flags `refocused` and `blurry` are written to `index.csv`.
 
 ### 10.3. Execution
@@ -464,7 +515,11 @@ The method follows ASHLAR (Muhlich et al., *Bioinformatics* 38, 4613, 2022; MIT 
 3. **Permutation test.** The same geometry, but a distant frame instead of the neighbour: errors of surely false pairs. The threshold is their 1st percentile.
 4. **Stage → pixels model** from the accepted seams: $\mathbf{d}_{ij} = M\,\Delta\mathbf{p}_{ij} + B\,\Delta\mathbf{s}_{ij}$. $M$ ($2\times2$) accounts for the camera rotation relative to the stage axes, an inexact motor step and skew; $\mathbf{s}_k = (\mathrm{sign}\Delta x, \mathrm{sign}\Delta y)$ is the side from which the stage approached frame $k$, $B$ the backlash (offset when the direction changes, reported in µm). A frame without reliable seams is placed by this model.
 5. **Positions** — weighted least squares
-$$\min \sum_{(i,j)} w_{ij}\,\bigl|\mathbf{r}_j - \mathbf{r}_i - \mathbf{d}_{ij}\bigr|^2 + \varepsilon\sum_i \bigl|\mathbf{r}_i - M\mathbf{p}_i\bigr|^2,\qquad \varepsilon = 0.01,$$
+
+```math
+\min \sum_{(i,j)} w_{ij}\,\bigl|\mathbf{r}_j - \mathbf{r}_i - \mathbf{d}_{ij}\bigr|^2 + \varepsilon\sum_i \bigl|\mathbf{r}_i - M\mathbf{p}_i\bigr|^2,\qquad \varepsilon = 0.01,
+```
+
 with outlier suppression: $w_{ij} = w^0_{ij}/\bigl(1 + (\rho_{ij}/c)^2\bigr)$, $\rho$ the seam residual, $c$ decreasing from $\infty$ to 2 px (first a rough solution, then inconsistent seams lose weight). $w^0 = 1 - e$. A frame without reliable seams is held by the stage model.
 
 Simulator check (substrate turned by 1.2°, motor step off by +1.5 / +1.2 %, drift ±1 step per move, 42 frames): frame position error by the stage — up to 63 px; after stitching — 3.3 px (RMS), seams 0.15 px (median). Real ASHLAR (`mc.stitch(folder, engine='ashlar')`, needs `pip install ashlar` and Java) on the same frames — 9.8 px.
@@ -499,11 +554,19 @@ The lattice is always **square**: $\mathbf{v}_2$ is $\mathbf{v}_1$ turned by 90�
 **Cross centre** is found by a "+" template with a dark rim (it fits thin dark crosses as well as raised light ones with an outline); each candidate is checked for the cross symmetry under 90° and 180° rotation — the lithography numbers next to a cross are not symmetric this way and do not pull the centre. The cross size (arm, px) is chosen automatically when the lattice is fitted to all crosses: the one with which the found centres lie best on the lattice, stored in `grid.json` (`arm_px`). Check on sample images with numbers at the crosses: lattice over 13 crosses — 0.52 px RMS, over 11 crosses — 1.1 px. On a whole 4x frame the crosses deviate from a straight lattice by up to ~7 px towards the edges — this is lens distortion (`mc.distortion`).
 
 **Square numbers.** Lattice indices $(i, j)$ are arbitrary (counted from the first mark). The lithography numbers are obtained as
-$$\begin{pmatrix}X\\Y\end{pmatrix} = P\begin{pmatrix}i\\j\end{pmatrix} + \mathbf{t},$$
+
+```math
+\begin{pmatrix}X\\Y\end{pmatrix} = P\begin{pmatrix}i\\j\end{pmatrix} + \mathbf{t},
+```
+
 $P$ is a signed permutation of the axes (8 variants: which lattice axis is $X$ and which way it grows). $P$ and $\mathbf{t}$ are chosen so that all labels hold exactly. One label gives only $\mathbf{t}$ (the directions are the defaults: $X$ to the right, $Y$ down on the screen); a label on a second square **in another row and column** fixes the directions of both axes — and the numbers of all squares. The number is written in the top left corner of each square (labelled ones in yellow); inconsistent labels give a warning. The numbers go to `selection.json` (`names`), to the DXF (layer LABELS) and to the file names of the squares (`square_X+012_Y+007.png`). No digit recognition is needed: two labels are enough.
 
 **Yellow hint** — squares with something in them (flakes, crystals). A simple method for a weak PC: the whole mosaic as one reduced image (a square ≈ 96 px, smaller for a large grid — ≤ 6 Mpx in total), each square is straightened, the background is the median colour of the square (uneven illumination does not matter), "something" are pixels that differ from the background in Lab by more than $\max(12,\ 4 \cdot 1.48\,\mathrm{MAD})$ (the threshold rises on a noisy background). Not counted: the square corners (crosses and numbers), dark colourless spots (dust), spots smaller than $0.1\,\%$ of the square. A square is yellow if the share of "something" is larger than
-$$f(S) = 5\,\% \cdot 10^{-2S/100},$$
+
+```math
+f(S) = 5\,\% \cdot 10^{-2S/100},
+```
+
 $S$ — sensitivity 0…100 (50 — 0.5 %; 0 — 5 %; 100 — 0.05 %). Computed automatically when the lattice is set (≈ 5 s per 5000 squares), changing the sensitivity is instant. Without the window: `mc.hints(folder, sensitivity=50)`. On sample images: all 5 squares with flakes found, no empty ones; on a sample without flakes — 20 of 480 (large dust particles, coloured debris), removable by the sensitivity.
 
 **Performance** (30 × 30 frame grid, 900 frames of 1296 × 972, 2 cores): stitching 67 s, memory ≤ 0.6 GB; opening the viewer 0.1 s; a window frame at any zoom 7–63 ms, while dragging 2–25 ms. Small zoom is drawn from the overview mosaic `join/preview_all.jpg`, medium from the reduced frame copies `viewer/levels/` (written at stitching), large from the frames; the copy cache is limited to 400 MB.
@@ -533,14 +596,25 @@ Simulator check: the set $k_1 = -0.020$ (8 px in the corner) was measured as $-0
 
 1. **Initial positions** of the frames — from the stage coordinates and the step-to-pixel matrix.
 2. **Refinement.** For each pair of neighbouring frames the mutual shift $\mathbf{d}_{ij}$ is computed by phase correlation over the overlap strip: the maximum of the inverse Fourier transform of the normalised cross spectrum
-$$R = \frac{\hat I_i \hat I_j^{*}}{|\hat I_i \hat I_j^{*}|}.$$
+
+```math
+R = \frac{\hat I_i \hat I_j^{*}}{|\hat I_i \hat I_j^{*}|}.
+```
+
 The shift is accepted if the peak height is at least 0.08 and the correction does not exceed a quarter of the strip; otherwise the stage shift is used.
 3. **Global fit** of the positions $\mathbf{r}_i$ by least squares over all pairs at once (errors do not accumulate along a row):
-$$\min_{\{\mathbf{r}\}} \sum_{(i,j)} w_{ij}\,\bigl|(\mathbf{r}_j - \mathbf{r}_i) - \mathbf{d}_{ij}\bigr|^2 + \varepsilon \sum_i \bigl|\mathbf{r}_i - \mathbf{r}_i^{(0)}\bigr|^2,\quad \varepsilon = 0.01,$$
+
+```math
+\min_{\{\mathbf{r}\}} \sum_{(i,j)} w_{ij}\,\bigl|(\mathbf{r}_j - \mathbf{r}_i) - \mathbf{d}_{ij}\bigr|^2 + \varepsilon \sum_i \bigl|\mathbf{r}_i - \mathbf{r}_i^{(0)}\bigr|^2,\quad \varepsilon = 0.01,
+```
+
 $w_{ij}$ — correlation peak height, $\mathbf{r}_i^{(0)}$ — position by the stage.
 4. **Illumination flattening** (with at least 12 frames): field $F(x, y)$ — median of up to 40 frames, smoothed by a Gaussian with $\sigma = \min(W, H)/12$ and normalised to the mean; the frame is divided by $F$.
 5. **Blending** with weights falling towards the frame edges:
-$$w(x, y) = \min(x + 1,\, N_x - x)\cdot\min(y + 1,\, N_y - y).$$
+
+```math
+w(x, y) = \min(x + 1,\, N_x - x)\cdot\min(y + 1,\, N_y - y).
+```
 
 Memory is limited (`max_mb = 3000`): if needed, the mosaic is built at a reduced scale; the original frames are not changed. A part of the scan: `mc.join(folder, x=(x0, x1), y=(y0, y1))` or `center=0.3`. Result: `join/mosaic_*.png`, `preview_*.jpg`, `positions_*.csv`.
 
@@ -558,7 +632,11 @@ Memory is limited (`max_mb = 3000`): if needed, the mosaic is built at a reduced
 | Reproducibility | repeating the acquisition | `program.gcode`, all parameters in `meta.json`, link to the log |
 
 **Field correction** when preparing the data:
-$$I' = \frac{I - D}{E - D}\,\langle E - D \rangle,$$
+
+```math
+I' = \frac{I - D}{E - D}\,\langle E - D \rangle,
+```
+
 where $I$ is the frame, $D$ the dark frame (`m.dark_frame()`), $E$ the frame of an empty area (`m.empty_frame()`), $\langle\cdot\rangle$ the mean over the frame.
 
 Recommendations:
@@ -687,11 +765,19 @@ Limitation: the controller has no "stop" command. The part of a move already sen
 **Sample.** A substrate with roughness, particles and flakes of different thickness; on it — gold crosses with a 100 µm period (span 20 µm, line width 2.5 µm), every fifth twice as large. The sample is defined in micrometres, so the image scale matches the objective. The sample plane is tilted: $\partial Z/\partial X = 0.02$, $\partial Z/\partial Y = -0.015$. The focus at the start point is 100 µm above the initial stage position. Test options: `m._world.turn_deg` (lattice rotation), `pitch`, `backlash` (per axis), `dist_k1` (lens distortion), `vignette`, `flakes` (bright flakes for the hint).
 
 **Optics.** Defocus is modelled by a Gaussian blur with
-$$\sigma = \frac{\mathrm{NA}\,|\Delta z|}{2p}\ \text{pixels},$$
+
+```math
+\sigma = \frac{\mathrm{NA}\,|\Delta z|}{2p}\ \text{pixels},
+```
+
 matching the blur circle radius $\mathrm{NA}\,|\Delta z|$; sensor noise is normal, $\sigma_n = 2$ levels, new in every frame.
 
 **Laser** 532 nm — a spot in the centre of the frame with
-$$s = \frac{0.61\,\lambda}{2\,\mathrm{NA}} + \frac{\mathrm{NA}\,|\Delta z|}{2},$$
+
+```math
+s = \frac{0.61\,\lambda}{2\,\mathrm{NA}} + \frac{\mathrm{NA}\,|\Delta z|}{2},
+```
+
 brightness proportional to $P/s^2$. With a power of at least 20 mW and $s < 3$ µm a mark (burn) is left on the sample.
 
 **Motors:** speed about 5 mm/s, a move takes time; a command arriving during a move gets reply `04` and is not executed. Limit switches at ±25 mm. Before the "motors on" command (`24 01`) no moves are executed. A calibration request without an index gets no reply, as on the instrument.

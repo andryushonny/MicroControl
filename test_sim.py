@@ -729,11 +729,11 @@ g = Grid(f); g.save(px_um)                                          # просм
 assert np.allclose(SEL.marked_squares(f)['center_um'] - c0, (5, -3))
 SEL.shift_mask(f, to=(0, 0))
 X = 1280 - mc.samples.CAR_W + 60
-M.run(m, fullscreen=False, _keys=[-1, ord('j'), ('car', X, 160), -1, ('mdrag0', 400, 400), ('mdrag', 440, 380), -1,
+M.run(m, fullscreen=False, _keys=[-1, ('car', X, 160), -1, ('mdrag0', 400, 400), ('mdrag', 440, 380), -1,
                                   ('mdrag1', 440, 380), -1, -1])
 d1 = SEL.marked_squares(f)['center_um'] - c0
 assert np.hypot(*d1) > 1, d1
-M.run(m, fullscreen=False, _keys=[-1, ord('j'), ('car', X, 160), -1, ('mdrag0', 400, 400), ('mdrag', 440, 380), -1,
+M.run(m, fullscreen=False, _keys=[-1, ('car', X, 160), -1, ('mdrag0', 400, 400), ('mdrag', 440, 380), -1,
                                   ('mdrag1', 440, 380), -1, 26, -1, -1])                 # Ctrl+Z — назад
 d2 = SEL.marked_squares(f)['center_um'] - c0
 assert np.allclose(d2, d1, atol=0.01), (d1, d2)
@@ -763,7 +763,7 @@ class _Slow:                                                        # клави
         s.n -= 1
         if s.n < 0: raise StopIteration
         _t.sleep(0.01); return -1
-M.run(m, fullscreen=False, _keys=list(_Slow(150)))
+M.run(m, fullscreen=False, _keys=[ord('j')] + list(_Slow(150)))   # J: проверять ещё и по картинке
 sh = SEL.marked_squares(f)['shift_um']
 assert np.hypot(*sh) < 1.0, sh
 m.close(); print("Mask snaps to the real crosses by itself:", np.round(sh, 2), "OK")
@@ -782,10 +782,29 @@ g = Grid(f); p0 = np.array([150.0, 120.0]); a_ = 100 / px_um
 g.cr.add(p0); g.cr.add(p0 + (a_, 0)); g.cr.add(p0 + (0, a_))
 g.selected |= {(0, 0), (1, 0)}; g.save(px_um)
 gj = lambda: json.load(open(os.path.join(f, 'grid.json')))['selected']
-M.run(m, fullscreen=False, _keys=[-1, ord('j'), -1, ('car', 1251, 163), -1, -1])
+M.run(m, fullscreen=False, _keys=[-1, -1, ('car', 1251, 163), -1, -1])
 assert gj() == [], gj()                                             # один щелчок — удалено
-M.run(m, fullscreen=False, _keys=[-1, ord('j'), -1, ('car', 1251, 163), -1, 26, -1, -1])   # нечего удалять; Ctrl+Z
+M.run(m, fullscreen=False, _keys=[-1, -1, ('car', 1251, 163), -1, 26, -1, -1])   # нечего удалять; Ctrl+Z
 g = Grid(f); g.selected |= {(0, 0), (1, 0)}; g.save(px_um)
-M.run(m, fullscreen=False, _keys=[-1, ord('j'), -1, ('car', 1251, 163), -1, 26, -1, -1])
+M.run(m, fullscreen=False, _keys=[-1, -1, ('car', 1251, 163), -1, 26, -1, -1])
 assert sorted(map(tuple, gj())) == [(0, 0), (1, 0)], gj()
 m.close(); print("No confirmations: mask part deleted at once, Ctrl+Z brings it back: OK")
+
+
+# ------------------------------------------------------------------ 29. Строгая геометрия маски: люфт столика учтён
+from microcontrol import snap
+m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp()); m.focus()
+m._world.backlash = {'x': 2, 'y': 2}                                # шаги, теряемые при смене направления
+fw, fh = m.frame_size
+m.area = mc.Area(0, 0, 4 * fw, 3 * fh)
+f = m.scan(); mc.stitch(f, verbose=False)
+g = snap.geometry(f)
+assert all(abs(b - 2 * m.motor_step) < 1.5 for b in g['backlash_um']) and g['resid'] < 0.5, (g['backlash_um'], g['resid'])
+cx, cy = 1.5 * fw, 1.2 * fh
+for sx, sy in [(1, 1), (-1, -1), (1, -1), (-1, 1)]:                  # подъезжаем с разных сторон
+    m.goto(x=cx - sx * 300, y=cy - sy * 300); m.goto(x=cx, y=cy)
+    img = m.image(0)
+    d, resp, px = snap.offset(f, img, (m._p['x'], m._p['y']), (m._dir['x'], m._dir['y']))
+    d0, resp0, px0 = snap.offset(f, img, (m._p['x'], m._p['y']), (0, 0))
+    assert np.hypot(*px) < 1.5 and np.hypot(*px0) > 8, (sx, sy, px, px0)
+m.close(); print("Strict mask geometry: backlash", g['backlash_um'], "um counted, error < 1.5 px from any side: OK")

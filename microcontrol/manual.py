@@ -51,7 +51,7 @@ HELP = ["Shift+Esc: Exit (or close the window)", "P: Hide / show the left panel"
         "L: Light on / off   I: Laser on / off   W: White balance (aim at an empty place)   Space: Picture",
         "R: Ruler: click two points (distance, um)   0: Zero here   Shift+0: Real coordinates",
         "Wheel: zoom   Drag (middle button too): move the zoomed picture   Z: whole frame",
-        "J: masks snap to the real crosses by themselves (on by default)   Shift+drag over a mask: move it by hand (Ctrl+Z undoes)",
+        "Masks lie strictly by the scan geometry (backlash counted)   J: also check / snap by the picture   Shift+drag over a mask: move it by hand",
         "T: Turn the camera picture by 180 degrees (remembered)",
         "[ / ]: Arrows left-right / up-down the other way; the mini map always follows the arrows (remembered)",
         "O: check with the camera which way the picture moves",
@@ -1024,7 +1024,7 @@ def _run(m, fullscreen=False, _keys=None):
             while tgt['z'] > m.position.z + 0.5 * m.motor_step:
                 m.goto(z=min(tgt['z'], m.position.z + m.max_move_z * 0.95))
 
-    snp = dict(on=True, thr=None, res=None, pos=None, t=0.0, done=set())   # маски сами садятся на кресты (J)
+    snp = dict(on=False, thr=None, res=None, pos=None, t=0.0, done=set())   # маски сами садятся на кресты (J)
 
     def snap_step():
         """Столик постоял — сравнить живой кадр с мозаикой маски рядом (в потоке) и поправить её сдвиг."""
@@ -1035,12 +1035,14 @@ def _run(m, fullscreen=False, _keys=None):
             if snp.get('hand', {}).get(fd_, -1) > t0_:     # пока считали, маску сдвинули рукой — её слово
                 return None
             lim_ = 0.45 * min(m.frame_size)
-            if d_ is not None and 0.3 < np.hypot(*d_) < lim_:
-                from .selections import marked_squares, shift_mask
+            from .selections import marked_squares, shift_mask
+            mk_ = marked_squares(fd_)
+            cur_ = np.asarray(mk_['shift_um'], float) if mk_ else np.zeros(2)
+            if d_ is not None and np.hypot(*d_) < lim_ and np.hypot(*(d_ - cur_)) > 0.3:   # d_ — каким быть сдвигу
                 if fd_ not in mshift0:
-                    mk_ = marked_squares(fd_)
-                    mshift0[fd_] = tuple(mk_['shift_um']) if mk_ else (0.0, 0.0)
-                mshift[fd_] = tuple(map(float, shift_mask(fd_, d_)))
+                    mshift0[fd_] = tuple(cur_)
+                mshift[fd_] = tuple(map(float, shift_mask(fd_, to=d_)))
+                d_ = d_ - cur_
                 SM._MASKS.pop(fd_, None)
                 L.event('MAN-010', f"Mask of {fd_} snapped to the crosses by {d_[0]:+.1f}, {d_[1]:+.1f} um "
                                    f"(match {r_:.2f}).")
@@ -1063,12 +1065,15 @@ def _run(m, fullscreen=False, _keys=None):
             return None
         fd_ = fds[0]
         snp['done'].add((key_, fd_))
-        img_, K_, st_ = (live.img.copy() if live is not None else m.image(0)), m._pixels_per_step(), m.motor_step
+        img_, st_ = (live.img.copy() if live is not None else m.image(0)), m.motor_step
+        s_ = (m._dir['x'], m._dir['y'])
 
         def work():
             try:
                 from .snap import offset
-                d_, r2_ = offset(fd_, img_, P_, K_, st_)
+                d_, r2_, px_ = offset(fd_, img_, (P_[0] / st_, P_[1] / st_), s_)
+                L.event('MAN-010', f"Mask of {fd_} vs the camera: " +
+                        (f"{px_[0]:+.1f}, {px_[1]:+.1f} px (match {r2_:.2f})" if d_ is not None else str(r2_)))
             except Exception as e:
                 d_, r2_ = None, str(e)
             snp['res'] = (fd_, d_, r2_ if d_ is not None else 0.0)
@@ -1123,12 +1128,17 @@ def _run(m, fullscreen=False, _keys=None):
                 rp_ = np.array([m.real_position.x, m.real_position.y])
                 rad_ = 1.5 * max(m.frame_size) / max(1.0, zm['z']) + 2 * max(m.frame_size)
                 ov_ = None
-                for q, sn, fd in polys_:                    # цвет своего выделения, темнее
-                    if mdr.get('fd') == fd:                 # маску сейчас тянут
-                        q = q + mdr['d']
-                    if np.abs(q.mean(0) - rp_).max() > rad_:
-                        continue
-                    pts = np.int32(np.round(np.array([to_v(S_) for S_ in q], float) * 16))   # 1/16 px
+                near_ = list(dict.fromkeys(fd for q, sn, fd in polys_ if np.abs(q.mean(0) - rp_).max() < rad_))
+                from .snap import live_polys                # строго по геометрии съёмки (люфт, кадры рядом)
+                strict_ = []
+                for fd in near_:
+                    try:
+                        strict_ += live_polys(fd, (m._p['x'], m._p['y']), (m._dir['x'], m._dir['y']), img.shape,
+                                              mdr['d'] if mdr.get('fd') == fd else (0.0, 0.0))
+                    except Exception as e:
+                        L.debug('MAN-010', f"Mask of {fd}: {e}")
+                for q, sn in strict_:                       # цвет своего выделения, темнее
+                    pts = np.int32(np.round(np.array([i2v(u_) for u_ in q], float) * 16))   # 1/16 px
                     if ov_ is None:
                         ov_ = view[:, :Wl].copy()
                     cv2.fillPoly(ov_, [pts], SM.dim(SM.color(sn - 1), 0.45), cv2.LINE_AA, 4)
@@ -1673,8 +1683,8 @@ def _run(m, fullscreen=False, _keys=None):
             elif ch == 'j':                                # маски сами садятся на кресты: вкл. / выкл.
                 snp['on'] = not snp['on']
                 snp['done'].clear()
-                msg = ("Masks snap to the real crosses by themselves (the camera picture is matched with the scan)"
-                       if snp['on'] else "Masks stay where they are (J: snap again)")
+                msg = ("Masks are also checked by the picture and snapped (the camera picture is matched with the scan)"
+                       if snp['on'] else "Masks lie by the scan geometry only (J: check by the picture)")
             elif ch == 'k':                                # запомнить Z здесь как точку фокуса выделения
                 msg = SM.add_point(m)
                 L.event('MAN-006', msg + ".")

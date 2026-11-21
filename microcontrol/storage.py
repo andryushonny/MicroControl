@@ -17,8 +17,8 @@ from . import log as L
 from .errors import StoreError
 
 COLS = ['id', 'batch', 'slot', 'row', 'col', 'x_um', 'y_um', 'z_um',
-        'x_p', 'y_p', 'z_p', 'sharpness', 'refocused', 'blurry', 't_s', 'file']
-NUM = {'id', 'slot', 'x_p', 'y_p', 'z_p', 'refocused', 'blurry'}
+        'x_p', 'y_p', 'z_p', 'sharpness', 'refocused', 'blurry', 't_s', 'file', 'dir_x', 'dir_y']
+NUM = {'id', 'slot', 'x_p', 'y_p', 'z_p', 'refocused', 'blurry', 'dir_x', 'dir_y'}   # dir — с какой стороны подъехали
 THUMB = 16                       # превью кадра: 1/16 по стороне (для обзора карты в окне)
 FLT = {'x_um', 'y_um', 'z_um', 'sharpness', 't_s'}
 

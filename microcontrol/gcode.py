@@ -302,7 +302,8 @@ class _Recorder:
         self.store.add(stored, row='' if row is None else row, col='' if col is None else col,
                        x_um=p.x, y_um=p.y, z_um=p.z, x_p=m._p['x'], y_p=m._p['y'], z_p=m._p['z'],
                        sharpness=round(s, 1), refocused=refocused, blurry=blurry,
-                       t_s=round(time.monotonic() - self.t0, 1))
+                       t_s=round(time.monotonic() - self.t0, 1),
+                       dir_x=getattr(m, '_dir', {}).get('x', 0), dir_y=getattr(m, '_dir', {}).get('y', 0))
         self.n += 1
         if self.jpg:                                            # сразу на диск: можно смотреть во время скана
             try:

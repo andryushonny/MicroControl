@@ -228,7 +228,7 @@ Arrows move; letters do things. As much as possible is done right in the window.
 | Arrows | move by one frame (Step X, Y) |
 | `E` / `Q` (`PgUp` / `PgDn`) | stage up / down by Step Z (`Shift` — ×5) |
 | `F` · `K` | autofocus · keep $Z$ here as a focus point |
-| `J` · Shift+drag over a mask | masks snap to the real crosses by themselves (on / off) · move a mask by hand |
+| `J` · Shift+drag over a mask | masks are laid strictly by the scan geometry (backlash counted); J — also check by the picture (on / off) · move a mask by hand |
 | `1`, `2` | corners of a selection |
 | `Y` | "Z follows the focus points" on / off |
 | `,` `.` · `Enter` | previous / next selection · drive to it |

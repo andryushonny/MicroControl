@@ -270,24 +270,17 @@ def marked_squares(folder):
         from .mask import Grid
         g = Grid(folder)
         if g.ready() and g.selected:
-            from .storage import ScanData, meta_A
-            from .stitch import load_positions
-            st = ScanData(folder)
-            try:
-                H, W = st.shape[:2]
-                P = load_positions(folder, st)
-                Pm = P - P.min(0)
-                ms = st.meta.get('motor_step_um') or 1.0
-                S = np.array([[float(r['x_p']), float(r['y_p'])] for r in st.index]) * ms
-                A = meta_A(st.meta, W, H)
-            finally:
-                st.close()
+            from .snap import geometry                     # люфт учтён: настоящие положения кадров
+            geo = geometry(folder)
+            W, H, ms = geo['W'], geo['H'], geo['ms']
+            Pm = geo['pos']
             Pc = Pm + (W / 2, H / 2)
+            S = geo['T'] * ms
             if len(Pc) >= 3 and np.linalg.matrix_rank(Pc - Pc.mean(0), tol=1.0) == 2:
                 M = np.linalg.lstsq(np.c_[Pc, np.ones(len(Pc))], S, rcond=None)[0]          # 3 x 2
             else:
-                Lin = -np.linalg.inv(A) * ms                                                # px -> мкм
-                M = np.vstack([Lin.T, S.mean(0) - Pc.mean(0) @ Lin.T])
+                Lin = np.linalg.inv(geo['Mo']).T * ms                                       # px -> мкм
+                M = np.vstack([Lin, S.mean(0) - Pc.mean(0) @ Lin])
             px = [np.array([g.cr.point(i, j), g.cr.point(i + 1, j), g.cr.point(i + 1, j + 1), g.cr.point(i, j + 1)],
                            float) for i, j in sorted(g.selected)]
             try:

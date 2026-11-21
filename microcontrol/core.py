@@ -271,6 +271,7 @@ class Microscope:
         self._blocked, self._uncertain = {}, set()
         self._last = 0.0
         self._ser = self.cam = self._world = self._mem = None
+        self._dir = {a: 0 for a in AXES}                   # знак последнего движения по осям (0 — неизвестно)
         self._quiet = False
         self._frame_px = (2592, 1944)
         self._plane = None                     # плоскость фокуса (G29): z = a + b*x + c*y, мкм (машинные)
@@ -826,6 +827,7 @@ class Microscope:
                 continue
             break
         self._p[ax] += n
+        self._dir[ax] = 1 if n > 0 else -1                 # с какой стороны подъехали (люфт: маски, сшивка)
         L.debug('MOV-006', f"{ax.upper()} {n:+d} steps, now {self._p[ax]}. Status {st.hex() or '-'}.")
         # контроллер отвечает до окончания движения: ждём путь / скорость + успокоение
         grp = 'Z' if ax == 'z' else 'X/Y'
@@ -1057,7 +1059,7 @@ class Microscope:
         if self._world is not None:
             self._mem.data['sim_true'] = self._world.p          # симулятор: где столик на самом деле
         try:
-            self._mem.position(self._p, moving)
+            self._mem.position(self._p, moving, dir=dict(self._dir))
         except OSError as e:
             warnings.warn(f"Could not save the position: {e}")
 
@@ -1073,6 +1075,7 @@ class Microscope:
         # картинка камеры ещё сверяется с кадром конца прошлого сеанса (_check_last_view): сдвинули столик —
         # координаты поправляются по картинке.
         self._p = {a: int(mem.last['p'][a]) for a in AXES}
+        self._dir.update({a: int(v) for a, v in (mem.last.get('dir') or {}).items() if a in AXES})
         broken = mem.last.get('moving')                    # без подтверждения: верим положению (только заметка)
         L.event('CON-004', f"Position {self.position} restored from {mem.last['time']}"
                            + (" (that session ended during a move: not confirmed)" if broken else "") + ".",

@@ -1459,19 +1459,22 @@ class Microscope:
         info = dict(project="MicroControl", name=name, notes=notes, objective=self.objective,
                     date=_dt.now().isoformat(timespec='seconds'), samples=[])
         n0 = 0
+        from .samples import init_areas
+        init_areas(self)                                      # у каждой области — постоянный номер и uid
         for k, reg in enumerate(regs):
+            sn, uid = reg['num'], reg['uid']
             area = Area(reg['A'][0] - off['x'], reg['A'][1] - off['y'], reg['B'][0] - off['x'], reg['B'][1] - off['y'])
             pts = [dict(p, tag=str(n0 + i + 1)) for i, p in enumerate(reg['pts'])]
             nums = [n0 + 1, n0 + len(pts)]
             n0 += len(pts)
-            info['samples'].append(dict(index=k + 1, folder=f"sample_{k + 1:02d}", color_bgr=list(color(k)),
+            info['samples'].append(dict(index=sn, uid=uid, folder=f"sample_{sn:02d}", color_bgr=list(color(sn - 1)),
                                         area_um=[area.x0, area.y0, area.x1, area.y1], focus_points=nums))
             _json.dump(info, open(os.path.join(ses, 'session.json'), 'w', encoding='utf-8'), indent=1, ensure_ascii=False)
             prog = plan(self, area=area, focus=focus, overlap=ov, path=path, pts=pts)
-            print(f"Sample {k + 1} of {len(regs)}: {area}")
-            r = self.gcode(prog, save=f"{name or 'sample'} {k + 1}", notes=notes,
-                           folder=os.path.join(ses, f"sample_{k + 1:02d}"),
-                           extra=dict(sample_index=k + 1, session=os.path.basename(ses), focus_points=nums))
+            print(f"Sample {sn} ({k + 1} of {len(regs)}): {area}")
+            r = self.gcode(prog, save=f"{name or 'sample'} {sn}", notes=notes,
+                           folder=os.path.join(ses, f"sample_{sn:02d}"),
+                           extra=dict(sample_index=sn, sample_uid=uid, session=os.path.basename(ses), focus_points=nums))
             print(r)
             if r.title != "Program finished":
                 break

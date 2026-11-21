@@ -145,7 +145,9 @@ _PREV = {}
 def _preview(folder, w):
     """Картинка образца для карусели: обзорная мозаика (после сшивки) или первый кадр."""
     pv = os.path.join(folder, 'join', 'preview_all.jpg')
-    key = (folder, os.path.getmtime(pv) if os.path.exists(pv) else 0, w)
+    from . import samples as _SM
+    key = (folder, _SM.sample_uid(folder), os.path.getmtime(pv) if os.path.exists(pv) else 0, w)   # uid: не путать
+                                                                                                   # с убранным
     if key not in _PREV:
         img = cv2.imdecode(np.fromfile(pv, np.uint8), cv2.IMREAD_COLOR) if os.path.exists(pv) else None
         if img is None:

@@ -555,15 +555,15 @@ def _map_image(ag):
         cv2.line(img, (60, u), (S - 20, u), (55, 55, 55), 1)
         cv2.putText(img, f"{v:.0f}", (4, u + 4), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (200, 200, 200), 1, cv2.LINE_AA)
     for k, rg in enumerate(m._regions + ([m._pending] if m._pending else [])):
-        c = SM.color(k)
+        c = SM.col(m, k)
         B = rg.get('B') or rg['A']
         r = SM.rect(dict(A=rg['A'], B=B), fw, fh)
         cv2.rectangle(img, to(r[0], r[1]), to(r[2], r[3]), c, 2 if 'B' in rg else 1)
-        cv2.putText(img, f"Sample {k + 1}", (to(r[0], r[1])[0] + 4, to(r[0], r[1])[1] + 18),
+        cv2.putText(img, f"Sample {SM.num(m, k)}", (to(r[0], r[1])[0] + 4, to(r[0], r[1])[1] + 18),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.55, c, 1, cv2.LINE_AA)
     for n, k, p in SM.numbered(m):
         q = to(p['x'], p['y'])
-        cv2.circle(img, q, 5, SM.color(k if k >= 0 else len(m._regions)), -1)
+        cv2.circle(img, q, 5, SM.col(m, k if k >= 0 else len(m._regions)), -1)
         cv2.putText(img, str(n), (q[0] + 6, q[1] - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (240, 240, 240), 1, cv2.LINE_AA)
     rp = m.real_position
     a, b = to(rp.x - fw / 2, rp.y - fh / 2), to(rp.x + fw / 2, rp.y + fh / 2)
@@ -671,18 +671,24 @@ def _point(ag):
       ask=lambda ag, a: f"Drive to the nearest frame of sample area {a['sample']}.")
 def _goto_area(ag, sample, reason):
     m = ag.need_m()
-    msg = SM.goto_area(m, sample - 1)
+    k = SM.index_of(m, sample)
+    if k is None:
+        raise AgentError('BAD_ARGS', f"No sample {sample}.", "Sample numbers are in get_status -> areas.")
+    msg = SM.goto_area(m, k)
     p = m.position
     return dict(message=msg, position_um=dict(x=p.x, y=p.y, z=p.z))
 
 
-@tool('delete_area', "Delete sample area N (the others are renumbered). N = number of areas + 1 cancels the new "
-                     "area (corner 2 not set).",
+@tool('delete_area', "Delete sample area N (the numbers of the others stay). N of the new area (corner 2 not "
+                     "set) cancels it.",
       {'sample': {'type': 'integer', 'minimum': 1}, 'reason': REASON}, ('sample', 'reason'), risk='act',
       ask=lambda ag, a: f"Delete sample area {a['sample']} (made by the operator or the agent).")
 def _del_area(ag, sample, reason):
     m = ag.need_m()
-    return dict(message=SM.delete_area(m, sample - 1), areas=SM.areas_info(m))
+    k = SM.index_of(m, sample)
+    if k is None:
+        raise AgentError('BAD_ARGS', f"No sample {sample}.", "Sample numbers are in get_status -> areas.")
+    return dict(message=SM.delete_area(m, k), areas=SM.areas_info(m))
 
 
 def _ask_scan(ag, a):

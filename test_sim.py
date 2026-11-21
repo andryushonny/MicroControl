@@ -400,3 +400,28 @@ e1 = TM.estimate(m, 12, 'points'); print("after", e1)
 assert 'learned from 2 scans' in e1[1]
 m.close(); print("Z follow + timing: OK")
 
+# ------------------------------------------------------------------ 18. Постоянные номера образцов, uid
+import json, microcontrol.manual as M
+from microcontrol import samples as SM
+m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp())
+m.focus()
+R_, D_ = 65363, 65364
+k = [ord('1'), -1, R_, -1, ord('2'), -1, R_, -1, R_, -1, ord('1'), -1, R_, -1, ord('2'), -1, -1]
+M.run(m, fullscreen=False, _keys=k)
+assert [r['num'] for r in m._regions] == [1, 2] and len({r['uid'] for r in m._regions}) == 2
+SM.delete_area(m, 0)                                   # удалить образец 1: у второго номер остаётся 2
+assert [r['num'] for r in m._regions] == [2]
+M.run(m, fullscreen=False, _keys=[R_, -1, R_, -1, ord('1'), -1, R_, -1, ord('2'), -1, -1])
+assert [r['num'] for r in m._regions] == [2, 3], [r['num'] for r in m._regions]
+ses = m.scan(name='uid')
+subs = sorted(os.listdir(ses)); print(subs)
+assert 'sample_02' in subs and 'sample_03' in subs and 'sample_01' not in subs
+info = json.load(open(os.path.join(ses, 'session.json')))
+assert [s['index'] for s in info['samples']] == [2, 3] and all(len(s['uid']) == 32 for s in info['samples'])
+u2 = SM.sample_uid(os.path.join(ses, 'sample_02')); assert u2 == m._regions[0]['uid']
+d1 = SM.remove_sample(os.path.join(ses, 'sample_02'))
+os.makedirs(os.path.join(ses, 'sample_02')); json.dump({'sample_uid': 'x' * 32}, open(os.path.join(ses, 'sample_02', 'meta.json'), 'w'))
+d2 = SM.remove_sample(os.path.join(ses, 'sample_02'))
+assert os.path.isdir(d1) and os.path.isdir(d2) and d1 != d2, (d1, d2)   # ранее убранное не стёрто
+m.close(); print("Sample numbers stay, uid, remove without overwrite: OK")
+

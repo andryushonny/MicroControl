@@ -8,6 +8,7 @@
 """
 import os
 import json
+import uuid
 import shutil
 import colorsys
 import numpy as np
@@ -84,8 +85,40 @@ def init_areas(m):
                                         for f_ in (getattr(m, '_focus_pts', None) or [])], thumbs=[]))
     if not hasattr(m, '_pending'):
         m._pending = None
+    seq = getattr(m, '_area_seq', 0)
+    for rg in m._regions:                                  # у каждой области — свой скрытый uid и постоянный номер
+        rg.setdefault('uid', uuid.uuid4().hex)
+        if 'num' not in rg:
+            seq += 1
+            rg['num'] = seq
+        seq = max(seq, rg['num'])
+    m._area_seq = seq
     if getattr(m, '_sel', None) is None or m._sel >= len(m._regions):
         m._sel = len(m._regions) - 1 if m._regions else None
+
+
+def num(m, k):
+    """Номер области k (индекс в m._regions; len(m._regions) — новая): постоянный, после удаления других
+    не меняется и не используется снова."""
+    if k is None:
+        return None
+    if k < len(m._regions):
+        return m._regions[k]['num']
+    return (m._pending or {}).get('num', getattr(m, '_area_seq', 0) + 1)
+
+
+def col(m, k):
+    """Цвет области k — по её постоянному номеру (не меняется после удаления других)."""
+    return color(num(m, k) - 1)
+
+
+def index_of(m, n):
+    """Индекс области по её номеру n (как на экране); None — нет такой."""
+    init_areas(m)
+    k = next((i for i, rg in enumerate(m._regions) if rg['num'] == n), None)
+    if k is None and m._pending and m._pending.get('num') == n:
+        return len(m._regions)
+    return k
 
 
 def _rect(m, reg):
@@ -117,15 +150,16 @@ def corner(m, which, img=None):
     if which == 1:
         hit_ = area_at(m, rp.x, rp.y)
         if hit_ is not None:
-            raise MicroControlError('E704', f"Here is sample {hit_ + 1}: a new area must not overlap it")
+            raise MicroControlError('E704', f"Here is sample {num(m, hit_)}: a new area must not overlap it")
         if m._pending:                                     # угол 1 заново
             m._pending['A'] = (rp.x, rp.y)
             m._pending['pts'][0] = fpt
             m._pending['thumbs'][:1] = th
         else:
-            m._pending = dict(A=(rp.x, rp.y), pts=[fpt], thumbs=th)
+            m._pending = dict(A=(rp.x, rp.y), pts=[fpt], thumbs=th, num=getattr(m, '_area_seq', 0) + 1,
+                              uid=uuid.uuid4().hex)
         k = len(m._regions)
-        return (f"Sample {k + 1}: corner 1 at X {p.x:.0f}, Y {p.y:.0f} um, focus point "
+        return (f"Sample {num(m, k)}: corner 1 at X {p.x:.0f}, Y {p.y:.0f} um, focus point "
                 f"{len(numbered(m)) - len(m._pending['pts']) + 1}. Go to the other corner, press 2")
     if which != 2:
         raise MicroControlError('E703', "Corner is 1 or 2")
@@ -135,15 +169,16 @@ def corner(m, which, img=None):
     Bw = snap(m, Aw, (p.x, p.y))                           # угол 2 — ровно на сетке кадров от угла 1
     new = dict(A=m._pending['A'], B=(Bw[0] + m._off['x'], Bw[1] + m._off['y']),
                pts=[m._pending['pts'][0], fpt] + m._pending['pts'][1:],
-               thumbs=m._pending['thumbs'][:1] + th)
-    bad = [k_ + 1 for k_, rg in enumerate(m._regions) if overlap(_rect(m, new), _rect(m, rg))]
+               thumbs=m._pending['thumbs'][:1] + th, num=m._pending['num'], uid=m._pending['uid'])
+    bad = [rg['num'] for rg in m._regions if overlap(_rect(m, new), _rect(m, rg))]
     if bad:
         raise MicroControlError('E704', f"This area overlaps sample {', '.join(map(str, bad))}: "
                                         f"choose corner 2 so that the areas do not overlap")
     m._regions.append(new)
+    m._area_seq = max(getattr(m, '_area_seq', 0), new['num'])         # номер больше не выдаётся
     m._pending, m._sel = None, len(m._regions) - 1
     nx_, ny_ = _area(m, new).size(m._frame_step(1 - scan_overlap(m.objective)))
-    return f"Sample {m._sel + 1} fixed: {nx_} x {ny_} = {nx_ * ny_} frames. Key 1: the next sample"
+    return f"Sample {new['num']} fixed: {nx_} x {ny_} = {nx_ * ny_} frames. Key 1: the next sample"
 
 
 def add_point(m):
@@ -161,9 +196,9 @@ def add_point(m):
         m._regions[k]['pts'].append(dict(x=rp.x, y=rp.y, z=rp.z))
     else:
         raise MicroControlError('E701', "Mark a sample area first: keys 1 and 2")
-    num = len(numbered(m)) if k is None else [n_ for n_, kk, _p in numbered(m) if kk == k][-1]
-    who = f"sample {k + 1}" if k is not None else f"sample {len(m._regions) + 1}"
-    return f"Focus point {num} ({who}): Z {p.z:.1f} um at X {p.x:.0f}, Y {p.y:.0f}"
+    fpn = len(numbered(m)) if k is None else [n_ for n_, kk, _p in numbered(m) if kk == k][-1]
+    who = f"sample {num(m, k if k is not None else len(m._regions))}"
+    return f"Focus point {fpn} ({who}): Z {p.z:.1f} um at X {p.x:.0f}, Y {p.y:.0f}"
 
 
 def follow_z(m):
@@ -185,7 +220,7 @@ def follow_z(m):
     if dz > m.max_move_z:
         return f"Z from the focus points is {dz:.0f} um higher (more than max_move_z): not raised, check the points"
     m.goto(z=z_t - m._off['z'])
-    return f"Z {m.position.z:.1f} um from the focus points of sample {k + 1} ({dz:+.1f})"
+    return f"Z {m.position.z:.1f} um from the focus points of sample {num(m, k)} ({dz:+.1f})"
 
 
 def delete_area(m, k):
@@ -196,10 +231,10 @@ def delete_area(m, k):
         m._pending = None
         return "New area cancelled"
     if not 0 <= k < len(m._regions):
-        raise MicroControlError('E703', f"No sample {k + 1}")
-    m._regions.pop(k)
+        raise MicroControlError('E703', "No such sample")
+    n_ = m._regions.pop(k)['num']
     m._sel = min(k, len(m._regions) - 1) if m._regions else None
-    return f"Sample {k + 1} deleted; the others are renumbered"
+    return f"Sample {n_} deleted (the numbers of the others stay)"
 
 
 def goto_area(m, k):
@@ -211,7 +246,7 @@ def goto_area(m, k):
     from .manual import snap
     init_areas(m)
     if not 0 <= k < len(m._regions):
-        raise MicroControlError('E703', f"No sample {k + 1}")
+        raise MicroControlError('E703', "No such sample")
     reg = m._regions[k]
     rp = m.real_position
     (ax, ay), (bx, by) = reg['A'], reg['B']
@@ -229,7 +264,7 @@ def goto_area(m, k):
     while z_t is not None and z_t > m.position.z + 0.5 * m.motor_step:
         m.goto(z=min(z_t, m.position.z + m.max_move_z * 0.95))
     m._sel = k
-    return f"Sample {k + 1}: at its nearest frame" + (f", focus Z {z_t:.1f} um (from its points)" if z_t is not None else "")
+    return f"Sample {reg['num']}: at its nearest frame" + (f", focus Z {z_t:.1f} um (from its points)" if z_t is not None else "")
 
 
 def areas_info(m):
@@ -243,13 +278,13 @@ def areas_info(m):
     for k, reg in enumerate(m._regions):
         x0, y0, x1, y1 = _rect(m, reg)
         nx, ny = _area(m, reg).size(st)
-        out.append(dict(sample=k + 1, state='fixed', selected=(k == m._sel),
+        out.append(dict(sample=reg['num'], state='fixed', selected=(k == m._sel),
                         corner1_um=w(*reg['A']), corner2_um=w(*reg['B']),
                         size_mm=[round((x1 - x0) / 1000, 3), round((y1 - y0) / 1000, 3)], frames=nx * ny,
                         focus_points=[dict(number=n, x_um=w(p['x'], p['y'])[0], y_um=w(p['x'], p['y'])[1],
                                            z_um=round(p['z'] - m._off['z'], 1)) for n, kk, p in nums if kk == k]))
     if m._pending:
-        out.append(dict(sample=len(m._regions) + 1, state='new (corner 2 not set yet)', selected=False,
+        out.append(dict(sample=num(m, len(m._regions)), state='new (corner 2 not set yet)', selected=False,
                         corner1_um=w(*m._pending['A']), corner2_um=None,
                         focus_points=[dict(number=n, x_um=w(p['x'], p['y'])[0], y_um=w(p['x'], p['y'])[1],
                                            z_um=round(p['z'] - m._off['z'], 1)) for n, kk, p in nums if kk == -1]))
@@ -289,6 +324,14 @@ def sample_index(folder):
         return 1
 
 
+def sample_uid(folder):
+    """Скрытый уникальный номер образца (uid) из meta.json; '' у старых сканов."""
+    try:
+        return str(json.load(open(os.path.join(folder, 'meta.json'), encoding='utf-8')).get('sample_uid', ''))
+    except Exception:
+        return ''
+
+
 def sample_color(folder):
     """Цвет образца (по номеру в сеансе)."""
     return color(sample_index(folder) - 1)
@@ -299,8 +342,8 @@ def remove_sample(folder):
     ses = os.path.dirname(os.path.abspath(folder))
     dst = os.path.join(ses, '_removed', os.path.basename(folder))
     os.makedirs(os.path.dirname(dst), exist_ok=True)
-    if os.path.exists(dst):
-        shutil.rmtree(dst)
+    if os.path.exists(dst):                                # уже убирали такой же: ничего не стираем
+        dst += "_" + (sample_uid(folder) or uuid.uuid4().hex)[:8]
     shutil.move(folder, dst)
     return dst
 

@@ -393,7 +393,7 @@ def minimap(img, m, A, B, size=MAP_W, zcolor=None, others=(), right=0):
     for num, k_, f_ in SM.numbered(m):                                   # точки фокуса: сквозные номера
         u, v = to(*f(f_['x'] - m._off['x'], f_['y'] - m._off['y']))
         if gx0 <= u <= gx0 + gw and gy0 <= v <= gy0 + gh:
-            pc = SM.color(k_ if k_ >= 0 else nreg)
+            pc = SM.col(m, k_ if k_ >= 0 else nreg)
             cv2.circle(sub, (u, v), 5, (255, 255, 255), -1, cv2.LINE_AA)
             cv2.circle(sub, (u, v), 3, pc, -1, cv2.LINE_AA)
             cv2.putText(sub, str(num), (u + 6, v - 4), font, 0.42, (255, 255, 255), 1, cv2.LINE_AA)
@@ -578,7 +578,7 @@ def run(m, fullscreen=True, _keys=None):
         for k, reg in enumerate(m._regions):
             nx_, ny_ = reg_area(reg).size(st_)
             x0_, y0_, x1_, y1_ = reg_rect(reg)
-            items.append(dict(title=f"Sample {k + 1}", color=SM.color(k), thumbs=reg.get('thumbs', []),
+            items.append(dict(title=f"Sample {SM.num(m, k)}", color=SM.col(m, k), thumbs=reg.get('thumbs', []),
                               confirm=car['confirm'] == k,
                               lines=[f"{nx_} x {ny_} = {nx_ * ny_} frames, " +
                                      TM.fmt(TM.estimate(m, nx_ * ny_, 'points' if m._use_fp and reg['pts'] else 'off')[0]),
@@ -586,7 +586,7 @@ def run(m, fullscreen=True, _keys=None):
                                      f"focus points {first_num(k)}"]))
         if m._pending:
             k = len(m._regions)
-            items.append(dict(title=f"Sample {k + 1}", color=SM.color(k), thumbs=m._pending.get('thumbs', []),
+            items.append(dict(title=f"Sample {SM.num(m, k)}", color=SM.col(m, k), thumbs=m._pending.get('thumbs', []),
                               go=False, confirm=car['confirm'] == k,
                               lines=["corner 1 set", "go to the other corner, press 2", f"focus points {first_num(-1)}"]))
         return items
@@ -667,13 +667,13 @@ def run(m, fullscreen=True, _keys=None):
             line = f"Sharpness {sharp:.0f}"
             if A and B:
                 r, c, ny, nx = cell_of(m, A, B)
-                line += f"    Sample {zk + 1}: {nx} x {ny} = {nx * ny} frames" + \
+                line += f"    Sample {SM.num(m, zk)}: {nx} x {ny} = {nx * ny} frames" + \
                         (f"    Frame: row {r + 1}/{ny}, column {c + 1}/{nx}" if r is not None else "    Outside the area")
             else:
                 *_, (ci_, cj_), _z = _grid(m, A, B)
                 b0c, b0r = (_z[0], _z[2]) if _z else (0, 0)
                 line += f"    Frame: row {cj_ - b0r + 1}, column {ci_ - b0c + 1}" + \
-                        (f"    Sample {zk + 1}: corner 1 set, press 2 at the other corner" if A else
+                        (f"    Sample {SM.num(m, zk)}: corner 1 set, press 2 at the other corner" if A else
                          "    Key 1: corner of a sample area")
             q = i2v(cimg + np.array([gd['u'], gd['v']]))                 # точка направляющих в окне
 
@@ -742,7 +742,7 @@ def run(m, fullscreen=True, _keys=None):
                 for r0 in range(0, min(len(fp), 12), per):
                     for c0_, (n_, k_, f_) in enumerate(fp[r0:r0 + per]):
                         xx = x_l + c0_ * colw
-                        c_ = SM.color(k_ if k_ >= 0 else len(m._regions))
+                        c_ = SM.col(m, k_ if k_ >= 0 else len(m._regions))
                         ops.append(('d', (xx + 5, y - th0 // 2), c_))
                         ops.append(('t', str(n_), xx + 14, y, fz, UI.DIM, 1))
                         v_ = vals[r0 + c0_]
@@ -826,9 +826,9 @@ def run(m, fullscreen=True, _keys=None):
             UI.facts(view, [t_.strip() for t_ in line.split("    ") if t_.strip()] + ["H: keys"], 14, H - 10, FS)
             if msg and time.monotonic() - msg_t < 5:
                 UI.toast(view, msg, Wl / 2, H - bh_ - 20, FS, 'err' if msg.startswith('[E') else 'ok', Wl - 60)
-            others = [(tuple(np.r_[work(reg_rect(rg)[:2]), work(reg_rect(rg)[2:])]), SM.color(k_), str(k_ + 1))
+            others = [(tuple(np.r_[work(reg_rect(rg)[:2]), work(reg_rect(rg)[2:])]), SM.col(m, k_), str(SM.num(m, k_)))
                       for k_, rg in enumerate(m._regions) if k_ != zk]
-            minimap(view, m, A, B, zcolor=SM.color(zk) if zk is not None else None, others=others, right=SM.CAR_W)
+            minimap(view, m, A, B, zcolor=SM.col(m, zk) if zk is not None else None, others=others, right=SM.CAR_W)
             items = car_items()
             sel_ = len(m._regions) if m._pending else m._sel
             hx_ = hover[0]
@@ -864,13 +864,13 @@ def run(m, fullscreen=True, _keys=None):
                         car['confirm'] = None
                         if k < len(m._regions):
                             m._sel = k
-                            msg, msg_t = f"Sample {k + 1} chosen (Go or Enter: drive there)", time.monotonic()
+                            msg, msg_t = f"Sample {SM.num(m, k)} chosen (Go or Enter: drive there)", time.monotonic()
                     elif act == 'del':
                         if car['confirm'] == k:
                             delete_region(k)
                         else:
                             car['confirm'] = k
-                            msg = f"Click x again to delete sample {k + 1}"
+                            msg = f"Click x again to delete sample {SM.num(m, k)}"
                         msg_t = time.monotonic()
                     elif act == 'go' and k < len(m._regions):
                         car['confirm'] = None
@@ -1009,7 +1009,7 @@ def run(m, fullscreen=True, _keys=None):
                 L.event('MAN-006', msg + ".")
             elif raw in (',', '.') and m._regions:         # предыдущая / следующая область
                 m._sel = ((m._sel if m._sel is not None else 0) + (1 if raw == '.' else -1)) % len(m._regions)
-                msg = f"Sample {m._sel + 1} chosen (Enter: drive there)"
+                msg = f"Sample {SM.num(m, m._sel)} chosen (Enter: drive there)"
             elif key in (13, 10) and m._sel is not None and not m._pending:
                 go_region(m._sel)
             elif ch == ' ':
@@ -1071,7 +1071,7 @@ def run(m, fullscreen=True, _keys=None):
     lines_ = []
     for k, rg in enumerate(regs):
         nx, ny = reg_area(rg).size(st_)
-        lines_.append(f"  Sample {k + 1}  {reg_area(rg)}   {nx} x {ny} = {nx * ny} frames   focus points {first_num(k)}")
+        lines_.append(f"  Sample {rg['num']}  {reg_area(rg)}   {nx} x {ny} = {nx * ny} frames   focus points {first_num(k)}")
     print("Manual mode closed." + (" The new area without corner 2 is kept for the next time." if m._pending else "")
           + "\n" + "\n".join(lines_) + "\n  m.scan() shoots all samples, each into its own folder.")
     return m.area

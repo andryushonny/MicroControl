@@ -44,6 +44,22 @@ def is_group(reg):
     return reg.get('kind') == 'group'
 
 
+def is_mask(reg):
+    """Маска — черновик с кисти: показывает, где искать; не снимается; внутри рисуют участки нужного объектива."""
+    return reg.get('kind') == 'mask'
+
+
+def to_area(m, k, o):
+    """Маску — в обычный участок на объективе o (снимать её целиком)."""
+    r = m._regions[k]
+    k_ = m.objective / o
+    detach(m, r)
+    r.pop('kind', None)
+    g = geom(m, r)
+    r.update(obj=o, fw=m.frame_size[0] * k_, fh=m.frame_size[1] * k_)
+    set_geom(m, r, g)
+
+
 def frame(reg, fw=None, fh=None):
     return reg.get('fw', fw or 1.0), reg.get('fh', fh or 1.0)
 
@@ -122,7 +138,7 @@ def new_num(m):
 
 
 def geometric_parent(m, reg, skip=None):
-    """Выделение меньшего увеличения, внутри которого лежит центр reg (ближайший слой, при равных — меньшее)."""
+    """Где лежит reg: самое маленькое выделение меньшего увеличения или маска, содержащая его середину."""
     from .samples import obj
     g = geom(m, reg)
     if g.is_empty:
@@ -130,13 +146,13 @@ def geometric_parent(m, reg, skip=None):
     c = g.representative_point()
     best = None
     for i, o in enumerate(m._regions):
-        if o is reg or i == skip or is_group(o) or obj(m, o) >= obj(m, reg):
+        if o is reg or i == skip or is_group(o) or (not is_mask(o) and obj(m, o) >= obj(m, reg)):
+            continue
+        if is_mask(o) and is_mask(reg):
             continue
         go = geom(m, o)
-        if go.buffer(EPS).contains(c):
-            key = (-obj(m, o), go.area)
-            if best is None or key < best[0]:
-                best = (key, i)
+        if go.buffer(EPS).contains(c) and (best is None or go.area < best[0]):
+            best = (go.area, i)
     return best[1] if best else None
 
 
@@ -313,7 +329,7 @@ def sync_brush(m):
     if getattr(m, '_sample', None) is None:
         return None
     changed = []
-    for par in [r for r in m._regions if not is_group(r)]:        # и выделения кисти: снятые — тоже родители
+    for par in [r for r in m._regions if not is_group(r) and not is_mask(r)]:   # снятые участки (и из масок)
         sc = Selection(m.sample, par).latest
         if not sc:
             continue
@@ -339,21 +355,57 @@ def sync_brush(m):
                 if sorted(map(tuple, r.get('cells') or [])) != f:
                     r['cells'] = [list(c) for c in f]
                     set_geom(m, r, g)
-                    changed.append(f"Selection {r['num']} follows the brush")
+                    changed.append(f"Mask {r['num']} follows the brush")
             else:
-                o = next_objective(obj(m, par))
                 fw0, fh0 = m.frame_size
-                k_ = m.objective / o
-                r = dict(uid=uuid.uuid4().hex, num=new_num(m), obj=o, fw=fw0 * k_, fh=fh0 * k_, pts=[], thumbs=[],
-                         parent=par['uid'], src=src, cells=[list(c) for c in f])
+                r = dict(uid=uuid.uuid4().hex, num=new_num(m), obj=obj(m, par), fw=par.get('fw', fw0),
+                         fh=par.get('fh', fh0), pts=[], thumbs=[], kind='mask', parent=par['uid'], src=src,
+                         cells=[list(c) for c in f])
                 set_geom(m, r, g)
                 m._regions.append(r)
-                changed.append(f"Selection {r['num']} ({o}x) from the brush")
+                changed.append(f"Mask {r['num']} from the brush: draw an area of a larger objective inside it")
         for i, r in enumerate(mine):
             if i not in used:
                 m._regions.remove(r)
-                changed.append(f"Selection {r['num']} gone with its squares")
+                changed.append(f"Mask {r['num']} gone with its squares")
     return "; ".join(changed) if changed else None
+
+
+def sync_drawn(m):
+    """Участки, нарисованные в просмотре (клавиша D: прямоугольник по сшитой картинке; grid.json 'areas'),
+    -> выделения образца. Объектив — стоящий, если он больше объектива съёмки, иначе следующий.
+    Возвращает сообщение или None."""
+    from .project import Selection
+    from .samples import obj
+    from .snap import mosaic_to_stage
+    if getattr(m, '_sample', None) is None:
+        return None
+    out = []
+    for par in [r for r in m._regions if not is_group(r) and not is_mask(r)]:
+        sc = Selection(m.sample, par).latest
+        if not sc:
+            continue
+        gp = os.path.join(sc.folder, 'grid.json')
+        try:
+            d = json.load(open(gp, encoding='utf-8'))
+        except (OSError, ValueError):
+            continue
+        if not d.get('areas'):
+            continue
+        for a in d['areas']:
+            o = m.objective if m.objective > obj(m, par) else next_objective(obj(m, par))
+            k_ = m.objective / o
+            r = dict(uid=uuid.uuid4().hex, num=new_num(m), obj=o, fw=m.frame_size[0] * k_, fh=m.frame_size[1] * k_,
+                     pts=[], thumbs=[])
+            set_geom(m, r, Polygon(mosaic_to_stage(sc.folder, a['px'])))
+            gp_ = geometric_parent(m, r)
+            r['parent'] = m._regions[gp_]['uid'] if gp_ is not None else par['uid']
+            m._regions.append(r)
+            out.append(f"Selection {r['num']} ({o}x) drawn in the view")
+        d['areas'] = []
+        with open(gp, 'w', encoding='utf-8') as f:
+            json.dump(d, f, indent=1)
+    return "; ".join(out) if out else None
 
 
 def delete_brush_cells(m, reg):

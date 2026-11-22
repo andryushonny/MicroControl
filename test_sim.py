@@ -666,10 +666,10 @@ g.selected |= {(0, 0), (1, 0), (3, 1), (3, 2)}                     # две фи
 g.save(px_um)
 print(LY.sync_brush(m))
 kids = [k for k, r in enumerate(m._regions) if r.get('src')]
-assert len(kids) == 2 and all(m._regions[k]['parent'] == m._regions[0]['uid'] and m._regions[k]['obj'] == 20
+assert len(kids) == 2 and all(m._regions[k]['parent'] == m._regions[0]['uid'] and m._regions[k]['kind'] == 'mask'
                               for k in kids), m._regions
 assert abs(LY.geom(m, m._regions[kids[0]]).area - 2 * 100 * 100) < 50      # 2 квадрата 100 x 100 мкм, контур без клеток
-assert [d for k, d in SM.tree(m)] == [0, 1, 1]                      # матрёшка: карта 10x > два выделения 20x
+assert [d for k, d in SM.tree(m)] == [0, 1, 1]                      # матрёшка: карта 10x > две маски
 assert LY.sync_brush(m) is None                                     # ничего не изменилось
 g = Grid(f); g.selected |= {(2, 0)}; g.save(px_um)                  # кисть дорисовала квадрат — выделение растёт
 LY.sync_brush(m)
@@ -677,9 +677,9 @@ assert len([r for r in m._regions if r.get('src')]) == 2 and \
     abs(LY.geom(m, [r for r in m._regions if r.get('src')][0]).area - 3e4) < 80
 ks = [k for k, r in enumerate(m._regions) if r.get('src')]
 print(LY.union(m, ks))                                              # слить: одно выделение, отпущено от кисти
-assert len([r for r in m._regions if r.get('obj') == 20]) == 1 and not any(r.get('src') for r in m._regions)
+assert len([r for r in m._regions if r.get('kind') == 'mask']) == 1 and not any(r.get('src') for r in m._regions)
 assert LY.sync_brush(m) is None                                     # кисть его не пересоздаёт
-k20 = next(k for k, r in enumerate(m._regions) if r.get('obj') == 20)
+k20 = next(k for k, r in enumerate(m._regions) if r.get('kind') == 'mask')
 a0 = LY.geom(m, m._regions[k20]).area
 m._regions.append(dict(uid='cut', num=LY.new_num(m), obj=20, fw=fw / 2, fh=fh / 2, pts=[], parent=m._regions[0]['uid']))
 x0_, y0_, x1_, y1_ = LY.geom(m, m._regions[k20]).bounds
@@ -693,7 +693,7 @@ print(LY.ungroup(m, [gk]))
 assert [d for k, d in SM.tree(m)] == [0, 1, 1]
 SM.persist(m)
 assert any(r.get('shape') for r in m.sample.data['selections'])     # контуры — в sample.json
-m.close(); print("Brush -> selections (one per figure), merge / minus / group / ungroup, outline in sample.json: OK")
+m.close(); print("Brush -> masks (one per figure), merge / minus / group / ungroup, outline in sample.json: OK")
 
 # ------------------------------------------------------------------ 25. Порядок карточек перетаскиванием, прокрутка карусели
 import copy as _cp
@@ -863,7 +863,8 @@ g = Grid(f); q0 = np.array([150.0, 120.0]); a_ = 100 / px_um
 g.cr.add(q0); g.cr.add(q0 + (a_, 0)); g.cr.add(q0 + (0, a_)); g.selected |= {(0, 0)}; g.save(px_um)
 m._sel = 0
 M.run(m, fullscreen=False, _keys=[-1, ('tbar', bx("Export")), -1, -1])   # чертёж одной кнопкой
-assert os.path.exists(os.path.join(f, 'export', 'drawing.dxf')), os.listdir(os.path.join(f, 'export'))
+import glob as _glob
+assert _glob.glob(os.path.join(m.sample.folder, 'export', '*', 'drawing.dxf')), "no sample drawing"
 m.close(); print("Navigator: drag on the map - new area, click - go, Tab, Scan area, Export: OK")
 
 # ------------------------------------------------------------------ 32. Проекты таблицей с датами; просмотр в своём окне
@@ -880,3 +881,60 @@ p_ = mc.view_window(f); _t.sleep(6)
 assert p_.poll() is None, p_.returncode                             # своё окно — живёт отдельно
 p_.terminate()
 print("Projects as a table with dates, the viewer in its own window: OK")
+
+
+# ------------------------------------------------------------------ 33. Маска — черновик; участок рисуется в просмотре (D) и на карте внутри маски; чертёж образца
+import glob as _glob
+import ezdxf
+import microcontrol.manual as M
+import microcontrol.viewer as V_
+from microcontrol import samples as SM, layers as LY
+from microcontrol.mask import Grid
+m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp()); m.focus()
+fw, fh = m.frame_size
+m.area = mc.Area(0, 0, 3 * fw, 2 * fh)
+f = m.scan(); mc.stitch(f, verbose=False)
+px_um = json.load(open(os.path.join(f, 'meta.json')))['pixel_size_um']
+g = Grid(f); p0 = np.array([150.0, 120.0]); a_ = 100 / px_um
+g.cr.add(p0); g.cr.add(p0 + (a_, 0)); g.cr.add(p0 + (0, a_)); g.selected |= {(1, 0), (2, 0)}; g.save(px_um)
+LY.sync_brush(m); SM.persist(m)
+km = next(k for k, r in enumerate(m._regions) if r.get('kind') == 'mask')
+assert SM.title(m, km).startswith('Mask') and SM.frames_of(m, km) == (0, 0)
+assert len(m.scan(name='again') and m.last_scans) == 1            # маска не снимается
+f = mc.project.Selection(m.sample, m._regions[0]).latest.folder; mc.stitch(f, verbose=False)
+g = Grid(f); g.cr.add(p0); g.cr.add(p0 + (a_, 0)); g.cr.add(p0 + (0, a_)); g.selected |= {(1, 0), (2, 0)}; g.save(px_um)
+LY.sync_brush(m); SM.persist(m)
+km = next(k for k, r in enumerate(m._regions) if r.get('kind') == 'mask')
+gm = LY.geom(m, m._regions[km]); c_ = np.array(gm.centroid.coords[0])
+m.objective = 50; m.focus()                                         # 50x: участок внутри маски — на карте
+M.run(m, fullscreen=False, _keys=[-1, -1])
+nav = m._nav
+M.run(m, fullscreen=False, _keys=[-1, ('maprect', *nav.to_px(c_ - 30), *nav.to_px(c_ + 30)), -1, -1])
+k50 = next(k for k, r in enumerate(m._regions) if r['obj'] == 50)
+assert m._regions[k50]['parent'] == m._regions[km]['uid'], m._regions      # ребёнок маски, перекрытие разрешено
+V_.view(f, _keys=[-1, ord('d'), ('drag', 300, 250, 380, 310), -1, 27])   # D в просмотре: участок по картинке
+assert json.load(open(os.path.join(f, 'grid.json')))['areas'], "no drawn area"
+print(LY.sync_drawn(m)); SM.persist(m)
+assert len([r for r in m._regions if r['obj'] == 50]) == 2 and not json.load(open(os.path.join(f, 'grid.json')))['areas']
+m.scan(); [mc.stitch(x, verbose=False) for x in m.last_scans]
+m._regions[next(k for k, r in enumerate(m._regions) if r['obj'] == 50 and k != k50)]['export'] = False
+dx = mc.export_sample(m)                                            # 10x + один 50x (второй снят с экспорта)
+doc = ezdxf.readfile(dx if dx.endswith('.dxf') else dx[:-4] + '.dxf')
+ims = doc.modelspace().query('IMAGE')
+assert len(ims) == 2 and len(doc.modelspace().query('LINE[layer=="CROSSES"]')) > 10, (len(ims),)
+im50 = next(i for i in ims if '50x' in i.dxf.layer)
+pl = next(p for p in doc.modelspace().query('LWPOLYLINE') if p.dxf.layer == im50.dxf.layer)
+V = np.array([p[:2] for p in pl.get_points()])
+ins, u, v = np.array(im50.dxf.insert)[:2], np.array(im50.dxf.u_pixel)[:2], np.array(im50.dxf.v_pixel)[:2]
+w_, h_ = im50.dxf.image_size.x, im50.dxf.image_size.y
+uv = np.linalg.solve(np.c_[u, v], (V - ins).T).T                   # углы контура — в пикселях картинки
+tol = 0.6 * m.motor_step / np.hypot(*u)                           # кадры стоят на целых шагах мотора (5.6 мкм)
+assert (uv[:, 0] > -tol).all() and (uv[:, 0] < w_ + tol).all() and (uv[:, 1] > -tol).all() and (uv[:, 1] < h_ + tol).all(), uv
+f10 = mc.project.Selection(m.sample, m._regions[0]).latest.folder     # чертёж по квадратам: общая грань — на каждом слое
+g = Grid(f10); g.selected = {(1, 0), (2, 0)}; g.save(px_um)
+mc.export(f10)
+d2 = ezdxf.readfile(os.path.join(f10, 'export', 'drawing.dxf')).modelspace()
+sq = d2.query('LWPOLYLINE[layer=="SQUARES"]'); ol = d2.query('LINE[layer=="OUTLINE"]')
+assert len(sq) == 2 and all(len(p_) == 4 and p_.closed for p_ in sq) and len(ol) == 6, (len(sq), len(ol))
+m.close(); print("Mask is a draft, areas drawn in the view (D) and on the map inside it, one drawing of chosen areas;"
+                 " every square has all 4 sides, the outline repeats the shared edges: OK")

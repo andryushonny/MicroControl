@@ -263,7 +263,7 @@ STEP_HELP = [
     "Step 1: put a small objective (4x or 10x), drag a rectangle on the map over the chip, then Scan area",
     "Step 2: open the overview (double-click it on the map or V), mark 3 crosses (C), paint flakes with the brush (B)",
     "Step 3: put 50x or 100x, choose an area on the right and press Scan area",
-    "Step 4: choose an area and press Export: drawing for AutoCAD (DWG + DXF with pictures, crosses and outlines)"]
+    "Step 4: press Export, tick the areas: one drawing for AutoCAD (DWG + DXF with pictures, outlines, crosses)"]
 BUTTONS = ["New area", "Scan area", "Export", "Settings"]
 
 
@@ -749,6 +749,11 @@ def _run(m, fullscreen=False, _keys=None):
         rg_ = m._regions[k]
         if rg_.get('kind') == 'group':
             return "A group has no objective"
+        if rg_.get('kind') == 'mask':                      # маску — в участок под стоящий объектив
+            from .layers import to_area
+            to_area(m, k, m.objective)
+            SM.persist(m)
+            return f"{SM.title(m, k)}: an area for {m.objective}x now (Scan area shoots it whole)"
         if Selection(m.sample, rg_).latest:
             return f"{SM.title(m, k)} is already scanned with {SM.obj(m, rg_)}x: mark a new selection for another objective"
         obs = sorted(OBJECTIVES)
@@ -823,7 +828,7 @@ def _run(m, fullscreen=False, _keys=None):
             c_ = SM.col(m, k_)
             for ring_ in _rings(m, rg_):
                 nav.poly(mp, ring_, c_ if k_ == m._sel else SM.dim(c_, 0.85), 2 if k_ == m._sel else 1,
-                         fill=SM.dim(c_, 0.6) if rg_.get('shape') else None)
+                         fill=SM.dim(c_, 0.6) if rg_.get('shape') else None, dashed=rg_.get('kind') == 'mask')
             pts_ = np.vstack([nav.to_px(r_) for r_ in _rings(m, rg_)]) if _rings(m, rg_) else None
             if pts_ is not None:
                 boxes_[k_] = (*pts_.min(0), *pts_.max(0))
@@ -836,10 +841,14 @@ def _run(m, fullscreen=False, _keys=None):
         lab_ = []                                           # подписи: выбранное первым, потом крупные слои
         for k_ in sorted(boxes_, key=lambda k2: (k2 != m._sel, SM.obj(m, m._regions[k2]))):
             b_ = boxes_[k_]
-            if b_[2] - b_[0] < 14 and k_ != m._sel:         # совсем мелкое на этом масштабе — без подписи
-                continue
+            if max(b_[2] - b_[0], b_[3] - b_[1]) < 8:        # участок в 5-10 раз меньше родителя: на этом масштабе —
+                cx_, cy_ = (b_[0] + b_[2]) / 2, (b_[1] + b_[3]) / 2   # точка, чтобы не потерялся
+                cv2.circle(mp, (int(cx_), int(cy_)), 5, SM.col(m, k_), 1, cv2.LINE_AA)
+                cv2.circle(mp, (int(cx_), int(cy_)), 2, SM.col(m, k_), -1, cv2.LINE_AA)
+                b_ = (cx_ - 6, cy_ - 6, cx_ + 6, cy_ + 6)
             mine_ = anc_(k_) | {k_}
-            lab_.append((f"{SM.num(m, k_)}  {SM.obj(m, m._regions[k_])}x", b_, SM.col(m, k_),
+            lab_.append((f"Mask {SM.num(m, k_)}" if m._regions[k_].get('kind') == 'mask' else
+                         f"{SM.num(m, k_)}  {SM.obj(m, m._regions[k_])}x", b_, SM.col(m, k_),
                          [q_ for k2, q_ in boxes_.items() if k2 not in mine_]))
         nav.labels(mp, lab_, [(inset[0] - mr[0], inset[1] - mr[1], inset[2] - mr[0], inset[3] - mr[1])] if nv['big'] else [])
         nav.poly(mp, cam, (40, 230, 255), 2)                # камера здесь
@@ -894,6 +903,15 @@ def _run(m, fullscreen=False, _keys=None):
                                   lines=[f"{nk_} inside, {mm_}"] + (["hidden on the maps"] if SM.hidden(m, k) else [])))
                 order.append(k)
                 continue
+            if reg.get('kind') == 'mask':                  # маска: черновик кисти, не снимается
+                hd_ = SM.hidden(m, k)
+                items.append(dict(title=SM.title(m, k), obj="mask", color=SM.col(m, k), chosen=k in car['multi'],
+                                  confirm=car['confirm'] == k, depth=depth, hidden=bool(reg.get('hidden')),
+                                  muted=hd_, lines=[mm_ + ", from the brush",
+                                                    "draw an area of a larger objective inside it" if not hd_
+                                                    else "hidden on the maps"]))
+                order.append(k)
+                continue
             nx_, ny_ = SM.frames_of(m, k)                  # кадры и время — для объектива этого выделения
             nfr_ = nx_ * ny_
             fr_ = (f"{nx_} x {ny_} = {nfr_} frames, " if ny_ > 1 or not reg.get('shape') else f"{nfr_} frames, ") + \
@@ -903,7 +921,8 @@ def _run(m, fullscreen=False, _keys=None):
             items.append(dict(title=SM.title(m, k), obj=f"{o_}x", color=SM.col(m, k), chosen=k in car['multi'],
                               thumbs=[] if hd_ else reg.get('thumbs', []), confirm=car['confirm'] == k, depth=depth,
                               muted=o_ != m.objective or hd_, hidden=bool(reg.get('hidden')),
-                              lines=([(f"scanned {sh_}" if sh_ else "not scanned yet") +
+                              lines=([(f"scanned {sh_}" + ("" if reg.get('export', True) else ", not in export")
+                                       if sh_ else "not scanned yet") +
                                       ("" if sh_ or o_ == m.objective else f": put {o_}x in place"),
                                       fr_, mm_ + (",  brush" if reg.get('src') else "")])
                               if not hd_ else [mm_ + ", hidden on the maps"]))
@@ -979,7 +998,7 @@ def _run(m, fullscreen=False, _keys=None):
         r_.pop('shape')                                    # прямоугольник: хватает углов A, B
         from .layers import geom as _geom
         g_ = _geom(m, r_)
-        bad = [o['num'] for o in m._regions if o.get('kind') != 'group' and SM.obj(m, o) == m.objective
+        bad = [o['num'] for o in m._regions if o.get('kind') not in ('group', 'mask') and SM.obj(m, o) == m.objective
                and g_.intersection(_geom(m, o)).area > 1e-3 * g_.area]
         if bad:
             return str(_E('E704', f"Selection {', '.join(map(str, bad))} ({m.objective}x) is already there. "
@@ -1003,26 +1022,41 @@ def _run(m, fullscreen=False, _keys=None):
         return f"At X {S[0] - m._off['x']:.0f}, Y {S[1] - m._off['y']:.0f} um"
 
     def export_drawing():
-        """Чертёж для AutoCAD: выбранное выделение (его последняя съёмка) -> DWG / DXF с картинками."""
+        """Export: окно с галочками — какие снятые участки идут в чертёж (выбор запоминается), затем один
+        чертёж образца для AutoCAD (DXF / DWG): картинки на своих местах, контуры, кресты, номера."""
         nonlocal msg, msg_t
-        from .project import Selection
-        from .mask import export as _export
+        from . import dialogs as D
+        from .drawing import export_sample
         msg_t = time.monotonic()
-        k_ = m._sel
-        if k_ is None or k_ >= len(m._regions) or m._regions[k_].get('kind') == 'group':
-            msg = "Choose an area on the right first"
+        cand = [k_ for k_, r_ in enumerate(m._regions) if r_.get('kind') not in ('group', 'mask') and shot_of(k_)]
+        if not cand:
+            msg = "Nothing scanned yet: Scan area first"
             return
-        sc_ = Selection(m.sample, m._regions[k_]).latest
-        if not sc_:
-            msg = f"{SM.title(m, k_)} is not scanned yet: Scan area first"
+        rows = [f"{SM.title(m, k_):<14} {SM.obj(m, m._regions[k_]):>4}x   scanned {shot_of(k_)}" for k_ in cand]
+        dflt = [m._regions[k_].get('export', True) for k_ in cand]
+        try:
+            got = D.checklist("Export: which areas go into the drawing", rows, dflt,
+                              header="Area            Obj.  Scan")
+        except (RuntimeError, ImportError):                # нет tkinter (тест): как отмечено
+            got = dflt
+        if got is None:
+            msg = "Export cancelled"
             return
-        if not os.path.exists(os.path.join(sc_.folder, 'grid.json')):
-            msg = f"{SM.title(m, k_)}: mark 3 crosses in the view first (double-click it on the map or V, then C)"
+        for k_, on_ in zip(cand, got):
+            if on_:
+                m._regions[k_].pop('export', None)
+            else:
+                m._regions[k_]['export'] = False
+        SM.persist(m)
+        ks_ = [k_ for k_, on_ in zip(cand, got) if on_]
+        if not ks_:
+            msg = "No area chosen for the export"
             return
-        res = busy("Export: drawing for AutoCAD", lambda: _export(sc_.folder, dwg=True))
+        res = busy("Export: drawing for AutoCAD", lambda: export_sample(m, ks_))
         msg_t = time.monotonic()
         msg = (f"Export failed: {res['e']}" if 'e' in res else
-               f"Exported (DWG / DXF): {os.path.join(sc_.folder, 'export')}")
+               f"Exported {len(ks_)} area{'s' if len(ks_) > 1 else ''}: {res['r']}"
+               + ("" if str(res['r']).endswith('.dwg') else "  (DWG: install ODA File Converter)"))
 
     def busy(title, fn):
         """Долгое дело в потоке; в окне — полоса прогресса (Progress)."""
@@ -1170,7 +1204,8 @@ def _run(m, fullscreen=False, _keys=None):
         from .util import Progress
         from .stitch import stitch as _stitch
         msg_t = time.monotonic()
-        ks = [k_ for k_, rg in enumerate(m._regions) if SM.obj(m, rg) == m.objective]
+        ks = [k_ for k_, rg in enumerate(m._regions) if SM.obj(m, rg) == m.objective
+              and rg.get('kind') not in ('group', 'mask')]
         if not ks:
             msg = f"No area for {m.objective}x: drag a rectangle on the map (or switch the objective, M)"
             return
@@ -1393,8 +1428,8 @@ def _run(m, fullscreen=False, _keys=None):
                 if time.monotonic() - car.get('bl_t', -99) > 5:   # люфт столика — из сшивки последних съёмок
                     car['bl_t'] = time.monotonic()
                     m._bl = stage_backlash()
-                from .layers import sync_brush
-                r_ = sync_brush(m)
+                from .layers import sync_brush, sync_drawn
+                r_ = "; ".join(x_ for x_ in (sync_brush(m), sync_drawn(m)) if x_) or None
                 if r_:
                     SM.persist(m)
                     msg, msg_t = r_, time.monotonic()
@@ -1444,12 +1479,16 @@ def _run(m, fullscreen=False, _keys=None):
                 d_ = mdr['d'] if mdr.get('k') == k_ else np.zeros(2)
                 for ring_ in rings(m, rg_):
                     pts = np.int32(np.round(np.array([to_v(S_ + d_) for S_ in ring_], float) * 16))   # 1/16 px
-                    if rg_.get('src') or rg_.get('shape'):
+                    if (rg_.get('src') or rg_.get('shape')) and rg_.get('kind') != 'mask':
                         if ov_ is None:
                             ov_ = view[:, :Wl].copy()
                         cv2.fillPoly(ov_, [pts], SM.dim(c_k, 0.5), cv2.LINE_AA, 4)
-                    cv2.polylines(view[:, :Wl], [pts], True, c_k if k_ == m._sel else SM.dim(c_k, 0.85),
-                                  2 if k_ == m._sel else 1, cv2.LINE_AA, 4)
+                    if rg_.get('kind') == 'mask':                   # маска — пунктиром, без заливки
+                        UI.dashed_poly(view[:, :Wl], pts / 16.0, c_k if k_ == m._sel else SM.dim(c_k, 0.9),
+                                       2 if k_ == m._sel else 1)
+                    else:
+                        cv2.polylines(view[:, :Wl], [pts], True, c_k if k_ == m._sel else SM.dim(c_k, 0.85),
+                                      2 if k_ == m._sel else 1, cv2.LINE_AA, 4)
             if ov_ is not None:
                 view[:, :Wl] = cv2.addWeighted(ov_, 0.3, view[:, :Wl], 0.7, 0)
             if rul['on'] and rul['pts']:                    # линейка (точки — на образце: едут вместе с ним)

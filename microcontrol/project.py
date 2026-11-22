@@ -340,7 +340,7 @@ def sel_folder(sample_folder, reg):
     return os.path.join(sample_folder, 'selections', f"S{reg['num']:02d}_{reg.get('obj', 0)}x")
 
 
-_KEYS = ('num', 'uid', 'obj', 'fw', 'fh', 'A', 'B', 'pts', 'rank', 'shape', 'parent', 'kind', 'src', 'cells', 'name', 'hidden')
+_KEYS = ('num', 'uid', 'obj', 'fw', 'fh', 'A', 'B', 'pts', 'rank', 'shape', 'parent', 'kind', 'src', 'cells', 'name', 'hidden', 'export')
 
 
 def save_regions(m):

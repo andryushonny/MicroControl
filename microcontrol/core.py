@@ -1608,7 +1608,7 @@ class Microscope:
             regs = [self._regions[-1]]
         else:
             regs_all = self._regions
-            regs = [rg for rg in regs_all if _obj(self, rg) == self.objective and rg.get('kind') != 'group']
+            regs = [rg for rg in regs_all if _obj(self, rg) == self.objective and rg.get('kind') not in ('group', 'mask')]
             if not regs_all:
                 raise SafetyError('E701', "No selection: mark one in m.manual() (keys 1 and 2) or set m.area.")
             if not regs:

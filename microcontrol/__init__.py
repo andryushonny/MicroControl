@@ -28,6 +28,7 @@ from .mask import export, clean
 from .optics import measure_distortion as distortion
 from .viewer import view, view_window, hints, train_hints
 from . import layers, snap                            # выделения-слои (контуры, операции), строгая геометрия съёмки
+from .drawing import export_sample                   # чертёж образца: выбранные участки одним DXF / DWG
 from .agent import Agent
 from .selections import list_selections as selections, remove_selection, open_selection
 from .project import Project, Sample, projects, all_samples
@@ -50,6 +51,7 @@ PROJECTS (Project > Sample > Selection > Scan)
   m = mc.Microscope(sample=s)          Work with it (or m.sample = s); its selections come back
   mc.projects(), mc.all_samples()      What is there, as a table with dates;  p.samples, s.selections, s.scans()
   mc.view_window(folder)               Open a scan in the viewer in its own window (one window per project)
+  mc.export_sample(m[, [k, ...]])      One drawing of the sample (AutoCAD DXF / DWG): chosen areas, crosses, numbers
   s.selections[0].latest.view()        The last scan of a selection; .scans — every version
   Menu in both windows                 Open, New project, New sample, Info, Scans, View, Help
 

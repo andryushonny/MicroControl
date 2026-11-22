@@ -46,7 +46,7 @@ def _stage_layout(folder, P):
         return None
 
 
-KEEP = ('selected_removed', 'brush_detached')          # ключи grid.json, которые пишет не просмотр
+KEEP = ('selected_removed', 'brush_detached', 'areas')  # ключи grid.json, которые пишет не только сетка
 
 class Grid:
     def __init__(self, folder):
@@ -589,7 +589,8 @@ def export(folder, fmt='png', scale=1.0, cells=False, dxf=True, max_mb=2000, mar
 
 def write_drawing(path, cells, pitch, px):
     """Итоговый чертёж (DXF 2010, единицы — мкм, Y вверх): каждый квадрат — своя картинка (слой IMAGES,
-    файл рядом: squares/...), контур (SQUARES / OUTLINE — внешний край выделения) и номер (LABELS).
+    файл рядом: squares/...), его 4 стороны (SQUARES, каждый квадрат целиком), внешний край выделения (OUTLINE —
+    те же грани ещё раз: общая грань есть на каждом слое) и номер (LABELS).
     cells: [(столбец, строка, X, Y, файл)], pitch — шаг квадрата, мкм; px — размер картинки квадрата, px.
     Картинки в DWG всегда внешние файлы: папку export/ переносить целиком."""
     try:
@@ -610,9 +611,14 @@ def write_drawing(path, cells, pitch, px):
         y0 = y1 - b
         idef = doc.add_image_def(filename=os.path.join('squares', fn), size_in_pixel=px)
         msp.add_image(idef, insert=(x0, y0), size_in_units=(a, b), dxfattribs={'layer': 'IMAGES'})
+        # каждый квадрат — целиком на SQUARES (все 4 стороны, даже общие с соседом или с краем выделения);
+        # край выделения — ещё и на OUTLINE: общая грань есть на каждом слое, которому она принадлежит
+        msp.add_lwpolyline([(x0, y0), (x0 + a, y0), (x0 + a, y1), (x0, y1)], close=True,
+                           dxfattribs={'layer': 'SQUARES'})
         for (xa, ya, xb, yb), nb in (((x0, y1, x0 + a, y1), (c, r - 1)), ((x0, y0, x0 + a, y0), (c, r + 1)),
                                      ((x0, y0, x0, y1), (c - 1, r)), ((x0 + a, y0, x0 + a, y1), (c + 1, r))):
-            msp.add_line((xa, ya), (xb, yb), dxfattribs={'layer': 'OUTLINE' if nb not in have else 'SQUARES'})
+            if nb not in have:
+                msp.add_line((xa, ya), (xb, yb), dxfattribs={'layer': 'OUTLINE'})
         msp.add_text(f"{X},{Y}", height=0.06 * b,
                      dxfattribs={'layer': 'LABELS', 'insert': (x0 + 0.04 * a, y1 - 0.1 * b)})
     doc.saveas(path)

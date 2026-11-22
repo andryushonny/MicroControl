@@ -178,6 +178,22 @@ def progress_panel(img, title, stage, frac, text="", passed=0.0, left=None, foot
 MENU_H = 30
 
 
+def dashed_poly(img, pts, color, thick=1, dash=9, gap=6):
+    """Замкнутый пунктирный контур (точки — float, пиксели): так рисуются маски-черновики."""
+    pts = np.asarray(pts, float)
+    for a, b in zip(pts, np.roll(pts, -1, axis=0)):
+        L = float(np.hypot(*(b - a)))
+        if L < 1e-6:
+            continue
+        d = (b - a) / L
+        t = 0.0
+        while t < L:
+            p0, p1 = a + d * t, a + d * min(L, t + dash)
+            cv2.line(img, (int(round(p0[0] * 16)), int(round(p0[1] * 16))), (int(round(p1[0] * 16)), int(round(p1[1] * 16))),
+                     color, thick, cv2.LINE_AA, 4)
+            t += dash + gap
+
+
 TOOL_H = 36                  # строка шагов и главных кнопок под меню
 
 

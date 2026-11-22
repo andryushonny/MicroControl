@@ -117,12 +117,13 @@ class _Scene:
 
 HELP_V2 = "Arrows / drag: move  Wheel: zoom  0: whole  , / .: selection  H: all keys  Shift+Esc: exit"
 HELP_MODE = {
-    'look': "S: stitch  C: mark crosses  T: level / as shot  F: fit grid  M: select squares  B: brush  N: numbers  Y: hints  R: ruler  E: export",
+    'look': "S: stitch  C: crosses  T: level  F: fit grid  M: select  B: brush (mask)  D: draw an area  N: numbers  Y: hints  R: ruler  E: export",
     'cross': "Click: cross exactly there (2 in a row = tilt)  Shift+click: snap to centre  Drag a mark: move  Right click: remove  Shift+C: again  F: fit grid  C / Esc: done",
     'select': "Click: square  Drag: box  Shift: unselect  Right click: remove green area  A: all  X: none  Esc: done",
     'paint': "Drag a rectangle: select all squares in it  Shift+drag: unselect  Click: one square  A: all  X: none  Esc: done",
     'label': "Click a square, type its number X Y  Enter: set  Esc: done",
     'ruler': "Click two points: the distance (a third click starts again)  Drag: move  R or Esc: off",
+    'area': "Drag a rectangle over what you want to shoot closer: a new area (larger objective)  Right drag: move  D or Esc: done",
 }
 HELP_HINTS = "Y: hints on / off  Shift+Y: select them  < / >: sensitivity  U: type it"
 HELP_V = ("S: stitch   C: crosses (2 in a row = tilt; right click = remove, Shift+C = again)   F: fit grid   M: select "
@@ -569,6 +570,10 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
                 # сдвиг: правой / средней кнопкой — в любом режиме; левой — везде, кроме рамки (S) и кисти (B),
                 # а там — с Ctrl
                 pan = ev0 != cv2.EVENT_LBUTTONDOWN or st['mode'] in ('look', 'cross', 'label', 'ruler') or st.get('ctrl')
+                if st['mode'] == 'area' and not pan:          # новый участок: прямоугольник по картинке
+                    st['abox'] = (x0, y0, x, y)
+                    st['dirty'] = True
+                    return
                 if pan:
                     c = np.array([cx, cy]) - R().T @ (np.array([x - x0, y - y0], float) / st['s'])
                     st['cx'], st['cy'] = c
@@ -587,6 +592,11 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
                 else:
                     st['msg'] = "Drag the mark to move it; right click removes it"
                 st['dirty'] = True
+            elif st.get('abox') is not None:
+                ax0, ay0, ax1, ay1 = st.pop('abox')
+                if abs(ax1 - ax0) > 4 and abs(ay1 - ay0) > 4:
+                    q_ = [from_view(v_).tolist() for v_ in ((ax0, ay0), (ax1, ay0), (ax1, ay1), (ax0, ay1))]
+                    add_area(q_)
             elif st['box'] is not None:
                 bx0, by0, bx1, by1, shb = st['box']
                 st['box'] = None
@@ -712,6 +722,23 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
             elif g.selected:
                 st['msg'] = st['msg'] if 'zoom in' in st['msg'] else st['msg']
         img[void_] = base_[void_]
+        H_img, W_img = img.shape[:2]
+        for q_, c_, lab_, dash_, new_ in sample_outlines():      # выделения образца на этой картинке
+            pv_ = np.array([to_view(p_) for p_ in q_], float)
+            if pv_[:, 0].max() < 0 or pv_[:, 1].max() < 0 or pv_[:, 0].min() > W_img or pv_[:, 1].min() > H_img:
+                continue
+            if dash_:
+                UI.dashed_poly(img, pv_, c_, 2 if new_ else 1)
+            else:
+                cv2.polylines(img, [np.int32(np.round(pv_ * 16))], True, c_, 2, cv2.LINE_AA, 4)
+            x_l, y_l = pv_[:, 0].min(), pv_[:, 1].min()
+            if 0 <= x_l < W_img - 60 and 30 <= y_l < H_img:
+                tw_ = UI.size(lab_, 0.42)[0]
+                UI.panel(img, x_l, y_l - 20, x_l + tw_ + 10, y_l - 2, 0.8, c_)
+                UI.put(img, lab_, x_l + 5, y_l - 6, 0.42, c_)
+        if st.get('abox'):                                    # рисуемый участок
+            ax0, ay0, ax1, ay1 = st['abox']
+            UI.dashed_poly(img, [(ax0, ay0), (ax1, ay0), (ax1, ay1), (ax0, ay1)], (255, 255, 255), 2)
         for k_, q in enumerate(g.cr.marks):
             u_, v_ = to_view(q)
             UI.plus(img, u_, v_, yellow if k_ == st.get("mdrag") else red)
@@ -724,9 +751,9 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
             q2 = st['ruler'][1] if len(st['ruler']) == 2 else (from_view(b_) if b_ is not None else None)
             UI.ruler(img, a_, b_, ruler_text(st['ruler'][0], q2) if q2 is not None else "")
         mode = {'look': 'Look', 'cross': 'Mark crosses', 'select': 'Select',
-                'paint': 'Brush', 'label': 'Number squares', 'ruler': 'Ruler'}[st['mode']]
+                'paint': 'Brush', 'label': 'Number squares', 'ruler': 'Ruler', 'area': 'Draw an area'}[st['mode']]
         mcol = {'look': (170, 170, 178), 'cross': (90, 90, 255), 'select': (90, 210, 90),
-                'paint': (90, 210, 90), 'label': UI.ACCENT, 'ruler': (0, 220, 255)}[st['mode']]
+                'paint': (90, 210, 90), 'label': UI.ACCENT, 'ruler': (0, 220, 255), 'area': (235, 235, 235)}[st['mode']]
         if st.get('lab'):
             st['msg'] = f"Square number X Y: {st['lab'][1]}_   (Enter = set, Esc = cancel)"
         if st.get('sens') is not None:
@@ -827,6 +854,57 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
             set_straight(True)
         elif not g.ready():
             set_straight(False)
+
+    def add_area(q_):
+        """Нарисованный участок -> grid.json 'areas' (окно микроскопа сделает из него выделение)."""
+        gp_ = os.path.join(folder, 'grid.json')
+        g.save(px_um)
+        d_ = json.load(open(gp_, encoding='utf-8'))
+        d_['areas'] = d_.get('areas', []) + [dict(px=q_)]
+        with open(gp_, 'w', encoding='utf-8') as f_:
+            json.dump(d_, f_, indent=1)
+        w_ = np.ptp(np.array(q_)[:, 0]) * px_um
+        h_ = np.ptp(np.array(q_)[:, 1]) * px_um
+        st['msg'] = (f"New area {w_:.0f} x {h_:.0f} um: it appears in the microscope window as a selection "
+                     "of a larger objective (D: draw more, Esc: done)")
+
+    def sample_outlines():
+        """Выделения образца на этой мозаике: [(кольцо в пикселях мозаики, цвет, подпись, пунктир, ждёт)]."""
+        if smp is None:
+            return []
+        sp_ = smp.file
+        key_ = (os.path.getmtime(sp_) if os.path.exists(sp_) else 0,
+                os.path.getmtime(os.path.join(folder, 'grid.json')) if os.path.exists(os.path.join(folder, 'grid.json')) else 0)
+        if st.get('_so_key') == key_:
+            return st['_so']
+        out_ = []
+        try:
+            from .snap import stage_to_mosaic
+            from .layers import from_json
+            from shapely.geometry import box as _box
+            for r_ in json.load(open(sp_, encoding='utf-8')).get('selections', []):
+                if r_.get('kind') == 'group':
+                    continue
+                if r_.get('shape'):
+                    gm_ = from_json(r_['shape'])
+                else:
+                    (ax, ay), (bx, by) = r_['A'], r_['B']
+                    fw_, fh_ = r_.get('fw', 0), r_.get('fh', 0)
+                    gm_ = _box(min(ax, bx) - fw_ / 2, min(ay, by) - fh_ / 2, max(ax, bx) + fw_ / 2, max(ay, by) + fh_ / 2)
+                ps_ = [gm_] if gm_.geom_type == 'Polygon' else list(getattr(gm_, 'geoms', []))
+                kind_ = {'mask': 'Mask'}.get(r_.get('kind'), 'Sel.')
+                for p_ in ps_:
+                    q_ = stage_to_mosaic(folder, np.array(p_.exterior.coords)[:-1])
+                    out_.append((q_, SM.color(r_['num'] - 1), f"{kind_} {r_['num']} {r_.get('obj', '')}x"
+                                 if r_.get('kind') != 'mask' else f"Mask {r_['num']}", r_.get('kind') == 'mask', False))
+            gj_ = json.load(open(os.path.join(folder, 'grid.json'), encoding='utf-8')) \
+                if os.path.exists(os.path.join(folder, 'grid.json')) else {}
+            for a_ in gj_.get('areas', []):
+                out_.append((np.array(a_['px'], float), (235, 235, 235), "new area", True, True))
+        except Exception:
+            out_ = []
+        st['_so_key'], st['_so'] = key_, out_
+        return out_
 
     h_last = [g_sig(), g_snap()]
     def mouse_cb(ev, x, y, flags, _=None):                 # окно: сверху меню, ниже — картинка и список
@@ -1041,6 +1119,13 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
                 set_straight(not st['straight'])
                 st['msg'] = (f"Level: the picture is turned by {st['rot']:+.2f} deg, the squares stand straight (T: as shot)"
                              if st['straight'] else "Picture as shot, with its tilt (T: level)")
+        elif ch == 'd':                                      # нарисовать участок прямо по картинке
+            if st['mode'] == 'area':
+                st['mode'] = 'look'
+            else:
+                st['mode'] = 'area'
+                st['msg'] = ("Draw an area: drag a rectangle over the flake (zoom in, T levels the picture by the "
+                             "crosses); it becomes a selection of a larger objective")
         elif ch == 'a' and st['mode'] in ('select', 'paint') and g.ready():
             W_, H_ = sc.size
             g.selected |= g.cells_in([(0, 0), (W_, 0), (W_, H_), (0, H_)], sc.size)

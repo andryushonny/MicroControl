@@ -79,7 +79,7 @@ The final result is the drawing `export/drawing.dwg`: every chosen square is its
 
 `mc.projects()` and `mc.all_samples()` print a table: id, name, samples, selections, scans, created, updated, description (the Open dialogs show the same). In the viewer, Open → **New window** shows another project in its own window (`mc.view_window(folder)`), the current one stays open.
 
-Squares chosen with the brush become areas by themselves (one per figure, on the next objective) and appear on the map and the live picture in their real shape and size — handy for finding the same places again under a larger objective.
+Squares chosen with the brush become a **mask** — a draft that is never scanned. Inside it draw the real, usually 5–10 times smaller area for the next objective: on the map, or right on the stitched picture in the viewer (`D`). **Export** asks which scanned areas go into the drawing and writes one AutoCAD drawing of the sample: pictures in place, outlines, crosses and square numbers.
 
 ---
 

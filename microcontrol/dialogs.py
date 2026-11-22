@@ -85,6 +85,39 @@ def ask(title, label, value=''):
     return out.get('r')
 
 
+def checklist(title, rows, checked, header=None, button="Export"):
+    """Список с галочками -> [True / False] по строкам или None (отмена)."""
+    import tkinter as tk
+    root = _root()
+    w = _win(root, title)
+    out = {}
+    if header:
+        tk.Label(w, text=header, font=('Consolas', 10, 'bold'), anchor='w', justify='left').pack(fill='x', padx=12,
+                                                                                                pady=(10, 0))
+    fr = tk.Frame(w)
+    fr.pack(fill='both', expand=True, padx=10, pady=6)
+    vs = []
+    for r, c in zip(rows, checked):
+        v = tk.BooleanVar(value=bool(c))
+        tk.Checkbutton(fr, text=r, variable=v, font=('Consolas', 10), anchor='w').pack(fill='x')
+        vs.append(v)
+
+    def ok(*_):
+        out['r'] = [v.get() for v in vs]
+        root.quit()
+    b = tk.Frame(w)
+    b.pack(pady=(0, 10))
+    tk.Button(b, text="All", width=8, command=lambda: [v.set(True) for v in vs]).pack(side='left', padx=5)
+    tk.Button(b, text="None", width=8, command=lambda: [v.set(False) for v in vs]).pack(side='left', padx=5)
+    tk.Button(b, text=button, width=12, command=ok).pack(side='left', padx=5)
+    tk.Button(b, text="Cancel", width=12, command=root.quit).pack(side='left', padx=5)
+    w.bind('<Return>', ok)
+    w.protocol("WM_DELETE_WINDOW", root.quit)
+    root.mainloop()
+    root.destroy()
+    return out.get('r')
+
+
 def choose(title, rows, current=None, buttons=("Open",), extra=None, header=None):
     """Список строк -> (кнопка, индекс) или None. extra — подпись сверху, header — строка заголовков колонок
     (тем же моноширинным шрифтом, что и список: таблица)."""

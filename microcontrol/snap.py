@@ -87,6 +87,20 @@ def geometry(folder):
     return g
 
 
+def mosaic_to_stage(folder, q):
+    """Пиксели мозаики (как у сетки и просмотра) -> настоящие мкм столика (строго по геометрии съёмки)."""
+    g = geometry(folder)
+    q = np.atleast_2d(np.asarray(q, float))
+    return (q - g['c'] - (g['W'] / 2, g['H'] / 2)) @ np.linalg.inv(g['Mo']).T * g['ms']
+
+
+def stage_to_mosaic(folder, S):
+    """Настоящие мкм столика -> пиксели мозаики."""
+    g = geometry(folder)
+    S = np.atleast_2d(np.asarray(S, float))
+    return (S / g['ms']) @ g['Mo'].T + g['c'] + (g['W'] / 2, g['H'] / 2)
+
+
 def live_origin(g, P_cmd, s_now):
     """Где в мозаике левый верхний угол живого кадра: столик задан в P_cmd (шаги), подъехал со стороны s_now."""
     P = np.asarray(P_cmd, float) + g['B'] @ np.asarray(s_now, float)

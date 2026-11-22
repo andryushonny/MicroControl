@@ -711,6 +711,8 @@ def _run(m, fullscreen=False, _keys=None):
             r = m.check_orientation()
             m._orient_checked = 'Reason' not in r
             msg, msg_t = "Orientation: " + r.get('Changed', r.get('Result', r.get('Reason', ''))), time.monotonic()
+            if 'Changed' in r:
+                msg += ". If the arrow keys now go the wrong way: [ - left / right, ] - up / down"
         except MicroControlError as e:
             msg, msg_t = str(e), time.monotonic()
     rects = {}
@@ -1419,6 +1421,10 @@ def _run(m, fullscreen=False, _keys=None):
         else:
             m._last_view = (m.last_scans or [res['folder']])[-1]
             msg = f"Scanned and stitched in {TM.fmt(time.monotonic() - t0)}: V opens it in the view"
+            ch_ = m.__dict__.pop('_ori_changed', None)
+            if ch_:                                        # проверка направлений перед съёмкой их исправила
+                msg = (f"Camera directions fixed before the scan ({ch_}). If the arrow keys now go the wrong way: "
+                       "[ - left / right, ] - up / down (remembered)")
 
     def open_view():
         """V: открыть последний скан в просмотре (кресты, квадраты, экспорт); закрыли — снова ручной режим."""
@@ -2219,7 +2225,7 @@ def _run(m, fullscreen=False, _keys=None):
                 setattr(m, k_, not getattr(m, k_))
                 m._map_win = None
                 msg = (f"Arrows {'left / right' if raw == '[' else 'up / down'} turned the other way, the mini map "
-                       "follows them (remembered)")
+                       f"follows them (remembered; {raw} again: back)")
             elif ch == 'y':
                 m._use_fp = not m._use_fp
                 msg = ("Z follows the focus points: arrows inside an area and every scan frame" if m._use_fp else
@@ -2232,7 +2238,8 @@ def _run(m, fullscreen=False, _keys=None):
             elif ch == 'o':
                 r = m.check_orientation(); m._orient_checked = True
                 msg = r.get('Changed', r.get('Result', r.get('Reason', '')))
-                msg = f"Orientation: {msg}"
+                msg = f"Orientation: {msg}" + (". If the arrow keys now go the wrong way: [ - left / right, "
+                                               "] - up / down" if 'Changed' in r else "")
             elif ch == 'e' or key in PGUP:
                 dz = steps['z'] * (SHIFT if raw == 'E' else 1)
                 m.move(dz=dz); msg = f"Stage up {dz:g} um"

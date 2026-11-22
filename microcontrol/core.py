@@ -1634,6 +1634,8 @@ class Microscope:
             r = self.check_orientation()
             if 'Changed' in r or 'Reason' in r:
                 print(r)
+            if 'Changed' in r:                             # окно микроскопа скажет: стрелки могли поменяться
+                self._ori_changed = r['Changed']
         ov = scan_overlap(self.objective) if overlap is None else overlap
         off, pf, done = self._off, self._sample.folder, []
         n0 = 0

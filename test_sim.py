@@ -1024,3 +1024,31 @@ try:
 except mc.SafetyError as e:
     assert 'E701' in str(e), e
 m.close(); print("Merge / minus / overlap / group / draft / move, then scan: frames cover every outline, no stray selections: OK")
+
+
+# ------------------------------------------------------------------ 35. Маленькая карта в углу: колесо — приближение, щелчок — едет
+import cv2 as _cv
+import microcontrol.manual as M
+import microcontrol.ui as UI_
+from microcontrol import samples as SM
+m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp()); m.focus()
+m._nav_big = False
+M.run(m, fullscreen=False, _keys=[-1, -1])
+W_, H_ = _cv.getWindowImageRect(M.WIN)[2:] if False else (1280, 860)
+nav = m._nav
+s0 = nav.s
+Wl = W_ - SM.CAR_W
+mw_ = min(400, Wl // 2)
+mx, my = Wl - 10 - mw_ // 2, UI_.MENU_H + UI_.TOOL_H + 10 + 60          # над маленькой картой
+M.run(m, fullscreen=False, _keys=[-1, ('mouse', _cv.EVENT_MOUSEWHEEL, mx, my, 120 << 16), -1,
+                                  ('mouse', _cv.EVENT_MOUSEWHEEL, mx, my, 120 << 16), -1, -1])
+assert m._nav.s < s0 * 0.8, (s0, m._nav.s)                              # приблизилась (мкм на пиксель меньше)
+assert not m._nav_big
+s1 = m._nav.s
+M.run(m, fullscreen=False, _keys=[-1, ('mouse', _cv.EVENT_MOUSEWHEEL, mx, my, -(120 << 16)), -1, -1])
+assert m._nav.s > s1 * 1.1, (s1, m._nav.s)                              # отдалилась
+p0 = (m.real_position.x, m.real_position.y)
+M.run(m, fullscreen=False, _keys=[-1, ('mouse', _cv.EVENT_LBUTTONDOWN, mx + 40, my + 30, 0),
+                                  ('mouse', _cv.EVENT_LBUTTONUP, mx + 40, my + 30, 0), -1, -1])
+assert (m.real_position.x, m.real_position.y) != p0                      # щелчок по маленькой карте — поехали
+m.close(); print("Small map in the corner: wheel zooms in and out, click drives there: OK")

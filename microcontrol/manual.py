@@ -634,7 +634,8 @@ def _run(m, fullscreen=False, _keys=None):
         menu['thover'] = None
         y -= UI.MENU_H + UI.TOOL_H
         if nv['press'] is not None or nv['pan'] is not None or \
-                (in_rect(nv['mr'], x, y) and not in_rect(nv['inset'], x, y) and not zm['pan'] and not mdr['on']):
+                (nv['mr'] is not None and in_rect(nv['mr'], x, y) and (not nv['big'] or not in_rect(nv['inset'], x, y))
+                 and not zm['pan'] and not mdr['on']):            # большая карта или маленькая в углу
             mx_, my_ = x - nv['mr'][0], y - nv['mr'][1]                # карта (как в стратегиях: щёлкнул — поехал)
             if ev == cv2.EVENT_LBUTTONDBLCLK:
                 clicks.append(('mapdbl', mx_, my_))
@@ -875,7 +876,7 @@ def _run(m, fullscreen=False, _keys=None):
                         cv2.LINE_AA)
         nav.scale_bar(mp)
         hint_ = ("Map: click - go there, drag - new area, wheel - zoom, right drag - move, double-click - open, Tab - camera"
-                 if nv['big'] else "Map (Tab: bigger)  click - go, drag - new area")
+                 if nv['big'] else "Map (Tab: bigger)  click - go, drag - new area, wheel - zoom")
         UI.panel(mp, 0, 0, UI.size(hint_, 0.42)[0] + 16, 26, 0.8)        # подсказка — на тёмной плашке
         UI.put(mp, hint_, 8, 18, 0.42, (225, 225, 225), 1)
         view[mr[1]:mr[3], mr[0]:mr[2]] = mp
@@ -1783,7 +1784,9 @@ def _run(m, fullscreen=False, _keys=None):
         key = next(keys, EXIT) if keys is not None else cv2.waitKeyEx(8 if live is not None else 30)
         if keys is not None:
             cv2.waitKey(1)
-            if isinstance(key, tuple):                    # тест: щелчок мышью (x, y)
+            if isinstance(key, tuple) and key[0] == 'mouse':   # тест: событие мыши как от окна (ev, x, y, flags)
+                on_mouse(*key[1:]); key = -1
+            elif isinstance(key, tuple):                  # тест: щелчок мышью (x, y)
                 clicks.append(key); key = -1
         while clicks:                                     # щелчок по полю — ввод значения; по картинке — направляющие
             c_ = clicks.pop(0)

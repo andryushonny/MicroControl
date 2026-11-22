@@ -1608,7 +1608,7 @@ class Microscope:
             regs = [self._regions[-1]]
         else:
             regs_all = self._regions
-            regs = [rg for rg in regs_all if _obj(self, rg) == self.objective]
+            regs = [rg for rg in regs_all if _obj(self, rg) == self.objective and rg.get('kind') != 'group']
             if not regs_all:
                 raise SafetyError('E701', "No selection: mark one in m.manual() (keys 1 and 2) or set m.area.")
             if not regs:
@@ -1635,12 +1635,17 @@ class Microscope:
             kk = self._regions.index(reg)
             pk = _par(self, kk)
             extra = dict(sample_index=reg['num'], selection=reg['num'], sample_uid=reg['uid'], project_name=self.project.name, project_uid=self.project.uid, sample_name=self._sample.name,
-                         focus_points=nums, area_real_um=[*reg['A'], *reg['B']])
+                         focus_points=nums, area_real_um=[*reg['A'], *reg['B']], outline_um=reg.get('shape'))
             if pk is not None:
                 extra.update(parent_uid=self._regions[pk]['uid'], parent_selection=self._regions[pk]['num'],
                              parent_objective=self._regions[pk].get('obj'))
             folder = P_.scan_folder(pf, reg, name)
-            prog = plan(self, area=area_, focus=focus, overlap=ov, path=path, pts=pts)
+            keep = None
+            if reg.get('shape'):                               # не прямоугольник: только кадры, задевающие контур
+                from .layers import touches_frame
+                fw_, fh_ = self.frame_size
+                keep = (lambda X, Y, r_=reg, w_=fw_, h_=fh_: touches_frame(self, r_, X, Y, w_, h_))
+            prog = plan(self, area=area_, focus=focus, overlap=ov, path=path, pts=pts, keep=keep)
             if len(regs) > 1:
                 print(f"Selection {reg['num']} ({k + 1} of {len(regs)}): {area_}")
             r = self.gcode(prog, save=name or f"Selection {reg['num']}", notes=notes, folder=folder, extra=extra)

@@ -251,7 +251,6 @@ def _is_child(lst, it, me):
 
 # ------------------------------------------------------------------ выбранные квадраты (зелёные) на картах
 _SQ = {}
-_ALL = {}
 
 
 def marked_squares(folder):
@@ -287,47 +286,11 @@ def marked_squares(folder):
                 num = int(json.load(open(os.path.join(folder, 'meta.json'), encoding='utf-8')).get('selection') or 1)
             except Exception:
                 num = 1
-            try:                                            # сдвиг маски, поправленный в окне микроскопа
-                sh = np.array(json.load(open(gp, encoding='utf-8')).get('shift_um') or (0, 0), float)
-            except Exception:
-                sh = np.zeros(2)
-            um = [np.c_[q, np.ones(4)] @ M + sh for q in px]
-            out = dict(px=px, um=um, size=Pm.max(0) + (W, H), num=num, shift_um=sh, M=M,
+            um = [np.c_[q, np.ones(4)] @ M for q in px]
+            out = dict(px=px, um=um, size=Pm.max(0) + (W, H), num=num, M=M,
                        cells=[tuple(c) for c in sorted(g.selected)],
                        center_um=np.mean(um, axis=(0, 1)), folder=folder)
     except Exception:
         out = None
     _SQ[folder] = (key, out)
     return out
-
-
-def shift_mask(folder, d_um=None, to=None):
-    """Сдвинуть маску съёмки на плоскости столика: d_um=(dx, dy) мкм — добавить, to=(dx, dy) — поставить.
-    Хранится в grid.json ('shift_um'); на квадраты в просмотре и чертёж не влияет. Возвращает новый сдвиг."""
-    gp = os.path.join(folder, 'grid.json')
-    d = json.load(open(gp, encoding='utf-8'))
-    sh = np.array(d.get('shift_um') or (0, 0), float)
-    sh = np.array(to, float) if to is not None else sh + np.array(d_um, float)
-    d['shift_um'] = [round(float(sh[0]), 3), round(float(sh[1]), 3)]
-    with open(gp, 'w', encoding='utf-8') as f:
-        json.dump(d, f, indent=1)
-    _SQ.pop(folder, None)
-    _ALL.clear()
-    return sh
-
-
-def marked_all(root, every=3.0):
-    """Все выбранные квадраты последних съёмок образца (настоящие мкм столика): [(4x2, номер выделения, папка
-    съёмки)]. Обновляется не чаще раза в every секунд."""
-    import time
-    now = time.monotonic()
-    c = _ALL.get(root)
-    if c and now - c[0] < every:
-        return c[1]
-    polys = []
-    for f in _folders(root, latest=True):                    # на картах — последняя съёмка выделения
-        r = marked_squares(f)
-        if r:
-            polys += [(q, r['num'], f) for q in r['um']]
-    _ALL[root] = (now, polys)
-    return polys

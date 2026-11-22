@@ -51,8 +51,9 @@ def focus_z(pts, X, Y, k=4):
     return float((w * z[near]).sum() / w.sum())
 
 
-def plan(m, area=None, focus='auto', overlap=None, path='snake', pts=None):
-    """Программа скана в G-коде."""
+def plan(m, area=None, focus='auto', overlap=None, path='snake', pts=None, keep=None):
+    """Программа скана в G-коде. keep(X, Y) -> bool (настоящие мкм центра кадра): снимать ли кадр — для выделения
+    не прямоугольником: кадры, не задевающие контур, пропускаются (ряды и столбцы — как у охватывающей зоны)."""
     area = area or m.area
     if area is None:
         raise SafetyError('E701', "Mark two corners in m.manual() (keys 1 and 2) or pass area=mc.Area(x0, y0, x1, y1).")
@@ -77,10 +78,14 @@ def plan(m, area=None, focus='auto', overlap=None, path='snake', pts=None):
         raise SafetyError('E703', f"One frame step is longer than m.max_jump ({m.max_jump:g} um).")
     tiles = area.grid(step, path)
     nx, ny = area.size(step)
+    if keep is not None:
+        tiles = [t for t in tiles if keep(t[2] + m._off['x'], t[3] + m._off['y'])]
+        if not tiles:
+            raise SafetyError('E703', "No frame of the area touches the selection outline.")
     w, h = m.frame_size
     L = [f"; MicroControl scan program",
          f"; Objective {m.objective}x, pixel {m.pixel_size:g} um, frame {w:.0f} x {h:.0f} um",
-         f"; Area {area}: {nx} x {ny} = {len(tiles)} frames, step {step['x']:.1f} x {step['y']:.1f} um",
+         f"; Area {area}: {nx} x {ny}" + (f" (outline: {len(tiles)} frames)" if keep is not None else f" = {len(tiles)} frames") + f", step {step['x']:.1f} x {step['y']:.1f} um",
          f"; Focus: {focus}" + (f" (points every {m.focus_every} frames)" if focus == 'plane' else "") +
          (f" (Z from {len(pts)} focus points, nearest 4, weights 1/d^2)" if focus == 'points' else "") +
          f", blurry frames re-taken: {'yes' if m.refocus else 'no'}",

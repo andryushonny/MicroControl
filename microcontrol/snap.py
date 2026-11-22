@@ -20,10 +20,8 @@
 """
 import os
 import numpy as np
-import cv2
 
-_GEO, _SCENES = {}, {}
-MIN_RESP = 0.12
+_GEO = {}
 
 
 def _sg_from_sequence(p):
@@ -99,18 +97,8 @@ def live_origin(g, P_cmd, s_now):
     return (L * w[:, None]).sum(0) / w.sum(), float(d[k[0]])
 
 
-def live_polys(folder, P_cmd, s_now, live_shape, extra_um=(0.0, 0.0)):
-    """Квадраты маски съёмки в пикселях живого кадра: [(4x2, номер выделения)] или []."""
-    from .selections import marked_squares
-    mk = marked_squares(folder)
-    if not mk or not mk['px']:
-        return []
-    g = geometry(folder)
-    L0, _ = live_origin(g, P_cmd, s_now)
-    k = live_shape[1] / g['W']                              # кадр хранится уменьшенным? -> пиксели камеры
-    sh = (np.asarray(mk.get('shift_um', (0, 0)), float) + np.asarray(extra_um, float)) / g['ms']
-    dq = g['Mo'] @ sh
-    return [((q + dq - L0) * k, mk['num']) for q in mk['px']]
+_SCENES = {}
+MIN_RESP = 0.12
 
 
 def _scene(folder):
@@ -124,31 +112,30 @@ def _scene(folder):
 
 
 def _hp(g):
+    import cv2
     g = g.astype(np.float32)
     return g - cv2.GaussianBlur(g, (0, 0), max(2.0, min(g.shape) / 60))
 
 
 def offset(folder, img, P_cmd, s_now):
-    """Проверка по картинке: насколько живой кадр расходится с мозаикой там, куда его кладёт геометрия.
-    -> (каким должен быть сдвиг маски (dx, dy) мкм, надёжность, расхождение px) или (None, причина, None).
-    Геометрия верна — расхождение ~0 и сдвиг маски должен быть ~0."""
+    """Проверка геометрии по картинке: насколько живой кадр расходится с мозаикой там, куда его кладёт геометрия.
+    -> (сдвиг в мкм, надёжность, расхождение px) или (None, причина, None). Геометрия верна — расхождение ~0."""
+    import cv2
     g = geometry(folder)
     L0, dist = live_origin(g, P_cmd, s_now)
     if dist > 1.5 * max(np.abs(np.linalg.solve(g['Mo'], (g['W'], g['H'])))):
         return None, "outside the scan", None
     W, H = g['W'], g['H']
-    sc = _scene(folder)
-    ren = sc.render(L0[0] + W / 2, L0[1] + H / 2, 1.0, W, H)
+    ren = _scene(folder).render(L0[0] + W / 2, L0[1] + H / 2, 1.0, W, H)
     live = cv2.resize(img, (W, H), interpolation=cv2.INTER_AREA) if img.shape[1] != W else img
     a = _hp(cv2.cvtColor(live, cv2.COLOR_BGR2GRAY) if live.ndim == 3 else live)
     b = _hp(cv2.cvtColor(ren, cv2.COLOR_BGR2GRAY))
-    val = (cv2.cvtColor(ren, cv2.COLOR_BGR2GRAY) > 20)
+    val = cv2.cvtColor(ren, cv2.COLOR_BGR2GRAY) > 20
     if val.mean() < 0.5:
         return None, "the frame is mostly outside the scan", None
     a[~val] = 0
     b[~val] = 0
-    win = cv2.createHanningWindow((W, H), cv2.CV_32F)
-    (dx, dy), resp = cv2.phaseCorrelate(b, a, win)          # живой = мозаика, сдвинутая на (dx, dy)
+    (dx, dy), resp = cv2.phaseCorrelate(b, a, cv2.createHanningWindow((W, H), cv2.CV_32F))
     if resp < MIN_RESP:
         return None, f"weak match ({resp:.2f})", None
     d_px = np.array([dx, dy])

@@ -650,9 +650,10 @@ VW.view = _v0
 assert opened and opened[0] == m.sample.selections[-1].latest.folder, (opened, m.sample.selections)
 m.close(); print("Undo / redo in manual mode (selections and moves), ruler, scan + stitch (S) and view (V) from the window: OK")
 
-# ------------------------------------------------------------------ 24. Маска выделения: каждая замкнутая фигура — отдельно
+# ------------------------------------------------------------------ 24. Кисть -> выделения (по фигуре), операции над слоями
 import microcontrol.manual as M
 from microcontrol import samples as SM
+from microcontrol import layers as LY
 from microcontrol.mask import Grid
 m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp()); m.focus()
 fw, fh = m.frame_size
@@ -661,19 +662,38 @@ f = m.scan(); mc.stitch(f, verbose=False)
 px_um = json.load(open(os.path.join(f, 'meta.json')))['pixel_size_um']
 g = Grid(f); p0 = np.array([150.0, 120.0]); a_ = 100 / px_um
 g.cr.add(p0); g.cr.add(p0 + (a_, 0)); g.cr.add(p0 + (0, a_))
-g.selected |= {(0, 0), (1, 0), (3, 1), (3, 2)}                     # две фигуры: 2 и 2 квадрата
+g.selected |= {(0, 0), (1, 0), (3, 1), (3, 2)}                     # две фигуры по 2 квадрата
 g.save(px_um)
-parts = SM.mask_parts(m, 0)
-assert [len(p['cells']) for p in parts] == [2, 2], parts
-print(SM.goto_mask(m, 0, 1))
-print(SM.delete_mask(m, 0, 1))                                      # удалить одну фигуру — вторая остаётся
-assert [p['cells'] for p in SM.mask_parts(m, 0)] == [parts[0]['cells']], SM.mask_parts(m, 0)
-shots = []; _o = M.cv2.imshow
-M.cv2.imshow = lambda w, img: (shots.append(img.copy()), _o(w, img))
-M.run(m, fullscreen=False, _keys=[-1, -1])
-M.cv2.imshow = _o
-M.cv2.imwrite('/tmp/mask_parts.png', shots[-1])
-m.close(); print("Mask parts as their own selections: go, delete one: OK")
+print(LY.sync_brush(m))
+kids = [k for k, r in enumerate(m._regions) if r.get('src')]
+assert len(kids) == 2 and all(m._regions[k]['parent'] == m._regions[0]['uid'] and m._regions[k]['obj'] == 20
+                              for k in kids), m._regions
+assert abs(LY.geom(m, m._regions[kids[0]]).area - 2 * 100 * 100) < 50      # 2 квадрата 100 x 100 мкм, контур без клеток
+assert [d for k, d in SM.tree(m)] == [0, 1, 1]                      # матрёшка: карта 10x > два выделения 20x
+assert LY.sync_brush(m) is None                                     # ничего не изменилось
+g = Grid(f); g.selected |= {(2, 0)}; g.save(px_um)                  # кисть дорисовала квадрат — выделение растёт
+LY.sync_brush(m)
+assert len([r for r in m._regions if r.get('src')]) == 2 and \
+    abs(LY.geom(m, [r for r in m._regions if r.get('src')][0]).area - 3e4) < 80
+ks = [k for k, r in enumerate(m._regions) if r.get('src')]
+print(LY.union(m, ks))                                              # слить: одно выделение, отпущено от кисти
+assert len([r for r in m._regions if r.get('obj') == 20]) == 1 and not any(r.get('src') for r in m._regions)
+assert LY.sync_brush(m) is None                                     # кисть его не пересоздаёт
+k20 = next(k for k, r in enumerate(m._regions) if r.get('obj') == 20)
+a0 = LY.geom(m, m._regions[k20]).area
+m._regions.append(dict(uid='cut', num=LY.new_num(m), obj=20, fw=fw / 2, fh=fh / 2, pts=[], parent=m._regions[0]['uid']))
+x0_, y0_, x1_, y1_ = LY.geom(m, m._regions[k20]).bounds
+LY.set_geom(m, m._regions[-1], LY.box(x0_, y0_, x0_ + 100, y0_ + 100))
+print(LY.subtract(m, [k20, len(m._regions) - 1]))
+assert abs(LY.geom(m, m._regions[k20]).area - (a0 - 1e4)) < 80
+print(LY.group(m, [k20, len(m._regions) - 1]))
+gk = len(m._regions) - 1
+assert m._regions[gk]['kind'] == 'group' and [d for k, d in SM.tree(m)] == [0, 1, 2, 2]
+print(LY.ungroup(m, [gk]))
+assert [d for k, d in SM.tree(m)] == [0, 1, 1]
+SM.persist(m)
+assert any(r.get('shape') for r in m.sample.data['selections'])     # контуры — в sample.json
+m.close(); print("Brush -> selections (one per figure), merge / minus / group / ungroup, outline in sample.json: OK")
 
 # ------------------------------------------------------------------ 25. Порядок карточек перетаскиванием, прокрутка карусели
 import copy as _cp
@@ -708,90 +728,39 @@ order = [m._regions[k]['num'] for k, d in SM.tree(m)]
 assert order[0] != 3 and 3 in order[1:5], order                     # карточка Selection 3 переехала вниз
 m.close(); print("Drag and drop order of selections, carousel scroll (wheel, bar): OK", order[:5])
 
-# ------------------------------------------------------------------ 26. Сдвиг маски (Shift + тянуть), Ctrl+Z
+# ------------------------------------------------------------------ 26. Shift + тянуть: сдвинуть выделение, Ctrl+Z; C — удалить выделение кисти, Ctrl+Z
 import microcontrol.manual as M
 from microcontrol import samples as SM
-from microcontrol import selections as _s_
-SEL = sys.modules['microcontrol.selections']
+from microcontrol import layers as LY
 from microcontrol.mask import Grid
 m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp()); m.focus()
 fw, fh = m.frame_size
 m.area = mc.Area(0, 0, 3 * fw, 2 * fh)
 f = m.scan(); mc.stitch(f, verbose=False)
-px_um = json.load(open(os.path.join(f, 'meta.json')))['pixel_size_um']
-g = Grid(f); p0 = np.array([150.0, 120.0]); a_ = 100 / px_um
-g.cr.add(p0); g.cr.add(p0 + (a_, 0)); g.cr.add(p0 + (0, a_))
-g.selected |= {(0, 0), (1, 0)}; g.save(px_um)
-c0 = SEL.marked_squares(f)['center_um'].copy()
-SEL.shift_mask(f, (5, -3))
-assert np.allclose(SEL.marked_squares(f)['center_um'] - c0, (5, -3))
-g = Grid(f); g.save(px_um)                                          # просмотр сохраняет сетку — сдвиг остаётся
-assert np.allclose(SEL.marked_squares(f)['center_um'] - c0, (5, -3))
-SEL.shift_mask(f, to=(0, 0))
-X = 1280 - mc.samples.CAR_W + 60
-M.run(m, fullscreen=False, _keys=[-1, ('car', X, 160), -1, ('mdrag0', 400, 400), ('mdrag', 440, 380), -1,
-                                  ('mdrag1', 440, 380), -1, -1])
-d1 = SEL.marked_squares(f)['center_um'] - c0
+m.goto(x=fw, y=fh / 2)
+A0 = tuple(m._regions[0]['A'])
+M.run(m, fullscreen=False, _keys=[-1, ('mdrag0', 400, 400), ('mdrag', 440, 380), -1, ('mdrag1', 440, 380), -1, -1])
+d1 = np.subtract(m._regions[0]['A'], A0)
 assert np.hypot(*d1) > 1, d1
-M.run(m, fullscreen=False, _keys=[-1, ('car', X, 160), -1, ('mdrag0', 400, 400), ('mdrag', 440, 380), -1,
-                                  ('mdrag1', 440, 380), -1, 26, -1, -1])                 # Ctrl+Z — назад
-d2 = SEL.marked_squares(f)['center_um'] - c0
-assert np.allclose(d2, d1, atol=0.01), (d1, d2)
-m.close(); print("Mask shift: Shift+drag, kept by the viewer, Ctrl+Z: OK", d1)
-
-# ------------------------------------------------------------------ 27. Маска сама садится на кресты (живой кадр <-> мозаика)
-import time as _t
-import microcontrol.manual as M
-SEL = sys.modules['microcontrol.selections']
-from microcontrol.mask import Grid
-from microcontrol import snap
-m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp()); m.focus()
-fw, fh = m.frame_size
-m.area = mc.Area(0, 0, 3 * fw, 2 * fh)
-f = m.scan(); mc.stitch(f, verbose=False)
-px_um = json.load(open(os.path.join(f, 'meta.json')))['pixel_size_um']
-g = Grid(f); p0 = np.array([150.0, 120.0]); a_ = 100 / px_um
-g.cr.add(p0); g.cr.add(p0 + (a_, 0)); g.cr.add(p0 + (0, a_))
-g.selected |= {(i, j) for i in range(4) for j in range(3)}; g.save(px_um)
-c = SEL.marked_squares(f)['center_um']
-m.goto(x=c[0] - m._off['x'], y=c[1] - m._off['y'])
-SEL.shift_mask(f, to=(6, -4))                                       # маска съехала
-class _Slow:                                                        # клавиши «ничего» ~1.5 с
-    def __init__(s, n): s.n = n
-    def __iter__(s): return s
-    def __next__(s):
-        s.n -= 1
-        if s.n < 0: raise StopIteration
-        _t.sleep(0.01); return -1
-M.run(m, fullscreen=False, _keys=[ord('j')] + list(_Slow(150)))   # J: проверять ещё и по картинке
-sh = SEL.marked_squares(f)['shift_um']
-assert np.hypot(*sh) < 1.0, sh
-m.close(); print("Mask snaps to the real crosses by itself:", np.round(sh, 2), "OK")
-
-# ------------------------------------------------------------------ 28. Без подтверждений: x у части маски — сразу, Ctrl+Z — назад
-import microcontrol.manual as M
-from microcontrol import samples as SM
-SEL = sys.modules['microcontrol.selections']
-from microcontrol.mask import Grid
-m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp()); m.focus()
-fw, fh = m.frame_size
-m.area = mc.Area(0, 0, 3 * fw, 2 * fh)
-f = m.scan(); mc.stitch(f, verbose=False)
+M.run(m, fullscreen=False, _keys=[-1, ('mdrag0', 400, 400), ('mdrag', 440, 380), -1, ('mdrag1', 440, 380), -1, 26, -1, -1])
+assert np.allclose(np.subtract(m._regions[0]['A'], A0), d1, atol=0.01)       # Ctrl+Z вернул второй сдвиг
+LY.move(m, 0, -d1[0], -d1[1]); SM.persist(m)
 px_um = json.load(open(os.path.join(f, 'meta.json')))['pixel_size_um']
 g = Grid(f); p0 = np.array([150.0, 120.0]); a_ = 100 / px_um
 g.cr.add(p0); g.cr.add(p0 + (a_, 0)); g.cr.add(p0 + (0, a_))
 g.selected |= {(0, 0), (1, 0)}; g.save(px_um)
-gj = lambda: json.load(open(os.path.join(f, 'grid.json')))['selected']
-M.run(m, fullscreen=False, _keys=[-1, -1, ('car', 1251, 163), -1, -1])
-assert gj() == [], gj()                                             # один щелчок — удалено
-M.run(m, fullscreen=False, _keys=[-1, -1, ('car', 1251, 163), -1, 26, -1, -1])   # нечего удалять; Ctrl+Z
-g = Grid(f); g.selected |= {(0, 0), (1, 0)}; g.save(px_um)
-M.run(m, fullscreen=False, _keys=[-1, -1, ('car', 1251, 163), -1, 26, -1, -1])
-assert sorted(map(tuple, gj())) == [(0, 0), (1, 0)], gj()
-m.close(); print("No confirmations: mask part deleted at once, Ctrl+Z brings it back: OK")
+gj = lambda: sorted(map(tuple, json.load(open(os.path.join(f, 'grid.json')))['selected']))
+LY.sync_brush(m); SM.persist(m)
+m._sel = next(k for k, r in enumerate(m._regions) if r.get('src'))
+M.run(m, fullscreen=False, _keys=[-1, ord('c'), -1, -1])            # C — удалить сразу; квадраты снимаются с кисти
+assert gj() == [] and not any(r.get('src') for r in m._regions), (gj(), m._regions)
+g = Grid(f); g.selected |= {(0, 0), (1, 0)}; g.save(px_um); LY.sync_brush(m); SM.persist(m)
+m._sel = next(k for k, r in enumerate(m._regions) if r.get('src'))
+M.run(m, fullscreen=False, _keys=[-1, ord('c'), -1, 26, -1, -1])    # и Ctrl+Z — назад: и выделение, и квадраты
+assert gj() == [(0, 0), (1, 0)] and any(r.get('src') for r in m._regions), (gj(), m._regions)
+m.close(); print("Shift+drag moves a selection, C deletes a brush selection at once, Ctrl+Z brings both back: OK")
 
-
-# ------------------------------------------------------------------ 29. Строгая геометрия маски: люфт столика учтён
+# ------------------------------------------------------------------ 27. Строгая геометрия маски: люфт столика учтён
 from microcontrol import snap
 m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp()); m.focus()
 m._world.backlash = {'x': 2, 'y': 2}                                # шаги, теряемые при смене направления
@@ -808,3 +777,22 @@ for sx, sy in [(1, 1), (-1, -1), (1, -1), (-1, 1)]:                  # подъ�
     d0, resp0, px0 = snap.offset(f, img, (m._p['x'], m._p['y']), (0, 0))
     assert np.hypot(*px) < 1.5 and np.hypot(*px0) > 8, (sx, sy, px, px0)
 m.close(); print("Strict mask geometry: backlash", g['backlash_um'], "um counted, error < 1.5 px from any side: OK")
+
+
+# ------------------------------------------------------------------ 28. Скан по контуру: только кадры, задевающие выделение
+from microcontrol import layers as LY
+from microcontrol import samples as SM
+m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp()); m.focus()
+fw, fh = m.frame_size
+SM.init_areas(m)
+reg = dict(uid='L', num=LY.new_num(m), obj=10, fw=fw, fh=fh, pts=[], parent=None, thumbs=[])
+L_ = LY.box(0, 0, 4 * fw, fh).union(LY.box(0, 0, fw, 3 * fh))      # «Г»: 4 кадра + 2 кадра вниз
+LY.set_geom(m, reg, L_)
+m._regions.append(reg); m._sel = 0
+n_bbox = SM._area(m, reg).size(m._frame_step(1 - mc.config.scan_overlap(10)))
+n_shape = SM.frames_of(m, 0)[0]
+f = m.scan()
+st = mc.storage.ScanData(f); nfr = len(st.index); st.close()
+assert nfr == n_shape < n_bbox[0] * n_bbox[1], (nfr, n_shape, n_bbox)
+r = mc.stitch(f, verbose=False)
+m.close(); print(f"Scan by the outline: {nfr} frames instead of {n_bbox[0] * n_bbox[1]}, stitched: OK")

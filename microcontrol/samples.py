@@ -99,6 +99,10 @@ def init_areas(m):
             rg['num'] = seq
         seq = max(seq, rg['num'])
     m._area_seq = seq
+    for k_, rg in enumerate(m._regions):                   # родитель — явно (дальше не пересчитывается)
+        if 'parent' not in rg:
+            gp_ = _geo_parent(m, k_)
+            rg['parent'] = m._regions[gp_]['uid'] if gp_ is not None else None
     if getattr(m, '_sel', None) is None or m._sel >= len(m._regions):
         m._sel = len(m._regions) - 1 if m._regions else None
 
@@ -137,6 +141,10 @@ def index_of(m, n):
 
 
 def _rect(m, reg):
+    """Охватывающий прямоугольник контура выделения (настоящие мкм)."""
+    from .layers import bounds
+    if reg.get('shape') or reg.get('kind') == 'group':
+        return bounds(m, reg)
     fw, fh = m.frame_size
     return rect(reg, fw, fh)
 
@@ -147,8 +155,18 @@ def obj(m, reg):
 
 
 def parent(m, k):
-    """Индекс выделения, внутри которого лежит выделение k (меньшее увеличение, ближайший слой; при равных —
-    меньшее по площади), или None."""
+    """Индекс выделения, в котором лежит выделение k (reg['parent'] — uid), или None. Новое (угол 1) — по месту."""
+    from .layers import idx
+    rg = m._regions[k] if k < len(m._regions) else m._pending
+    if rg is None:
+        return None
+    if 'parent' in rg:
+        return idx(m, rg['parent']) if rg['parent'] else None
+    return _geo_parent(m, k)
+
+
+def _geo_parent(m, k):
+    """Выделение меньшего увеличения, внутри которого лежит центр выделения k (по месту)."""
     rg = m._regions[k] if k < len(m._regions) else m._pending
     if rg is None or 'B' not in rg:
         return None
@@ -156,7 +174,7 @@ def parent(m, k):
     c = ((r[0] + r[2]) / 2, (r[1] + r[3]) / 2)
     best = None
     for i, o in enumerate(m._regions):
-        if i == k or obj(m, o) >= obj(m, rg):
+        if i == k or obj(m, o) >= obj(m, rg) or o.get('kind') == 'group':
             continue
         q = _rect(m, o)
         if inside(q, *c):
@@ -178,7 +196,14 @@ def frames_of(m, k):
         s_ = m.motor_step
         st = {a: max(1, math.floor(rg.get(f, 1.0) * (1 - scan_overlap(o)) / s_ + 1e-9)) * s_
               for a, f in (('x', 'fw'), ('y', 'fh'))}
-    return _area(m, rg).size(st)
+    if rg.get('kind') == 'group':
+        return 0, 0
+    if not rg.get('shape'):
+        return _area(m, rg).size(st)
+    from .layers import touches_frame
+    fw, fh = rg.get('fw', m.frame_size[0]), rg.get('fh', m.frame_size[1])
+    n = sum(touches_frame(m, rg, x + m._off['x'], y + m._off['y'], fw, fh) for _r, _c, x, y in _area(m, rg).grid(st))
+    return n, 1                                            # не прямоугольник: число кадров — первым
 
 
 def tree(m):
@@ -200,32 +225,22 @@ def siblings(m, p, par=None):
     """Выделения, лежащие прямо в выделении p (None — верхний слой), в порядке карусели: сначала по 'rank'
     (порядок, заданный перетаскиванием), новые — в конце, по объективу и номеру."""
     par = par if par is not None else {k: parent(m, k) for k in range(len(m._regions))}
+    par = {k: (v if v != k else None) for k, v in par.items()}
     key = lambda c: (m._regions[c].get('rank', 1e9), obj(m, m._regions[c]), m._regions[c]['num'])
     return sorted((c for c in range(len(m._regions)) if par[c] == p), key=key)
 
 
 def reorder_ok(m, src, dst):
     """Можно ли поставить src рядом с dst (один слой)."""
-    if isinstance(src, tuple) or isinstance(dst, tuple):
-        return isinstance(src, tuple) and isinstance(dst, tuple) and src[1] == dst[1]
     return max(src, dst) < len(m._regions) and parent(m, src) == parent(m, dst)
 
 
 def reorder(m, src, dst, after=False):
     """Перетаскивание в карусели: поставить src перед dst (after=True — после). src, dst — индексы выделений
-    одного слоя (лежат прямо в одном выделении) или части маски одного выделения ('m', k, i).
-    Возвращает сообщение; порядок хранится в sample.json ('rank', 'mask_order')."""
+    одного слоя (лежат прямо в одном выделении или группе).
+    Возвращает сообщение; порядок хранится в sample.json ('rank')."""
     if src == dst:
         return None
-    if isinstance(src, tuple) and isinstance(dst, tuple) and src[1] == dst[1]:
-        k = src[1]
-        ps = mask_parts(m, k)
-        ids = list(range(len(ps)))
-        ids.remove(src[2])
-        ids.insert(ids.index(dst[2]) + (1 if after else 0), src[2])
-        m._regions[k]['mask_order'] = [list(ps[i]['cells'][0]) for i in ids]
-        persist(m)
-        return f"Mask {num(m, k)}.{src[2] + 1} moved: now {num(m, k)}.{ids.index(src[2]) + 1}"
     if isinstance(src, int) and isinstance(dst, int) and max(src, dst) < len(m._regions) \
             and parent(m, src) == parent(m, dst):
         sib = siblings(m, parent(m, src))
@@ -235,14 +250,20 @@ def reorder(m, src, dst, after=False):
             m._regions[c]['rank'] = i
         persist(m)
         return f"Selection {num(m, src)} moved {'after' if after else 'before'} Selection {num(m, dst)}"
-    return "Drop it next to a card of the same layer: selections inside the same selection, masks of the same selection"
+    return "Drop it next to a card of the same layer (inside the same selection or group)"
+
+
+def title(m, k):
+    """«Selection 3» или «Group 4» (или имя, если дали)."""
+    rg = m._regions[k] if k < len(m._regions) else m._pending
+    return rg.get('name') or f"{'Group' if rg.get('kind') == 'group' else 'Selection'} {num(m, k)}"
 
 
 def layer_name(m, k):
     """«10x» или «50x inside Selection 1»."""
     rg = m._regions[k]
     p_ = parent(m, k)
-    return f"{obj(m, rg)}x" + (f", inside Selection {m._regions[p_]['num']}" if p_ is not None else "")
+    return f"{obj(m, rg)}x" + (f", inside {title(m, p_)}" if p_ is not None else "")
 
 
 def _area(m, reg):
@@ -254,7 +275,8 @@ def _area(m, reg):
 def area_at(m, x, y, any_objective=False):
     """Индекс выделения текущего объектива, в которое попадает точка (настоящие мкм), или None.
     any_objective=True — любого (сначала текущего объектива, потом с наибольшим увеличением)."""
-    hits = [k for k, rg in enumerate(m._regions) if inside(_rect(m, rg), x, y)]
+    from .layers import contains
+    hits = [k for k, rg in enumerate(m._regions) if rg.get('kind') != 'group' and contains(m, rg, x, y)]
     same = [k for k in hits if obj(m, m._regions[k]) == m.objective]
     if same or not any_objective:
         return same[0] if same else None
@@ -301,11 +323,16 @@ def corner(m, which, img=None):
                pts=[m._pending['pts'][0], fpt] + m._pending['pts'][1:],
                thumbs=m._pending['thumbs'][:1] + th, num=m._pending['num'], uid=m._pending['uid'],
                obj=m.objective, fw=m._pending.get('fw', m.frame_size[0]), fh=m._pending.get('fh', m.frame_size[1]))
-    bad = [rg['num'] for rg in m._regions if obj(m, rg) == m.objective and overlap(_rect(m, new), _rect(m, rg))]
+    from .layers import geom
+    gn = geom(m, new)
+    bad = [rg['num'] for rg in m._regions if rg.get('kind') != 'group' and obj(m, rg) == m.objective
+           and gn.intersection(geom(m, rg)).area > 1e-3]
     if bad:
         raise MicroControlError('E704', f"This selection overlaps Selection {', '.join(map(str, bad))} of the same "
                                         f"objective ({m.objective}x): choose corner 2 so that they do not overlap")
     m._regions.append(new)
+    gp_ = _geo_parent(m, len(m._regions) - 1)                         # лежит в том, где отметили (дальше — явно)
+    new['parent'] = m._regions[gp_]['uid'] if gp_ is not None else None
     m._area_seq = max(getattr(m, '_area_seq', 0), new['num'])         # номер больше не выдаётся
     m._pending, m._sel = None, len(m._regions) - 1
     persist(m)
@@ -369,7 +396,11 @@ def delete_area(m, k):
         return "New selection cancelled"
     if not 0 <= k < len(m._regions):
         raise MicroControlError('E703', "No such selection")
-    n_ = m._regions.pop(k)['num']
+    from .layers import delete_brush_cells, _drop
+    rg_ = m._regions[k]
+    n_ = rg_['num']
+    delete_brush_cells(m, rg_)
+    _drop(m, [k])
     m._sel = min(k, len(m._regions) - 1) if m._regions else None
     persist(m)
     return f"Selection {n_} deleted (the numbers of the others stay)"
@@ -387,11 +418,17 @@ def goto_area(m, k):
         raise MicroControlError('E703', "No such selection")
     reg = m._regions[k]
     rp = m.real_position
-    (ax, ay), (bx, by) = reg['A'], reg['B']
-    cx = min(max(rp.x, min(ax, bx)), max(ax, bx))                # ближайшая точка области ...
-    cy = min(max(rp.y, min(ay, by)), max(ay, by))
-    X, Y = snap(m, (ax, ay), (cx, cy))                            # ... и центр её клетки (кадра)
-    z_t = focus_z(reg['pts'], X, Y) - m._off['z'] if reg['pts'] and obj(m, reg) == m.objective else None
+    from .layers import geom
+    from shapely.geometry import Point
+    from shapely.ops import nearest_points
+    g = geom(m, reg)
+    if g.is_empty:
+        raise MicroControlError('E703', f"{title(m, k)} is empty")
+    c = nearest_points(g, Point(rp.x, rp.y))[0]                   # ближайшая точка контура ...
+    X, Y = snap(m, reg.get('A', (c.x, c.y)), (c.x, c.y))          # ... и центр её клетки (кадра)
+    if g.distance(Point(X, Y)) > 0.5 * min(m.frame_size):        # клетка вне контура (узкое место) — сама точка
+        X, Y = c.x, c.y
+    z_t = focus_z(reg['pts'], X, Y) - m._off['z'] if reg.get('pts') and obj(m, reg) == m.objective else None
     if z_t is not None and z_t < m.position.z:
         m.goto(z=z_t)
     x_t, y_t = X - m._off['x'], Y - m._off['y']
@@ -403,7 +440,7 @@ def goto_area(m, k):
         m.goto(z=min(z_t, m.position.z + m.max_move_z * 0.95))
     m._sel = k
     other = obj(m, reg) != m.objective
-    return (f"Selection {reg['num']} ({obj(m, reg)}x): at its nearest frame"
+    return (f"{title(m, k)} ({obj(m, reg)}x): at its nearest frame"
             + (f", focus Z {z_t:.1f} um (from its points)" if z_t is not None else "")
             + (f". It was marked with {obj(m, reg)}x, now {m.objective}x: Z not changed" if other else ""))
 
@@ -419,84 +456,6 @@ def drive_to(m, X, Y, z=None):
         m.goto(x=p0.x + (x_t - p0.x) * i_ / nleg, y=p0.y + (y_t - p0.y) * i_ / nleg)
     while z is not None and z > m.position.z + 0.5 * m.motor_step:
         m.goto(z=min(z, m.position.z + m.max_move_z * 0.95))
-
-
-def mask_of(m, k):
-    """Маска выделения k — выбранные квадраты его последней съёмки (dict из selections.marked_squares) или None.
-    Кэш — пока не изменился grid.json (карусель перерисовывается часто)."""
-    try:
-        from .project import Selection
-        from .selections import marked_squares
-        sc_ = Selection(m.sample, m._regions[k]).latest
-        if not sc_:
-            return None
-        gp = os.path.join(sc_.folder, 'grid.json')
-        key = (sc_.folder, os.path.getmtime(gp) if os.path.exists(gp) else 0)
-        if _MASKS.get(sc_.folder, (None,))[0] != key:
-            _MASKS[sc_.folder] = (key, marked_squares(sc_.folder))
-        return _MASKS[sc_.folder][1]
-    except Exception:
-        return None
-
-
-_MASKS = {}
-
-
-def mask_parts(m, k):
-    """Маска выделения k по частям: каждая замкнутая фигура (квадраты, соседние по стороне) — отдельно.
-    [dict(cells, um, folder)]: в порядке, заданном перетаскиванием ('mask_order'), остальные — большие первыми."""
-    mk = mask_of(m, k)
-    if not mk:
-        return []
-    idx = {c: i for i, c in enumerate(mk['cells'])}
-    left, parts = set(idx), []
-    while left:
-        st, comp = [left.pop()], []
-        while st:
-            c = st.pop()
-            comp.append(c)
-            for d in ((1, 0), (-1, 0), (0, 1), (0, -1)):
-                n = (c[0] + d[0], c[1] + d[1])
-                if n in left:
-                    left.remove(n)
-                    st.append(n)
-        parts.append(dict(cells=sorted(comp), um=[mk['um'][idx[c]] for c in sorted(comp)], folder=mk['folder']))
-    parts.sort(key=lambda p_: (-len(p_['cells']), p_['cells'][0]))
-    mo = [tuple(c) for c in m._regions[k].get('mask_order') or []]        # порядок, заданный перетаскиванием
-    return sorted(parts, key=lambda p_: mo.index(p_['cells'][0]) if p_['cells'][0] in mo else len(mo))
-
-
-def goto_mask(m, k, part=0):
-    """Поехать к ближайшему квадрату части маски выделения k (Z — по точкам фокуса выделения)."""
-    from .scan import focus_z
-    ps = mask_parts(m, k)
-    if not ps or part >= len(ps):
-        return "No mask"
-    rp = np.array([m.real_position.x, m.real_position.y])
-    c = min((q.mean(0) for q in ps[part]['um']), key=lambda c_: np.hypot(*(c_ - rp)))
-    reg = m._regions[k]
-    z = focus_z(reg['pts'], c[0], c[1]) - m._off['z'] if reg['pts'] and obj(m, reg) == m.objective else None
-    drive_to(m, c[0], c[1], z)
-    return f"Mask {reg['num']}.{part + 1}: at its nearest square ({len(ps[part]['cells'])} squares)"
-
-
-def delete_mask(m, k, part=0):
-    """Удалить часть маски выделения k: её квадраты снимаются с выбора в последней съёмке (остальные части
-    остаются; снятые — в grid.json, 'selected_removed')."""
-    import json as _j
-    ps = mask_parts(m, k)
-    if not ps or part >= len(ps):
-        return "No mask"
-    gp = os.path.join(ps[part]['folder'], 'grid.json')
-    d = _j.load(open(gp, encoding='utf-8'))
-    gone = {tuple(c) for c in ps[part]['cells']}
-    d['selected_removed'] = d.get('selected_removed', []) + [list(c) for c in sorted(gone)]
-    d['selected'] = [c for c in d.get('selected', []) if tuple(c) not in gone]
-    with open(gp, 'w', encoding='utf-8') as f:
-        _j.dump(d, f, indent=1)
-    _MASKS.pop(ps[part]['folder'], None)
-    return (f"Mask {m._regions[k]['num']}.{part + 1} deleted ({len(gone)} squares); "
-            f"{len(ps) - 1} other part{'s' if len(ps) != 2 else ''} stay")
 
 
 def areas_info(m):
@@ -610,13 +569,14 @@ def _button(img, x0, y0, x1, y1, label, hover=False, danger=False, active=False)
                 (245, 245, 245), 1, cv2.LINE_AA)
 
 
-def carousel(H, items, sel, scroll=0, title="Selections", go=True, hover=None):
+def carousel(H, items, sel, scroll=0, title="Selections", go=True, hover=None, tools=None):
     """Вертикальная карусель на всю высоту. items: [dict(title, lines, color, thumbs, confirm, depth, obj, muted)].
     depth — слой (матрёшка): карточка участка лежит внутри рамки выделения, в котором её отметили, а та — внутри
     своего; obj — объектив («50x») плашкой у заголовка; muted — объектив не тот, что стоит сейчас.
     hover — (x, y) мыши в координатах карусели (подсветка кнопок и карточки) или None.
     Возвращает (картинка H x CAR_W, области щелчков [(x0, y0, x1, y1, действие, индекс)], высота содержимого).
-    Действия: 'sel' — выбрать, 'go' — поехать (если go), 'del' — удалить (второй щелчок — подтверждение)."""
+    Действия: 'sel' — выбрать, 'go' — поехать (если go), 'del' — удалить; 'tool' — кнопка tools[i] под заголовком
+    (операции над отмеченными карточками). Карточка с chosen=True отмечена (Ctrl+щелчок)."""
     W = CAR_W
     img = np.full((H, W, 3), 30, np.uint8)
     hits = []
@@ -628,11 +588,11 @@ def carousel(H, items, sel, scroll=0, title="Selections", go=True, hover=None):
         cv2.rectangle(img, (W - tw - 26, 10), (W - 12, 30), (62, 62, 70), -1)
         cv2.putText(img, n_, (W - tw - 19, 25), _FONT, 0.45, (220, 220, 220), 1, cv2.LINE_AA)
     cv2.line(img, (0, 38), (W, 38), (62, 62, 70), 1)
-    top = 39
+    top = 39 + (30 if tools else 0)
     PAD, IND = 6, 10                                                      # поле рамки слоя, отступ на слой
     # 1) раскладка: высота карточек, место каждой рамки (своя карточка + все вложенные)
     depth = [min(4, it.get('depth', 0)) for it in items]
-    ys, y = [], 46 - scroll
+    ys, y = [], top + 7 - scroll
     for k, it in enumerate(items):
         th = it.get('thumbs') or []
         h_th = max((t.shape[0] for t in th), default=0)
@@ -671,6 +631,9 @@ def carousel(H, items, sel, scroll=0, title="Selections", go=True, hover=None):
         hv = over(ix, y0, x1c, y1)
         card[:] = np.clip(card.astype(int) * 0.55 + 30 * 0.45 + (16 if k == sel else (9 if hv else 0)), 0, 255).astype(np.uint8)
         cv2.rectangle(img, (ix, y0 + 2), (x1c, y1 - 2), c if k == sel else (66, 66, 74), 1)
+        if it.get('chosen'):                                               # отмечена для операции
+            cv2.rectangle(img, (ix + 1, y0 + 3), (x1c - 1, y1 - 3), (235, 235, 235), 1)
+            cv2.circle(img, (x1c - 8, y1 - 10), 4, (235, 235, 235), -1)
         cv2.rectangle(img, (ix, y0 + 2), (ix + 4, y1 - 2), c, -1)            # цветная полоска выделения
         bx1 = x1c - 7                                                      # кнопка «удалить»
         bx0 = bx1 - 22
@@ -692,6 +655,7 @@ def carousel(H, items, sel, scroll=0, title="Selections", go=True, hover=None):
             ox0 = tx + cv2.getTextSize(ttl, _FONT, fs_, 1)[0][0] + 7
             cv2.rectangle(img, (ox0, y0 + 9), (ox0 + ow + 8, y0 + 27), dim(c, 0.55), -1)
             cv2.putText(img, ob, (ox0 + 4, y0 + 23), _FONT, 0.42, (245, 245, 245), 1, cv2.LINE_AA)
+            hits.append((ox0, y0 + 9, ox0 + ow + 8, y0 + 27, 'obj', k))     # щелчок — другой объектив
         conf = it.get('confirm')
         _button(img, bx0, y0 + 8, bx1, y0 + 28, 'x', over(bx0, y0 + 8, bx1, y0 + 28), True, bool(conf))
         hits.append((bx0, y0 + 8, bx1, y0 + 28, 'del', k))
@@ -718,11 +682,19 @@ def carousel(H, items, sel, scroll=0, title="Selections", go=True, hover=None):
         hits.append((ix, y0, x1c, y1, 'sel', k))
     img[:top] = np.full((top, W, 3), 30, np.uint8)                        # шапка поверх прокрученного
     cv2.putText(img, title, (14, 25), _FONT, 0.6, (240, 240, 240), 1, cv2.LINE_AA)
+    tool_hits = []
+    if tools:                                                             # операции над отмеченными
+        x_ = 8
+        for i, t in enumerate(tools):
+            tw_ = cv2.getTextSize(t, _FONT, 0.45, 1)[0][0] + 12
+            _button(img, x_, 44, x_ + tw_, 64, t, over(x_, 44, x_ + tw_, 64))
+            tool_hits.append((x_, 44, x_ + tw_, 64, 'tool', i))
+            x_ += tw_ + 4
     if items:
         cv2.rectangle(img, (W - tw - 26, 10), (W - 12, 30), (62, 62, 70), -1)
         cv2.putText(img, n_, (W - tw - 19, 25), _FONT, 0.45, (220, 220, 220), 1, cv2.LINE_AA)
     cv2.line(img, (0, 38), (W, 38), (62, 62, 70), 1)
-    hits = [h_ for h_ in hits if h_[3] > top]
+    hits = [h_ for h_ in hits if h_[3] > top] + tool_hits
     if not items:
         cv2.putText(img, "none yet", (14, 66), _FONT, 0.45, (150, 150, 150), 1, cv2.LINE_AA)
         cv2.putText(img, "keys 1 and 2: corners", (14, 88), _FONT, 0.4, (120, 120, 125), 1, cv2.LINE_AA) \

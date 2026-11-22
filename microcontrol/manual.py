@@ -51,7 +51,8 @@ HELP = ["Shift+Esc: Exit (or close the window)", "P: Hide / show the left panel"
         "L: Light on / off   I: Laser on / off   W: White balance (aim at an empty place)   Space: Picture",
         "R: Ruler: click two points (distance, um)   0: Zero here   Shift+0: Real coordinates",
         "Wheel: zoom   Drag (middle button too): move the zoomed picture   Z: whole frame",
-        "Masks lie strictly by the scan geometry (backlash counted)   J: also check / snap by the picture   Shift+drag over a mask: move it by hand",
+        "Selections are layers: Ctrl+click cards to mark them, then Merge / Minus / Overlap / Group / Ungroup above the list",
+        "Squares chosen with the brush in the view become selections (one per figure, next objective)   Shift+drag over a selection: move it",
         "T: Turn the camera picture by 180 degrees (remembered)",
         "[ / ]: Arrows left-right / up-down the other way; the mini map always follows the arrows (remembered)",
         "O: check with the camera which way the picture moves",
@@ -229,7 +230,11 @@ def live_map(m, shape, W, H, zoom=1.0, zc=None, rot=0.0):
     ih, iw = shape[:2]
     k, zc, i2v, v2i = zoom_view(shape, W, H, zoom, zc, rot)
     K, d = m._pixels_per_step(), m.motor_step
-    P = np.array([m._p['x'], m._p['y']], float) * d
+    P = np.array([m._p['x'], m._p['y']], float)
+    B = getattr(m, '_bl', None)                             # люфт (шаги на знак подхода): где столик на самом деле
+    if B is not None:
+        P = P + np.asarray(B, float) @ np.array([m._dir.get('x', 0), m._dir.get('y', 0)], float)
+    P = P * d
     c = np.array([iw / 2, ih / 2])
     to = lambda S: tuple(i2v(c + K @ ((P - np.asarray(S)) / d)))
     back = lambda q: P - d * np.linalg.solve(K, v2i(q) - c)
@@ -353,7 +358,17 @@ def minimap(img, m, A, B, size=MAP_W, zcolor=None, others=(), right=0):
                 if show:
                     cv2.line(sub, (x_a, y_a), (x_b, y_b), line, 2)
     gx1_, gy1_ = gx0 + int(gw), gy0 + int(gh)
-    for (rx0, ry0, rx1, ry1), oc, olab in others:                        # другие области — своим цветом
+    for (rx0, ry0, rx1, ry1), oc, olab, *rr_ in others:                 # другие области — своим цветом
+        if rr_ and rr_[0]:                                               # контур (не прямоугольник): как есть
+            ovm = sub.copy()
+            for ring_ in rr_[0]:
+                pf = np.array([to(*f(x_, y_)) for x_, y_ in ring_], float)
+                pts = np.int32(np.round(pf * 16))
+                cv2.fillPoly(ovm, [pts], SM.dim(oc, 0.5), cv2.LINE_AA, 4)
+                cv2.polylines(ovm, [pts], True, oc, 1, cv2.LINE_AA, 4)
+            g1 = (gx0 + int(gw), gy0 + int(gh))
+            sub[gy0:g1[1], gx0:g1[0]] = cv2.addWeighted(ovm, 0.75, sub, 0.25, 0)[gy0:g1[1], gx0:g1[0]]
+            continue
         corners_ = [to(*f(xx, yy)) for xx, yy in ((rx0, ry0), (rx1, ry0), (rx0, ry1), (rx1, ry1))]
         u0, u1 = min(c_[0] for c_ in corners_), max(c_[0] for c_ in corners_)
         v0, v1 = min(c_[1] for c_ in corners_), max(c_[1] for c_ in corners_)
@@ -365,22 +380,6 @@ def minimap(img, m, A, B, size=MAP_W, zcolor=None, others=(), right=0):
             cv2.rectangle(sub, (int(cu0), int(cv0)), (int(cu1), int(cv1)), oc, 2 if not olab else 1)
             if olab and cu1 - cu0 > 26 and cv1 - cv0 > 14:              # другой объектив (слой): подпись
                 cv2.putText(sub, olab, (int(cu0) + 3, int(cv0) + 12), font, 0.36, oc, 1, cv2.LINE_AA)
-    try:                                                                 # выбранные в просмотре квадраты всех сканов:
-        from .selections import marked_all                               # тёмно-зелёные, своей формы и масштаба
-        polys = marked_all(m.dirs['scans'])
-    except Exception:
-        polys = []
-    if polys:
-        ovm = sub.copy()
-        gx1m, gy1m = gx0 + gw, gy0 + gh
-        for q, sn, _f in polys:                                          # цвет своего выделения, темнее
-            pf = np.array([to(*f(x_ - m._off['x'], y_ - m._off['y'])) for x_, y_ in q], float)
-            if pf[:, 0].max() < gx0 or pf[:, 0].min() > gx1m or pf[:, 1].max() < gy0 or pf[:, 1].min() > gy1m:
-                continue
-            pts = np.int32(np.round(pf * 16))                            # с точностью 1/16 px: ровные наклонные края
-            cv2.fillPoly(ovm, [pts], SM.dim(SM.color(sn - 1), 0.5), cv2.LINE_AA, 4)
-            cv2.polylines(ovm, [pts], True, SM.dim(SM.color(sn - 1), 0.8), 1, cv2.LINE_AA, 4)
-        sub[gy0:int(gy1m), gx0:int(gx1m)] = cv2.addWeighted(ovm, 0.75, sub, 0.25, 0)[gy0:int(gy1m), gx0:int(gx1m)]
     a_, b_ = to(px - sx / 2, py - sy / 2), to(px + sx / 2, py + sy / 2)  # жёлтое — кадр = клетка карты
     ov_ = sub.copy()
     cv2.rectangle(ov_, (int(max(a_[0], gx0)), int(max(a_[1], gy0))),
@@ -532,16 +531,27 @@ def _run(m, fullscreen=False, _keys=None):
     L.event('MAN-001', f"Manual mode at {m.position}.")
     show_help, msg, msg_t, sharp, n = False, "H: Help.  Tab or click a field to edit it", time.monotonic(), 0.0, 0
     SM.init_areas(m)                                     # области образцов (настоящие мкм)
-    car = dict(scroll=0, hits=[], confirm=None, t=0.0)   # карусель справа
-    mdr = dict(on=False)                                 # Shift + тянуть: сдвиг маски (папка съёмки, начало, сдвиг)
-    mshift, mshift0 = {}, {}                             # сдвиги масок за сеанс (для Ctrl+Z) и исходные
-    msel, msel0 = {}, {}                                 # выбранные квадраты масок (удаление части — Ctrl+Z)
+    car = dict(scroll=0, hits=[], confirm=None, t=0.0, multi=[], tools=[])   # карусель справа; multi — отмеченные
+    mdr = dict(on=False)                                 # Shift + тянуть: сдвиг выделения (индекс, начало, сдвиг)
+    gsel, gsel0 = {}, {}                                 # квадраты кисти в съёмках (что тронули за сеанс) — для Ctrl+Z
 
-    def mask_sel(fd_):
+    def grid_state(fd_):
         try:
-            return [list(c_) for c_ in json.load(open(os.path.join(fd_, 'grid.json'), encoding='utf-8')).get('selected', [])]
+            d_ = json.load(open(os.path.join(fd_, 'grid.json'), encoding='utf-8'))
+            return dict(selected=d_.get('selected', []), brush_detached=d_.get('brush_detached', []))
         except (OSError, ValueError):
-            return []
+            return {}
+
+    def note_brush(reg):
+        """Перед операцией над выделением кисти — запомнить квадраты его съёмки (Ctrl+Z их вернёт)."""
+        if reg.get('src'):
+            fd_ = os.path.join(m.sample.folder, reg['src'])
+            gsel0.setdefault(fd_, grid_state(fd_))
+            car.setdefault('noted', set()).add(fd_)
+
+    def noted_done():
+        for fd_ in car.pop('noted', set()):
+            gsel[fd_] = grid_state(fd_)
     A = B = None
     if not getattr(m, '_manual_steps', None):
         m._manual_steps = default_steps(m)
@@ -591,7 +601,7 @@ def _run(m, fullscreen=False, _keys=None):
             return
         if x >= W - SM.CAR_W and not zm['pan']:          # карусель образцов справа
             if ev == cv2.EVENT_LBUTTONDOWN:
-                clicks.append(('car', x, y))
+                clicks.append(('car', x, y, bool(flags & cv2.EVENT_FLAG_CTRLKEY)))
             elif ev == cv2.EVENT_MOUSEWHEEL:
                 clicks.append(('carw', x, y, wheel_delta(flags)))
             return
@@ -650,6 +660,71 @@ def _run(m, fullscreen=False, _keys=None):
         nums = [n_ for n_, kk, _p in SM.numbered(m) if kk == k]
         return (f"{nums[0]}-{nums[-1]}" if len(nums) > 1 else str(nums[0])) if nums else "-"
 
+    def stage_backlash():
+        """Люфт столика (шаги на знак подхода, 2x2) — по сшивке съёмки образца с наибольшим числом кадров."""
+        from .project import Selection
+        from .snap import geometry
+        best = None
+        for rg_ in m._regions:
+            if rg_.get('kind') == 'group':
+                continue
+            sc_ = Selection(m.sample, rg_).latest
+            if not sc_ or not os.path.exists(os.path.join(sc_.folder, 'join', 'positions_all.csv')):
+                continue
+            g_ = geometry(sc_.folder)
+            if len(g_['p']) >= 4 and (best is None or len(g_['p']) > best[0]):
+                best = (len(g_['p']), g_['B'])
+        return best[1] if best else getattr(m, '_bl', None)
+
+    def cycle_objective(k):
+        """Объектив выделения — следующий из списка (только пока его не снимали: папка съёмок — по объективу)."""
+        from .project import Selection
+        from .config import OBJECTIVES
+        rg_ = m._regions[k]
+        if rg_.get('kind') == 'group':
+            return "A group has no objective"
+        if Selection(m.sample, rg_).latest:
+            return f"{SM.title(m, k)} is already scanned with {SM.obj(m, rg_)}x: mark a new selection for another objective"
+        obs = sorted(OBJECTIVES)
+        o_ = obs[(obs.index(SM.obj(m, rg_)) + 1) % len(obs)] if SM.obj(m, rg_) in obs else obs[0]
+        k_ = m.objective / o_
+        rg_.update(obj=o_, fw=m.frame_size[0] * k_, fh=m.frame_size[1] * k_)
+        if rg_.get('shape'):                               # углы A, B — по кадру нового объектива
+            from .layers import geom, set_geom
+            set_geom(m, rg_, geom(m, rg_))
+        SM.persist(m)
+        return f"{SM.title(m, k)}: {o_}x (click the objective again for the next one)"
+
+    def car_tools():
+        """Кнопки операций под заголовком — по отмеченным карточкам."""
+        mk_ = [k_ for k_ in car['multi'] if k_ < len(m._regions)]
+        car['multi'] = mk_
+        if len(mk_) >= 2:
+            car['tools'] = ["Merge", "Minus", "Overlap", "Group"]
+        elif len(mk_) == 1:
+            car['tools'] = ["Ungroup"] if m._regions[mk_[0]].get('kind') == 'group' else ["Group"]
+        else:
+            car['tools'] = []
+        return car['tools']
+
+    def layer_op(name):
+        """Операция над отмеченными выделениями (первое отмеченное — цель)."""
+        from . import layers as LY
+        fn = {"Merge": LY.union, "Minus": LY.subtract, "Overlap": LY.intersect, "Group": LY.group,
+              "Ungroup": LY.ungroup}[name]
+        ks_ = list(car['multi'])
+        for k_ in ks_:                                 # квадраты кисти — для Ctrl+Z (операция их отпускает)
+            note_brush(m._regions[k_])
+        try:
+            r_ = fn(m, ks_)
+        except ValueError as e:
+            return str(e)
+        car['multi'] = []
+        noted_done()
+        SM.persist(m)
+        L.event('MAN-012', r_ + ".")
+        return r_ + " (Ctrl+Z: back)"
+
     def car_clamp(v):
         return int(max(0, min(car.get('content', 0) - H + 20, v)))
 
@@ -668,24 +743,25 @@ def _run(m, fullscreen=False, _keys=None):
         for k, depth in SM.tree(m):
             reg = m._regions[k]
             o_ = SM.obj(m, reg)
-            x0_, y0_, x1_, y1_ = reg_rect(reg)
+            x0_, y0_, x1_, y1_ = SM._rect(m, reg)
+            mm_ = f"{(x1_ - x0_) / 1000:.2f} x {(y1_ - y0_) / 1000:.2f} mm"
+            if reg.get('kind') == 'group':
+                nk_ = sum(1 for r_ in m._regions if r_.get('parent') == reg['uid'])
+                items.append(dict(title=SM.title(m, k), color=SM.col(m, k), depth=depth, chosen=k in car['multi'],
+                                  lines=[f"{nk_} inside, {mm_}"]))
+                order.append(k)
+                continue
             nx_, ny_ = SM.frames_of(m, k)                  # кадры и время — для объектива этого выделения
-            fr_ = (f"{nx_} x {ny_} = {nx_ * ny_} frames, " +
-                   TM.fmt(TM.estimate(m, nx_ * ny_, 'points' if m._use_fp and reg['pts'] else 'off', o_)[0]))
-            items.append(dict(title=f"Selection {SM.num(m, k)}", obj=f"{o_}x", color=SM.col(m, k),
+            nfr_ = nx_ * ny_
+            fr_ = (f"{nx_} x {ny_} = {nfr_} frames, " if ny_ > 1 or not reg.get('shape') else f"{nfr_} frames, ") + \
+                TM.fmt(TM.estimate(m, nfr_, 'points' if m._use_fp and reg['pts'] else 'off', o_)[0])
+            items.append(dict(title=SM.title(m, k), obj=f"{o_}x", color=SM.col(m, k), chosen=k in car['multi'],
                               thumbs=reg.get('thumbs', []), confirm=car['confirm'] == k, depth=depth,
                               muted=o_ != m.objective,
-                              lines=[fr_, f"{(x1_ - x0_) / 1000:.2f} x {(y1_ - y0_) / 1000:.2f} mm",
+                              lines=[fr_, mm_ + (",  brush" if reg.get('src') else ""),
                                      f"focus points {first_num(k)}"]
                               + ([f"put {o_}x in place to scan it"] if o_ != m.objective else [])))
             order.append(k)
-            for pi_, part in enumerate(SM.mask_parts(m, k)):   # маска: каждая замкнутая фигура — своя карточка
-                P_ = np.vstack(part['um'])
-                items.append(dict(title=f"Mask {SM.num(m, k)}.{pi_ + 1}", obj=f"{o_}x", color=SM.dim(SM.col(m, k), 0.7),
-                                  confirm=car['confirm'] == ('m', k, pi_), depth=depth + 1, muted=o_ != m.objective,
-                                  lines=[f"{len(part['cells'])} square{'s' if len(part['cells']) > 1 else ''}, "
-                                         f"{np.ptp(P_[:, 0]) / 1000:.2f} x {np.ptp(P_[:, 1]) / 1000:.2f} mm"]))
-                order.append(('m', k, pi_))
         if m._pending:
             k = len(m._regions)
             items.append(dict(title=f"Selection {SM.num(m, k)}", color=SM.col(m, k), thumbs=m._pending.get('thumbs', []),
@@ -901,7 +977,11 @@ def _run(m, fullscreen=False, _keys=None):
 
     def delete_region(k):
         nonlocal msg
+        if k < len(m._regions):
+            note_brush(m._regions[k])
         msg = SM.delete_area(m, k)
+        car['multi'] = []
+        noted_done()
         L.event('MAN-003', msg + ".")
         car['confirm'] = None
 
@@ -956,17 +1036,13 @@ def _run(m, fullscreen=False, _keys=None):
     def h_sig():
         strip = lambda r: None if r is None else {k_: v_ for k_, v_ in r.items() if k_ != 'thumbs'}
         return json.dumps([[strip(r) for r in m._regions], strip(m._pending), m._sel, getattr(m, '_area_seq', 0),
-                           m._p, m.objective, m._off, mshift, msel], sort_keys=True, default=str)
+                           m._p, m.objective, m._off, gsel], sort_keys=True, default=str)
 
     def h_snap():
         return dict(regions=copy.deepcopy(m._regions), pending=copy.deepcopy(m._pending), sel=m._sel,
-                    seq=getattr(m, '_area_seq', 0), p=dict(m._p), obj=m.objective, off=dict(m._off), ms=dict(mshift), sel_=copy.deepcopy(msel))
+                    seq=getattr(m, '_area_seq', 0), p=dict(m._p), obj=m.objective, off=dict(m._off), gs=copy.deepcopy(gsel))
 
     def h_label(a_, b_):
-        if a_.get('sel_') != b_.get('sel_'):
-            return "delete a mask part"
-        if a_.get('ms') != b_.get('ms'):
-            return "move a mask"
         if a_['p'] != b_['p'] and json.dumps(a_['regions'], default=str) == json.dumps(b_['regions'], default=str):
             s_ = m.motor_step
             return f"move to X {b_['p']['x'] * s_ - b_['off']['x']:.0f}, Y {b_['p']['y'] * s_ - b_['off']['y']:.0f}, " \
@@ -980,33 +1056,18 @@ def _run(m, fullscreen=False, _keys=None):
         что Go: сначала вниз, потом X/Y отрезками, потом вверх)."""
         m._regions[:] = copy.deepcopy(t['regions'])
         m._pending, m._sel, m._area_seq = copy.deepcopy(t['pending']), t['sel'], t['seq']
-        for fd_, s0_ in msel0.items():                      # удалённые части масок
-            to_ = t.get('sel_', {}).get(fd_, s0_)
-            if mask_sel(fd_) != to_:
+        for fd_, s0_ in gsel0.items():                      # квадраты кисти в съёмках
+            to_ = t.get('gs', {}).get(fd_, s0_)
+            if grid_state(fd_) != to_:
                 gp_ = os.path.join(fd_, 'grid.json')
                 d_ = json.load(open(gp_, encoding='utf-8'))
-                d_['selected'] = to_
+                d_.update(to_)
                 with open(gp_, 'w', encoding='utf-8') as f_:
                     json.dump(d_, f_, indent=1)
-                SM._MASKS.pop(fd_, None)
-                import importlib
-                SEL_ = importlib.import_module('.selections', __package__)   # mc.selections — функция-список
-                SEL_._SQ.pop(fd_, None)
-                SEL_._ALL.clear()
-            if fd_ in t.get('sel_', {}):
-                msel[fd_] = to_
+            if fd_ in t.get('gs', {}):
+                gsel[fd_] = to_
             else:
-                msel.pop(fd_, None)
-        for fd_, sh0_ in mshift0.items():                   # сдвиги масок
-            to_ = t.get('ms', {}).get(fd_, sh0_)
-            if mshift.get(fd_, sh0_) != to_:
-                from .selections import shift_mask
-                shift_mask(fd_, to=to_)
-                SM._MASKS.pop(fd_, None)
-            if fd_ in t.get('ms', {}):
-                mshift[fd_] = to_
-            else:
-                mshift.pop(fd_, None)
+                gsel.pop(fd_, None)
         if t['obj'] != m.objective:
             m.objective = t['obj']
             d0 = default_steps(m)
@@ -1024,73 +1085,22 @@ def _run(m, fullscreen=False, _keys=None):
             while tgt['z'] > m.position.z + 0.5 * m.motor_step:
                 m.goto(z=min(tgt['z'], m.position.z + m.max_move_z * 0.95))
 
-    snp = dict(on=False, thr=None, res=None, pos=None, t=0.0, done=set())   # маски сами садятся на кресты (J)
-
-    def snap_step():
-        """Столик постоял — сравнить живой кадр с мозаикой маски рядом (в потоке) и поправить её сдвиг."""
-        if snp['res'] is not None:                         # результат потока
-            fd_, d_, r_ = snp.pop('res')
-            t0_ = snp.pop('t0', 0.0)
-            snp['res'], snp['thr'] = None, None
-            if snp.get('hand', {}).get(fd_, -1) > t0_:     # пока считали, маску сдвинули рукой — её слово
-                return None
-            lim_ = 0.45 * min(m.frame_size)
-            from .selections import marked_squares, shift_mask
-            mk_ = marked_squares(fd_)
-            cur_ = np.asarray(mk_['shift_um'], float) if mk_ else np.zeros(2)
-            if d_ is not None and np.hypot(*d_) < lim_ and np.hypot(*(d_ - cur_)) > 0.3:   # d_ — каким быть сдвигу
-                if fd_ not in mshift0:
-                    mshift0[fd_] = tuple(cur_)
-                mshift[fd_] = tuple(map(float, shift_mask(fd_, to=d_)))
-                d_ = d_ - cur_
-                SM._MASKS.pop(fd_, None)
-                L.event('MAN-010', f"Mask of {fd_} snapped to the crosses by {d_[0]:+.1f}, {d_[1]:+.1f} um "
-                                   f"(match {r_:.2f}).")
-                return f"Mask snapped to the crosses: {d_[0]:+.1f}, {d_[1]:+.1f} um (J: off, Ctrl+Z: back)"
-            return None
-        if not snp['on'] or snp['thr'] is not None or mdr['on'] or mdr.get('fd'):
-            return None
-        key_ = (m._p['x'], m._p['y'], m._p['z'], m.objective)
-        if key_ != snp['pos']:
-            snp['pos'], snp['t'] = key_, time.monotonic()
-            return None
-        if time.monotonic() - snp['t'] < 0.6:              # кадр — уже после остановки
-            return None
-        from .selections import marked_all
-        P_ = np.array([m._p['x'], m._p['y']], float) * m.motor_step
-        r_ = 0.75 * max(m.frame_size)
-        fds = [fd for fd in dict.fromkeys(fd for q, sn, fd in marked_all(m.dirs['scans']) if np.abs(q.mean(0) - P_).max() < r_)
-               if (key_, fd) not in snp['done']]
-        if not fds:
-            return None
-        fd_ = fds[0]
-        snp['done'].add((key_, fd_))
-        img_, st_ = (live.img.copy() if live is not None else m.image(0)), m.motor_step
-        s_ = (m._dir['x'], m._dir['y'])
-
-        def work():
-            try:
-                from .snap import offset
-                d_, r2_, px_ = offset(fd_, img_, (P_[0] / st_, P_[1] / st_), s_)
-                L.event('MAN-010', f"Mask of {fd_} vs the camera: " +
-                        (f"{px_[0]:+.1f}, {px_[1]:+.1f} px (match {r2_:.2f})" if d_ is not None else str(r2_)))
-            except Exception as e:
-                d_, r2_ = None, str(e)
-            snp['res'] = (fd_, d_, r2_ if d_ is not None else 0.0)
-        snp['t0'] = time.monotonic()
-        snp['thr'] = threading.Thread(target=work, daemon=True)
-        snp['thr'].start()
-        return None
-
     h_last = (h_sig(), h_snap())
     while True:
-        try:
-            m_ = snap_step()
-            if m_:
-                msg, msg_t = m_, time.monotonic()
-        except Exception as e:
-            snp['thr'], snp['res'] = None, None
-            L.event('MAN-010', f"Mask snap skipped: {e}")
+        if time.monotonic() - car.get('sync_t', 0) > 1.0:   # кисть в просмотре -> выделения (раз в секунду)
+            car['sync_t'] = time.monotonic()
+            try:
+                if time.monotonic() - car.get('bl_t', -99) > 5:   # люфт столика — из сшивки последних съёмок
+                    car['bl_t'] = time.monotonic()
+                    m._bl = stage_backlash()
+                from .layers import sync_brush
+                r_ = sync_brush(m)
+                if r_:
+                    SM.persist(m)
+                    msg, msg_t = r_, time.monotonic()
+                    L.event('MAN-013', r_ + ".")
+            except Exception as e:
+                L.debug('MAN-013', f"Brush sync skipped: {e}")
         sg_ = h_sig()
         if sg_ != h_last[0]:                              # что-то сделано: в историю
             new_ = h_snap()
@@ -1119,32 +1129,28 @@ def _run(m, fullscreen=False, _keys=None):
             base = render(img, Wl, H, kz, zm['c'], rot)
             view = np.zeros((H, W, 3), np.uint8)
             view[:, :Wl] = base
-            try:                                           # выбранные в просмотре квадраты — тёмно-зелёным на кадре
-                from .selections import marked_all
-                polys_ = marked_all(m.dirs['scans'])
-            except Exception:
-                polys_ = []
-            if polys_:
-                rp_ = np.array([m.real_position.x, m.real_position.y])
-                rad_ = 1.5 * max(m.frame_size) / max(1.0, zm['z']) + 2 * max(m.frame_size)
-                ov_ = None
-                near_ = list(dict.fromkeys(fd for q, sn, fd in polys_ if np.abs(q.mean(0) - rp_).max() < rad_))
-                from .snap import live_polys                # строго по геометрии съёмки (люфт, кадры рядом)
-                strict_ = []
-                for fd in near_:
-                    try:
-                        strict_ += live_polys(fd, (m._p['x'], m._p['y']), (m._dir['x'], m._dir['y']), img.shape,
-                                              mdr['d'] if mdr.get('fd') == fd else (0.0, 0.0))
-                    except Exception as e:
-                        L.debug('MAN-010', f"Mask of {fd}: {e}")
-                for q, sn in strict_:                       # цвет своего выделения, темнее
-                    pts = np.int32(np.round(np.array([i2v(u_) for u_ in q], float) * 16))   # 1/16 px
-                    if ov_ is None:
-                        ov_ = view[:, :Wl].copy()
-                    cv2.fillPoly(ov_, [pts], SM.dim(SM.color(sn - 1), 0.45), cv2.LINE_AA, 4)
-                    cv2.polylines(view[:, :Wl], [pts], True, SM.dim(SM.color(sn - 1), 0.85), 1, cv2.LINE_AA, 4)
-                if ov_ is not None:
-                    view[:, :Wl] = cv2.addWeighted(ov_, 0.3, view[:, :Wl], 0.7, 0)
+            rp_ = np.array([m.real_position.x, m.real_position.y])     # контуры выделений на кадре (строго:
+            rad_ = 1.5 * max(m.frame_size) / max(1.0, zm['z']) + 2 * max(m.frame_size)   # с учётом люфта)
+            ov_ = None
+            from .layers import rings
+            for k_, rg_ in enumerate(m._regions):
+                if rg_.get('kind') == 'group':
+                    continue
+                x0_, y0_, x1_, y1_ = SM._rect(m, rg_)
+                if x1_ < rp_[0] - rad_ or x0_ > rp_[0] + rad_ or y1_ < rp_[1] - rad_ or y0_ > rp_[1] + rad_:
+                    continue
+                c_k = SM.col(m, k_)
+                d_ = mdr['d'] if mdr.get('k') == k_ else np.zeros(2)
+                for ring_ in rings(m, rg_):
+                    pts = np.int32(np.round(np.array([to_v(S_ + d_) for S_ in ring_], float) * 16))   # 1/16 px
+                    if rg_.get('src') or rg_.get('shape'):
+                        if ov_ is None:
+                            ov_ = view[:, :Wl].copy()
+                        cv2.fillPoly(ov_, [pts], SM.dim(c_k, 0.5), cv2.LINE_AA, 4)
+                    cv2.polylines(view[:, :Wl], [pts], True, c_k if k_ == m._sel else SM.dim(c_k, 0.85),
+                                  2 if k_ == m._sel else 1, cv2.LINE_AA, 4)
+            if ov_ is not None:
+                view[:, :Wl] = cv2.addWeighted(ov_, 0.3, view[:, :Wl], 0.7, 0)
             if rul['on'] and rul['pts']:                    # линейка (точки — на образце: едут вместе с ним)
                 a_ = to_v(rul['pts'][0])
                 if len(rul['pts']) == 2:
@@ -1334,16 +1340,20 @@ def _run(m, fullscreen=False, _keys=None):
             UI.facts(view, [t_.strip() for t_ in line.split("    ") if t_.strip()] + ["H: keys"], 14, H - 10, FS)
             if msg and time.monotonic() - msg_t < 5:
                 UI.toast(view, msg, Wl / 2, H - bh_ - 20, FS, 'err' if msg.startswith('[E') else 'ok', Wl - 60)
-            others = [(tuple(np.r_[work(reg_rect(rg)[:2]), work(reg_rect(rg)[2:])]), SM.col(m, k_),
-                       f"{SM.obj(m, rg)}x" if SM.obj(m, rg) != m.objective else "")
-                      for k_, rg in sorted(enumerate(m._regions), key=lambda t: SM.obj(m, t[1])) if k_ != zk]
+            from .layers import rings as _rings
+            others = [(tuple(np.r_[work(SM._rect(m, rg)[:2]), work(SM._rect(m, rg)[2:])]), SM.col(m, k_),
+                       f"{SM.obj(m, rg)}x" if SM.obj(m, rg) != m.objective else "",
+                       [r_ - (m._off['x'], m._off['y']) for r_ in _rings(m, rg)] if rg.get('shape') else None)
+                      for k_, rg in sorted(enumerate(m._regions), key=lambda t: SM.obj(m, t[1]))
+                      if k_ != zk and rg.get('kind') != 'group']
             minimap(view, m, A, B, zcolor=SM.col(m, zk) if zk is not None else None, others=others, right=SM.CAR_W)
             items = car_items()
             selk_ = len(m._regions) if m._pending else m._sel
             sel_ = car['order'].index(selk_) if selk_ in car['order'] else None
             hx_ = hover[0]
             hv_ = (hx_[0] - (W - SM.CAR_W), hx_[1]) if hx_ is not None and hx_[0] >= W - SM.CAR_W else None
-            pan_, hits_, cont_ = SM.carousel(H, items, sel_, car['scroll'], title="Selections", hover=hv_)
+            pan_, hits_, cont_ = SM.carousel(H, items, sel_, car['scroll'], title="Selections", hover=hv_,
+                                             tools=car_tools())
             car['hits'], car['content'] = hits_, cont_
             car['scroll'] = car_clamp(car['scroll'])
             dr_ = car.get('drag')
@@ -1382,23 +1392,21 @@ def _run(m, fullscreen=False, _keys=None):
                 if it_:
                     menu_do(it_)
                 continue
-            if c_[0] in ('mdrag0', 'mdrag', 'mdrag1'):             # Shift + тянуть: сдвинуть маску
+            if c_[0] in ('mdrag0', 'mdrag', 'mdrag1'):             # Shift + тянуть: сдвинуть выделение
                 if back_v is None:
                     continue
                 q_ = np.array(back_v((c_[1] + 0.5, c_[2] + 0.5)), float)
                 if c_[0] == 'mdrag0':
-                    from .selections import marked_all
-                    fd_ = next((fd for q, sn, fd in marked_all(m.dirs['scans'], every=0)
-                                if cv2.pointPolygonTest(np.float32(q), (float(q_[0]), float(q_[1])), False) >= 0), None)
-                    if fd_ is None and car.get('mask') is not None and car['mask'] < len(m._regions):
-                        mk_ = SM.mask_of(m, car['mask'])
-                        fd_ = mk_['folder'] if mk_ else None
-                    if fd_ is None:                                 # не над маской — как обычно, сдвиг картинки
-                        mdr.update(fd=None)
+                    from .layers import contains
+                    hit_ = [k_ for k_, rg_ in enumerate(m._regions)
+                            if rg_.get('kind') != 'group' and contains(m, rg_, q_[0], q_[1])]
+                    k_ = max(hit_, key=lambda k2: SM.obj(m, m._regions[k2])) if hit_ else None   # самое верхнее
+                    if k_ is None:                                  # не над выделением — сдвиг картинки
+                        mdr.update(k=None)
                         zm['pan'] = (np.array(c_[1:3], float), np.array(zm['c'], float))
                     else:
-                        mdr.update(fd=fd_, p0=q_, d=np.zeros(2))
-                elif not mdr.get('fd'):
+                        mdr.update(k=k_, p0=q_, d=np.zeros(2))
+                elif mdr.get('k') is None:
                     if zm['pan']:
                         zm['c'] = zm['pan'][1] - (np.array(c_[1:3], float) - zm['pan'][0]) / kz
                     if c_[0] == 'mdrag1':
@@ -1406,18 +1414,15 @@ def _run(m, fullscreen=False, _keys=None):
                 else:
                     mdr['d'] = q_ - mdr['p0']
                     if c_[0] == 'mdrag1':
-                        fd_, d_ = mdr.pop('fd'), mdr.pop('d')
+                        k_, d_ = mdr.pop('k'), mdr.pop('d')
                         if np.hypot(*d_) > 0.05:
-                            from .selections import marked_squares, shift_mask
-                            if fd_ not in mshift0:
-                                mk_ = marked_squares(fd_)
-                                mshift0[fd_] = tuple(mk_['shift_um']) if mk_ else (0.0, 0.0)
-                            mshift[fd_] = tuple(map(float, shift_mask(fd_, d_)))
-                            SM._MASKS.pop(fd_, None)
-                            snp.setdefault('hand', {})[fd_] = time.monotonic()
-                            snp['done'].add(((m._p['x'], m._p['y'], m._p['z'], m.objective), fd_))
-                            msg, msg_t = (f"Mask moved by {d_[0]:+.1f}, {d_[1]:+.1f} um (total {mshift[fd_][0]:+.1f}, "
-                                          f"{mshift[fd_][1]:+.1f}); Ctrl+Z undoes"), time.monotonic()
+                            from .layers import move
+                            note_brush(m._regions[k_])
+                            move(m, k_, float(d_[0]), float(d_[1]))
+                            noted_done()
+                            SM.persist(m)
+                            msg, msg_t = (f"{SM.title(m, k_)} moved by {d_[0]:+.1f}, {d_[1]:+.1f} um (Ctrl+Z: back)",
+                                          time.monotonic())
                 continue
             if c_[0] == 'carw':                                     # прокрутка карусели
                 car['scroll'] = car_clamp(car['scroll'] - 60 * np.sign(c_[3]))
@@ -1453,48 +1458,32 @@ def _run(m, fullscreen=False, _keys=None):
                     car['press'] = dict(what='bar', y=c_[2], s0=car['scroll'])
                     continue
                 h_ = SM.hit(car['hits'], xc_, c_[2])
+                if h_ and h_[0] == 'tool':                          # операция над отмеченными
+                    msg, msg_t = layer_op(car['tools'][h_[1]]), time.monotonic()
+                    continue
+                ctrl_ = len(c_) > 3 and c_[3]
+                if h_ and h_[0] == 'sel' and ctrl_ and h_[1] < len(car.get('order', [])) and \
+                        car['order'][h_[1]] < len(m._regions):      # Ctrl+щелчок: отметить / снять
+                    k_ = car['order'][h_[1]]
+                    car['multi'] = [x_ for x_ in car['multi'] if x_ != k_] if k_ in car['multi'] else car['multi'] + [k_]
+                    msg, msg_t = (f"Marked: {', '.join(SM.title(m, x_) for x_ in car['multi'])} (the first is the target)"
+                                  if car['multi'] else "Nothing marked"), time.monotonic()
+                    continue
                 if h_ and h_[0] == 'sel' and h_[1] < len(car.get('order', [])) and \
                         car['order'][h_[1]] != len(m._regions):       # карточку можно перетащить
                     car['press'] = dict(what='card', k=car['order'][h_[1]], x=c_[1], y=c_[2])
                 if h_:
                     act, k = h_
                     k = car['order'][k] if k < len(car.get('order', [])) else k
-                    if isinstance(k, tuple):                        # часть маски выделения
-                        km, kp = k[1], k[2]
-                        if act == 'sel':
-                            car['confirm'] = None
-                            car['mask'] = km
-                            msg = (f"Mask {SM.num(m, km)}.{kp + 1}: Go drives to its nearest square, x deletes only it (Ctrl+Z: back), "
-                                   "Shift + drag on the picture moves the whole mask")
-                        elif act == 'del':                          # сразу, без подтверждения (Ctrl+Z вернёт)
-                            ps_ = SM.mask_parts(m, km)
-                            if kp < len(ps_):
-                                fd_ = ps_[kp]['folder']
-                                if fd_ not in msel0:
-                                    msel0[fd_] = mask_sel(fd_)
-                                msg = SM.delete_mask(m, km, kp) + " (Ctrl+Z: back)"
-                                msel[fd_] = mask_sel(fd_)
-                                L.event('MAN-008', msg + ".")
-                        elif act == 'go':
-                            car['confirm'] = None
-                            hold_ = live.hold() if live is not None else None
-                            try:
-                                if hold_:
-                                    hold_.__enter__()
-                                msg = SM.goto_mask(m, km, kp)
-                            except MicroControlError as e:
-                                msg = str(e)
-                            finally:
-                                if hold_:
-                                    hold_.__exit__()
-                        msg_t = time.monotonic()
+                    if act == 'obj' and k < len(m._regions):       # плашка объектива: следующий (пока не снято)
+                        msg, msg_t = cycle_objective(k), time.monotonic()
                         continue
                     if act == 'sel':
                         car['confirm'] = None
                         if k < len(m._regions):
                             m._sel = k
-                            msg, msg_t = (f"Selection {SM.num(m, k)} chosen ({SM.layer_name(m, k)}; Go or Enter: "
-                                          "drive there)"), time.monotonic()
+                            msg, msg_t = (f"{SM.title(m, k)} chosen ({SM.layer_name(m, k)}; Go or Enter: "
+                                          "drive there; Ctrl+click: mark for Merge / Minus / Overlap / Group)"), time.monotonic()
                     elif act == 'del':                              # сразу, без подтверждения (Ctrl+Z вернёт)
                         delete_region(k)
                         msg_t = time.monotonic()
@@ -1680,11 +1669,6 @@ def _run(m, fullscreen=False, _keys=None):
             elif ch in 'fa' and ch:                        # F (и A): автофокус
                 r = m.focus()
                 msg = f"Focused at Z {r['Z']}" + ("  (weak peak)" if 'Note' in r else "")
-            elif ch == 'j':                                # маски сами садятся на кресты: вкл. / выкл.
-                snp['on'] = not snp['on']
-                snp['done'].clear()
-                msg = ("Masks are also checked by the picture and snapped (the camera picture is matched with the scan)"
-                       if snp['on'] else "Masks lie by the scan geometry only (J: check by the picture)")
             elif ch == 'k':                                # запомнить Z здесь как точку фокуса выделения
                 msg = SM.add_point(m)
                 L.event('MAN-006', msg + ".")

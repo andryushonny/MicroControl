@@ -27,6 +27,7 @@ from .stitch import stitch
 from .mask import export, clean
 from .optics import measure_distortion as distortion
 from .viewer import view, hints, train_hints
+from . import layers, snap                            # выделения-слои (контуры, операции), строгая геометрия съёмки
 from .agent import Agent
 from .selections import list_selections as selections, remove_selection, open_selection
 from .project import Project, Sample, projects, all_samples

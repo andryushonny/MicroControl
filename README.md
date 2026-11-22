@@ -82,7 +82,7 @@ Chosen squares of every scan also appear dark green on the mini map and on the l
 
 ## Projects and samples
 
-Work is grouped like this: **Project** (a piece of work, with a description) → **Sample** (one substrate on the stage: its own selections and coordinates, a description) → **Selection** (an area on one objective; layers: map 10x > details 50x > 100x) → **Scan** (every scan of a selection is a new version) → grid, chosen squares, drawing. Selections are saved in the sample and come back when it is opened again; the chosen squares on the maps, `m.list()` and the viewer show only the open sample. In the list on the right each closed figure of chosen squares is its own card (*Mask N.k*, a darker shade of its selection) that can be deleted alone; cards can be reordered by dragging, the list scrolls.
+Work is grouped like this: **Project** (a piece of work, with a description) → **Sample** (one substrate on the stage: its own selections and coordinates, a description) → **Selection** (an area on one objective; layers: map 10x > details 50x > 100x) → **Scan** (every scan of a selection is a new version) → grid, chosen squares, drawing. Selections are saved in the sample and come back when it is opened again; the chosen squares on the maps, `m.list()` and the viewer show only the open sample. Selections are layers: an outline made of rectangles (no inner squares), a level of the pyramid (objective), nesting; Ctrl+click cards, then Merge / Minus / Overlap / Group / Ungroup. Squares chosen with the brush in the viewer become selections by themselves (one per figure, on the next objective); a selection is scanned only by the frames that touch its outline.
 
 ```python
 p = mc.Project("Graphene", "flakes for transport")   # open or create; p.uid — its short id, e.g. "k3f9x"
@@ -228,7 +228,7 @@ Arrows move; letters do things. As much as possible is done right in the window.
 | Arrows | move by one frame (Step X, Y) |
 | `E` / `Q` (`PgUp` / `PgDn`) | stage up / down by Step Z (`Shift` — ×5) |
 | `F` · `K` | autofocus · keep $Z$ here as a focus point |
-| `J` · Shift+drag over a mask | masks are laid strictly by the scan geometry (backlash counted); J — also check by the picture (on / off) · move a mask by hand |
+| Ctrl+click cards · Shift+drag over a selection | mark for Merge / Minus / Overlap / Group / Ungroup · move a selection |
 | `1`, `2` | corners of a selection |
 | `Y` | "Z follows the focus points" on / off |
 | `,` `.` · `Enter` | previous / next selection · drive to it |

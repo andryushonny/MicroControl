@@ -1657,6 +1657,12 @@ def _run(m, fullscreen=False, _keys=None):
     h_last = (h_sig(), h_snap())
     arl = dict(on=True, pos=None, t=0.0, done=False, note='')   # сверка дополненной реальности с мозаикой (J)
     while True:
+        if m._sel is not None and not 0 <= m._sel < len(m._regions):   # выбранное исчезло (удалили, отменили)
+            m._sel = len(m._regions) - 1 if m._regions else None
+        if any(not 0 <= k_ < len(m._regions) for k_ in car['multi']):
+            car['multi'] = [k_ for k_ in car['multi'] if 0 <= k_ < len(m._regions)]
+        if mdr.get('k') is not None and not 0 <= mdr['k'] < len(m._regions):
+            mdr.pop('k', None); mdr.pop('d', None); mdr['on'] = False
         sg_ = h_sig()
         if sg_ != h_last[0]:                              # что-то сделано: в историю (с квадратами съёмок)
             refresh_gs()
@@ -1670,8 +1676,12 @@ def _run(m, fullscreen=False, _keys=None):
                 if time.monotonic() - car.get('bl_t', -99) > 5:   # люфт столика — из сшивки последних съёмок
                     car['bl_t'] = time.monotonic()
                     m._bl = stage_backlash()
-                from .layers import sync_brush
+                from .layers import sync_brush, idx as _ix
+                keep_ = (m._regions[m._sel]['uid'] if m._sel is not None and m._sel < len(m._regions) else None,
+                         [m._regions[k_]['uid'] for k_ in car['multi'] if k_ < len(m._regions)])
                 r_ = sync_brush(m)
+                m._sel = _ix(m, keep_[0]) if keep_[0] else m._sel   # индексы сдвинулись — по uid
+                car['multi'] = [k_ for k_ in (_ix(m, u_) for u_ in keep_[1]) if k_ is not None]
                 if r_:
                     SM.persist(m)
                     msg, msg_t = r_, time.monotonic()
@@ -2143,7 +2153,8 @@ def _run(m, fullscreen=False, _keys=None):
                     continue
                 h_ = SM.hit(car['hits'], xc_, c_[2])
                 if h_ and h_[0] == 'tool':                          # операция над отмеченными
-                    msg, msg_t = layer_op(car['tools'][h_[1]]), time.monotonic()
+                    if h_[1] < len(car['tools']):
+                        msg, msg_t = layer_op(car['tools'][h_[1]]), time.monotonic()
                     continue
                 ctrl_ = len(c_) > 3 and c_[3]
                 if h_ and h_[0] == 'sel' and ctrl_ and h_[1] < len(car.get('order', [])) and \
@@ -2177,7 +2188,7 @@ def _run(m, fullscreen=False, _keys=None):
                             m._sel = k
                             msg, msg_t = (f"{SM.title(m, k)} chosen ({SM.layer_name(m, k)}; Go or Enter: "
                                           "drive there; Ctrl+click: mark for Merge / Minus / Overlap / Group)"), time.monotonic()
-                    elif act == 'del':                              # сразу, без подтверждения (Ctrl+Z вернёт)
+                    elif act == 'del' and k <= len(m._regions):     # сразу, без подтверждения (Ctrl+Z вернёт)
                         delete_region(k)
                         msg_t = time.monotonic()
                     elif act == 'go' and k < len(m._regions):

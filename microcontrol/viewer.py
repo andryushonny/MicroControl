@@ -339,6 +339,9 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
         if not h_:
             return
         act, k = h_
+        if not 0 <= k < len(subs):                          # список сменился (удалили в окне микроскопа)
+            st['car_dirty'] = st['dirty'] = True
+            return
         f = subs[k]
         if act == 'sel':
             car['confirm'] = None
@@ -1500,7 +1503,8 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
                 st['msg'] = "Exit: Shift+Esc or close the window"
             st['dirty'] = True
         elif raw in (',', '.') and len(subs) > 1:           # предыдущий / следующий образец
-            st['switch'] = subs[(subs.index(folder) + (1 if raw == '.' else -1)) % len(subs)]
+            i_ = subs.index(folder) if folder in subs else -1
+            st['switch'] = subs[(i_ + (1 if raw == '.' else -1)) % len(subs)]
         elif raw == 'C':                                     # Shift+C: кресты заново (Ctrl+Z вернёт)
             unseed(); g.cr.clear(); g.refined = None; set_straight(False); g.save(px_um)
             st['mode'] = 'cross'

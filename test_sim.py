@@ -1399,3 +1399,39 @@ p1 = true_(); m.goto(x=0.2 * fw, y=0.1 * fh); m.goto(x=fw, y=fh)
 assert np.allclose(true_(), p1, atol=1e-6), (true_(), p1)                   # туда же — ровно туда же
 m.close(); print("Backlash: the camera picture is matched to the mosaic (outlines on the real crosses from any side, "
                  "< 0.4 um), one-side approach stops the same way every time: OK")
+
+
+# ------------------------------------------------------------------ 44. Удалили черновик — вложенные остаются (как после разгруппировки) у его родителя
+from microcontrol import samples as SM, layers as LY
+from microcontrol.mask import Grid
+m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp()); m.focus()
+fw, fh = m.frame_size
+m.area = mc.Area(0, 0, 3 * fw, 2 * fh); f = m.scan(); mc.stitch(f, verbose=False)
+px_um = json.load(open(os.path.join(f, 'meta.json')))['pixel_size_um']
+g = Grid(f); p0 = np.array([150.0, 120.0]); a_ = 100 / px_um
+g.cr.add(p0); g.cr.add(p0 + (a_, 0)); g.cr.add(p0 + (0, a_)); g.labels = {(0, 0): (5, 7), (2, 1): (7, 8)}
+g.selected |= {(0, 0), (1, 0)}; g.save(px_um)
+LY.sync_brush(m); SM.persist(m)
+S1 = m._regions[0]['uid']
+d2 = next(r for r in m._regions if r.get('kind') == 'draft')
+d = json.load(open(os.path.join(f, 'grid.json'))); c0 = d2['cells'][0]
+d['refine'] = {d2['uid']: dict(n=2, cells=[[2 * c0[0], 2 * c0[1]], [2 * c0[0] + 1, 2 * c0[1] + 1]])}
+json.dump(d, open(os.path.join(f, 'grid.json'), 'w'))
+LY.sync_brush(m); SM.persist(m)
+kids = [r['uid'] for r in m._regions if r.get('parent') == d2['uid']]
+assert len(kids) == 2
+print(SM.delete_area(m, LY.idx(m, d2['uid'])))                             # удалить Draft 2
+for _ in range(2):
+    LY.sync_brush(m); SM.persist(m)
+    left = [r for r in m._regions if r['uid'] in kids]
+    assert len(left) == 2 and all(r['parent'] == S1 and not r.get('src') for r in left), left
+assert d2['uid'] not in (json.load(open(os.path.join(f, 'grid.json'))).get('refine') or {})
+g = Grid(f); g.selected |= {(2, 0)}; g.save(px_um); LY.sync_brush(m)       # новый черновик со вложенным, потом
+d3 = next(r for r in m._regions if r.get('kind') == 'draft' and r.get('src') and not r.get('factors'))
+d = json.load(open(os.path.join(f, 'grid.json'))); c0 = d3['cells'][0]
+d['refine'] = {d3['uid']: dict(n=2, cells=[[2 * c0[0], 2 * c0[1]]])}; json.dump(d, open(os.path.join(f, 'grid.json'), 'w'))
+LY.sync_brush(m)
+k3 = [r['uid'] for r in m._regions if r.get('parent') == d3['uid']]
+g = Grid(f); g.selected.discard((2, 0)); g.save(px_um); LY.sync_brush(m)  # его квадрат сняли в просмотре
+assert LY.idx(m, d3['uid']) is None and all(LY.idx(m, u) is not None and m._regions[LY.idx(m, u)]['parent'] == S1 for u in k3)
+m.close(); print("Deleting a draft keeps the drafts inside it (released to its parent), also when its squares are unselected: OK")

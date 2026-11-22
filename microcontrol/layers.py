@@ -699,7 +699,7 @@ def sync_brush(m):
         if more:
             changed.append(more)
     for r in [r for r in m._regions if r.get('src') and is_mask(r)]:   # кисть очищена (или подсетка сменилась)
-        if r not in m._regions:
+        if r not in m._regions or not r.get('src'):              # ушёл или отпущен в этом же проходе
             continue
         pu, lev = r['src'].split('@')
         fac = () if lev == '1' else tuple(map(int, lev.split('x')))
@@ -714,17 +714,11 @@ def sync_brush(m):
 
 
 def _vanish(m, r):
-    """Черновик ушёл вместе с клетками: его черновики-клетки (подсетка) уходят тоже, а настоящие выделения
-    внутри него (из его клеток сделали Selection) переходят к его родителю."""
+    """Черновик ушёл вместе с клетками: всё, что внутри него, остаётся и переходит к его родителю."""
     if r not in m._regions:
         return
-    for c in [c for c in m._regions if c.get('parent') == r.get('uid')]:
-        if is_mask(c) and (c.get('src') or '').startswith(r['uid'] + '@'):
-            _vanish(m, c)
-        else:
-            c['parent'] = r.get('parent')
-    if r in m._regions:
-        m._regions.remove(r)
+    release_children(m, r)
+    m._regions.remove(r)
 
 
 def brush_into_grid(regs, L, folder, g):
@@ -790,6 +784,25 @@ def remove_brush_cells(m, reg):
                 json.dump(d2, fo, indent=1)
 
 
+def release_children(m, reg):
+    """Выделение уходит, а то, что внутри него, остаётся — как после разгруппировки: черновики из его подсетки
+    становятся самостоятельными (без связи с его клетками), всё переходит к его родителю (пирамидка цела)."""
+    u = reg.get('uid')
+    for c in m._regions:
+        if c is reg or c.get('parent') != u:
+            continue
+        if is_mask(c) and (c.get('src') or '').startswith(f"{u}@"):
+            c.pop('src', None)                                   # клетки остаются, кисть ими больше не управляет
+        c['parent'] = reg.get('parent')
+    for par, f, d in _latest_grids(m):                           # подсетка ушедшего — из кисти
+        if u in (d.get('refine') or {}):
+            d2 = json.load(open(os.path.join(f, 'grid.json'), encoding='utf-8'))
+            d2['refine'].pop(u, None)
+            with open(os.path.join(f, 'grid.json'), 'w', encoding='utf-8') as fo:
+                json.dump(d2, fo, indent=1)
+
+
 def delete_brush_cells(m, reg):
-    """Черновик кисти удаляют: его клетки снимаются с кисти."""
+    """Черновик кисти удаляют: его клетки снимаются с кисти, вложенные остаются (release_children)."""
+    release_children(m, reg)
     remove_brush_cells(m, reg)

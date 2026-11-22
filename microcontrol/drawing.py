@@ -106,7 +106,7 @@ def export_sample(m, ks=None, out=None, dwg=True, verbose=True):
                                  dxfattribs={'layer': 'ADDRESSES', 'insert': (q[0][0] + 0.05 * P / N, q[0][1] - 0.15 * P / N)})
         q = np.vstack([D(rg) for rg in rings(m, r)])
         x0, y1 = q[:, 0].min(), q[:, 1].max()
-        hgt = max(2.0, 0.04 * max(np.ptp(q[:, 0]), np.ptp(q[:, 1])))
+        hgt = max(1.0, min(0.12 * P, 0.03 * max(np.ptp(q[:, 0]), np.ptp(q[:, 1]))))
         msp.add_text(f"{title(m, k)}  {obj(m, r)}x", height=hgt, dxfattribs={'layer': 'LABELS', 'insert': (x0, y1 + hgt * 0.4)})
         placed.append(dict(selection=num(m, k), objective=obj(m, r), layer=lay, scan=sc.folder if sc else None))
     if pr:                                                       # кресты литографии с их номерами

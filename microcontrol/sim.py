@@ -186,7 +186,7 @@ class SimWorld:
             v_ = -(X[None] - fx) * sa + (Y[:, None] - fy) * ca
             fm = (np.clip((fl / 2 - np.abs(u_)) / self.px_um + 0.5, 0, 1) *
                   np.clip((fw / 2 - np.abs(v_)) / self.px_um + 0.5, 0, 1)).astype(np.float32)[..., None]
-            img = img * (1 - fm) + np.array([235, 240, 170], np.float32) * fm
+            img = img * (1 - fm) + (0.4 * img + 0.6 * np.array([235, 240, 170], np.float32)) * fm   # тонкая: подложка видна
         # кресты: золото на подложке; каждый 5-й (через 5 × pitch) вдвое крупнее
         P_, soft = self.pitch, max(self.px_um, 0.3)
         t = np.radians(getattr(self, 'turn_deg', 0.0))       # подложка повёрнута на столике вокруг Z

@@ -4,7 +4,7 @@
 
 **Authors:** A. Lyapeikov, S. Domenko · **Version:** 0.20.0 · Русский: [docs/README_ru.md](docs/README_ru.md) · 中文: [docs/README_zh.md](docs/README_zh.md) · PDF: [EN](docs/MicroControl_en.pdf), [RU](docs/MicroControl_ru.pdf), [中文](docs/MicroControl_zh.pdf) · Full technical reference: [EN](docs/reference_en.md), [RU](docs/reference_ru.md), [中文](docs/reference_zh.md)
 
-![The scan viewer: red grid of squares, chosen squares (green), hints (yellow), samples on the right](docs/img/view.jpg)
+![Overview: numbered lithography squares, hints (yellow), Draft 2 with its 1/4 grid, Draft 3, the 50x and 100x areas inside](docs/img/view.jpg)
 
 > Independent project, not affiliated with Optosky. Provided as is, without warranty — see the [Disclaimer](#disclaimer) and the [MIT licence](LICENSE).
 
@@ -80,6 +80,13 @@ The final result is the drawing `export/drawing.dwg`: every chosen square is its
 `mc.projects()` and `mc.all_samples()` print a table: id, name, samples, selections, scans, created, updated, description (the Open dialogs show the same). In the viewer, Open → **New window** shows another project in its own window (`mc.view_window(folder)`), the current one stays open.
 
 Squares chosen with the brush become a **Draft** — a sketch that is never scanned (click its *draft* chip to give it the objective in place). Over any selection, keys `2`–`5` give it its own grid 2–5 times denser; the brush then paints cells of that grid strictly inside it, and they become drafts one level deeper (address `13,7 > 2,1`). On the map, drag over such a selection: the new area for the objective in place is made of whole cells of its grid. **Export** asks which areas go into the drawing and writes one AutoCAD drawing of the sample: origin at cross 1,1, pictures in place, every cell as a closed square, crosses with their numbers.
+
+| | |
+|---|---|
+| ![Map zoomed in: 10x overview, Draft 2 with its 1/4 grid, Selection 4 (50x) and Selection 5 (100x) inside it](docs/img/map_zoom.jpg) | ![The 50x scan: its grid comes from the sample lattice — tilt and pitch match the overview, no crosses marked](docs/img/view_50x.jpg) |
+| *Layers on the map: 10x → Draft (grid 1/4) → 50x → 100x, the camera in the corner* | *50x scan: the grid is taken from the sample lattice (no crosses to mark), 1/4 and 1/8 cells* |
+| ![Export of the sample: the tilted scan is drawn square to the lattice, crosses with numbers from 1,1](docs/img/export.jpg) | ![Export, close-up: 10x picture, Draft 2 squares, 50x cells 1/4 and 100x cells 1/8 with their addresses](docs/img/export_zoom.jpg) |
+| *Drawing for AutoCAD: the 2.5° tilted chip comes out square to the lattice, crosses from 1,1* | *Close-up: every cell is a closed square on its own layer, address 16,10 > 2,3 > 1,1* |
 
 ---
 

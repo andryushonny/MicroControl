@@ -119,8 +119,8 @@ class _Scene:
 
 HELP_V2 = "Arrows / drag: move  Wheel: zoom  0: whole  , / .: selection  H: all keys  Shift+Esc: exit"
 HELP_MODE = {
-    'look': "S: stitch  C: crosses  N: numbers  T: level  M: select cells (Drafts)  2-5: finer grid of a selection  Y: hints  R: ruler  E: export",
-    'cross': "Click: cross exactly there (2 in a row = tilt)  Shift+click: snap to centre  Drag a mark: move  Right click: remove  Shift+C: again  F: fit grid  C / Esc: done",
+    'look': "S: stitch (preview)  C: crosses  F: frames onto the crosses  N: numbers  T: level  M: select cells (Drafts)  2-5: finer grid of a selection  Y: hints  R: ruler  E: export",
+    'cross': "Click: cross exactly there (2 in a row = tilt)  Shift+click: snap to centre  Drag a mark: move  Right click: remove  Shift+C: again  F: frames onto the crosses  C / Esc: done",
     'select': "Click: square  Drag: box  Shift: unselect  Right click: remove a square (Shift: the whole area)  A: all  X: none  Esc: done",
     'paint': "Drag a rectangle: select all squares in it  Shift+drag: unselect  Click: one square  Right click: remove one (Shift: whole area)  A: all  X: none  Esc: done",
     'label': "Click a square, type its number X Y  Enter: set  Esc: done",
@@ -128,7 +128,7 @@ HELP_MODE = {
     'refine': "Over a selection: 2-5 its finer grid (1: none), then M selects its cells: they become Drafts inside it",
 }
 HELP_HINTS = "Y: hints on / off  Shift+Y: select them  < / >: sensitivity  U: type it"
-HELP_V = ("S: stitch   C: crosses (2 in a row = tilt; right click = remove, Shift+C = again)   F: fit grid   M: select "
+HELP_V = ("S: stitch (preview)   C: crosses (2 in a row = tilt; right click = remove, Shift+C = again)   F: frames onto the crosses   M: select "
           "(click, box; Shift = unselect; right click = remove a square, Shift + right click = the whole area)   N: number squares (X Y)   "
           "Y: hints, Shift+Y: select them, U, < / >: sensitivity   A / X: all / none   R: ruler   E: export   Esc: exit")
 HELP_ALL = [
@@ -136,11 +136,12 @@ HELP_ALL = [
     ("", "T: level (tilt removed, from the crosses) / as shot   , / .: previous / next selection   H: this help   Esc: leave the mode"),
     ("Undo", "Ctrl+Z: undo any change (crosses, grid, squares, numbers, hints, removed selection)   Ctrl+Y: redo"),
     ("Exit", "Shift+Esc (or Ctrl+Esc), or close the window"),
-    ("Stitch", "S: stitch this selection right here (progress in the window), then the view reopens"),
+    ("Stitch", "S: stitch this selection right here: frames by their overlaps, the preview (the view reopens)"),
+    ("", "F (after C: 2-3 crosses): exact - every frame onto the crosses, the grid and the lens distortion (the view reopens)"),
     ("Ruler", "R: click two points -> distance in um (a third click starts again); R or Esc: off"),
     ("Crosses", "C: mark crosses: click two neighbouring crosses in one row = tilt; more crosses far apart = more exact"),
     ("", "The mark goes exactly where you click   Shift+click: snap to the cross centre   Drag a mark: move it"),
-    ("", "Right click: remove a cross   Backspace: the last one   Shift+C: start again   F: fit the grid to all crosses"),
+    ("", "Right click: remove a cross   Backspace: the last one   Shift+C: start again   F: frames onto the crosses"),
     ("Numbers", "N: click a square, type the number written next to it (X Y), Enter. Two squares fix all numbers"),
     ("Select", "M: click a square (again: off) / drag a box (Shift: unselect)   A / X: all / none"),
     ("", "Right click on green: remove that square (or cell)   Shift + right click: the whole green area"),
@@ -329,7 +330,7 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
                 if nfx_:
                     g.save(px_um)
                     st0_msg = (f"   The grid snapped to {nfx_} crosses of this scan "
-                               f"(moved by {np.hypot(*dfx_) * px_um:.2f} um); F: fit it to all crosses")
+                               f"(moved by {np.hypot(*dfx_) * px_um:.2f} um); F: frames onto the crosses")
             except Exception:
                 pass
         except Exception:
@@ -340,7 +341,7 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
     st = dict(cx=sc.size[0] / 2, cy=sc.size[1] / 2, s=None, rot=0.0, mode='look', down=None, box=None,
               poly=[], dirty=True, Wv=Wv - SM.CAR_W, Hv=Hv, straight=False, switch=None, ruler=[], mouse=None,
               msg=car.pop('msg', None) or (f"Selection {SM.sample_index(folder)} ({subs.index(folder) + 1} of {len(subs)})" if len(subs) > 1 else "")
-              + (f"   Crosses moved with the stitched frames ({moved_}); F: fit the grid again" if moved_ else "")
+              + (f"   Crosses moved with the stitched frames ({moved_}); F: frames onto the crosses" if moved_ else "")
               + ("   The grid comes from the sample lattice (marked once): no crosses to mark here" if seeded_ else "")
               + st0_msg)
 
@@ -512,8 +513,9 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
             while th.is_alive():
                 img = base.copy()
                 nm_ = prog['title'].replace("Stitch: ", "").lower()
-                order_ = ['light', 'seams', 'brightness', 'crosses: finding', 'saving']
-                stage = (f"Step {order_.index(nm_) + 1} of 5:  " if nm_ in order_ else "") + STAGES.get(nm_, prog['title'])
+                order_ = ['light', 'seams', 'brightness', 'saving']
+                stage = (f"Step {order_.index(nm_) + 1} of 4:  " if nm_ in order_ and 'cross' not in title.lower() else "") \
+                    + STAGES.get(nm_, prog['title'])
                 UI.progress_panel(img, title, stage, prog['f'], prog['text'], _t.monotonic() - t0, prog['eta'], footer)
                 show(np.hstack([img, pan]) if pan.shape[0] == img.shape[0] else img)
                 cv2.waitKey(60)
@@ -522,6 +524,23 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
             th.join()
         st['busy_s'] = _t.monotonic() - t0
         return res.get('r'), res.get('e')
+
+    def fit_here():
+        """F: кадры этого выделения — на кресты (anchor.fit_crosses): решётка, положения, дисторсия; окно
+        потом открывается заново."""
+        from .anchor import fit_crosses
+        g.save(px_um)
+        r, e = busy("Frames onto the crosses", lambda: fit_crosses(folder, verbose=True), close_scene=True,
+                    footer="(the view reopens by itself)")
+        st['stitched'] = True
+        if e is not None:
+            car['msg'] = f"Frames onto the crosses failed: {type(e).__name__}: {e}"
+        else:
+            on_ = next((k_ for k_ in r if k_.startswith('On the grid')), None)
+            car['msg'] = (f"Frames onto the crosses in {st['busy_s']:.0f} s: {r[on_].split('-> ')[-1]} of the crosses "
+                          f"within 0.5 um of the grid; distortion {r.get('Distortion at the edge, px', '-').split('-> ')[-1]} "
+                          f"px at the edge" if on_ else "Frames onto the crosses: done")
+        st['switch'] = folder
 
     def stitch_here():
         """S: сшить это выделение (mc.stitch) прямо из просмотра; затем окно открывается заново уже со сшитой
@@ -534,12 +553,9 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
         if e is not None:
             car['msg'] = f"Stitching failed: {type(e).__name__}: {e}"
         else:
-            on_ = next((k_ for k_ in r if k_.startswith('On the grid')), None)
             car['msg'] = (f"Stitched in {st['busy_s']:.0f} s: seams {r.get('Seams accepted', '-')}, "
-                          f"error {r.get('Seam error, px', '-')} px" +
-                          (f"; on the crosses: {r[on_].split('-> ')[-1]} of crosses within 0.5 um of the grid, "
-                           f"distortion {r.get('Distortion at the edge, px', '-').split('-> ')[-1]} px at the edge" if on_ else
-                           "; C: mark 2-3 crosses, then S again: the frames go onto the crosses"))
+                          f"error {r.get('Seam error, px', '-')} px; " +
+                          ("F: frames onto the crosses (exact)" if g.ready() else "C: mark 2-3 crosses, then F: frames onto the crosses (exact)"))
         st['switch'] = folder
 
     def ruler_text(a=None, b=None):
@@ -620,12 +636,12 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
             return
         n_nodes = sum(1 for _ in g.cells_range((0, 0), sc.size))
         if n_nodes > 600:
-            st['msg'] += "   F: fit the grid to all crosses"
+            st['msg'] += "   F: frames onto the crosses (exact)"
             return
         n_, rms_ = fit_grid()
         if rms_ is not None and n_ >= 4:
             st['msg'] += (f"   Grid fitted to all {n_} crosses: {rms_ * px_um:.2f} um off on average. "
-                          "S: stitch again - the frames go onto the crosses")
+                          "F: frames onto the crosses (exact)")
 
     def fit_grid():
         """F: сетка по всем крестам мозаики (mask.Grid.refine) — с полосой прогресса в окне."""
@@ -1657,13 +1673,14 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
         elif key == 8:
             if st['mode'] == 'cross':
                 unseed(); g.cr.undo(); g.save(px_um); st['msg'] = "Last cross mark removed"
-        elif ch == 'f' and g.ready():
-            n_, rms = fit_grid()
-            if _cfg.AUTO_HINTS or (getattr(g, 'scores', None) and st.get('hints')):
-                hints()
-            g.save(px_um)
-            st['msg'] = f"Grid fitted to all {n_} crosses" + (f": {rms:.2f} px off" if rms is not None else ": too few") + \
-                f"   hints: {len(g.useful)} squares (Y)   S: stitch again on the crosses"
+        elif ch == 'f':                                     # F: кадры — на кресты (второй шаг сшивки)
+            if not g.ready():
+                st['msg'] = "Mark 2-3 crosses first (C), then F puts every frame onto them"
+            elif not os.path.exists(os.path.join(folder, 'join', 'positions_all.csv')):
+                st['msg'] = "Stitch first (S): the preview, then F puts the frames onto the crosses"
+            else:
+                fit_here()
+                break
         elif ch == 'h':
             st['help'] = not st.get('help')
         elif ch == 't':                                      # T: ровно (наклон снят) / как снято

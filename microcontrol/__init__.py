@@ -26,6 +26,7 @@ from .join import join
 from .stitch import stitch
 from .mask import export, clean
 from .optics import measure_distortion as distortion
+from .anchor import fit_crosses
 from .viewer import view, view_window, hints, train_hints
 from . import layers, snap                            # выделения-слои (контуры, операции), строгая геометрия съёмки
 from .drawing import export_sample                   # чертёж образца: выбранные участки одним DXF / DWG
@@ -59,7 +60,8 @@ WORKFLOW
   m.manual()                       Live view on the full screen; mark the area with keys 1 and 2
   folder = m.scan()                Shoot the selections of the current objective (each into selection_01, ...); 30 % overlap
                                    (35 % at 50x, 100x); Z of each area from its own focus points
-  mc.stitch(folder)                Exact positions of all frames by their overlaps (like ASHLAR)
+  mc.stitch(folder)                Positions of all frames by their overlaps (like ASHLAR): the preview
+  mc.fit_crosses(folder)           Exact: frames onto the crosses, grid and lens distortion (after marking crosses)
   mc.view(folder)                  Mark crosses on the mosaic, straighten it, select the squares you need
   mc.hints(folder, sensitivity=50) Yellow hint without the window: squares with something in them (0-100)
   mc.train_hints(folder, default=True)  Model of the empty substrate for the hints (scan of a clean substrate)

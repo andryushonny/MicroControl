@@ -72,11 +72,10 @@ def _pair(st, ia, ib, d, W, H, pad, sigma, max_shift, other=None):
 @_per_sample
 @timed_fn('Stitch (all of it)')
 def stitch(folder, engine='builtin', max_shift_um=40.0, sigma=None, alpha=0.01, preview=True, verbose=True,
-           flat=True, crosses=True, _again=False):
+           flat=True):
     """Сшить скан: найти точные положения кадров. engine='auto' | 'builtin' | 'ashlar'.
-    max_shift_um — насколько столик может ошибиться между соседними кадрами.
-    crosses=True — если кресты уже отмечены (mc.view, C), кадры ставятся ещё и по крестам: каждый кадр
-    с крестом привязан к решётке, дисторсия объектива находится тут же (anchor.py)."""
+    max_shift_um — насколько столик может ошибиться между соседними кадрами. Это первый шаг (превью);
+    второй, точный — mc.fit_crosses(folder): кадры на кресты (после разметки крестов в mc.view)."""
     t0 = time.monotonic()
     st = ScanData(folder)
     H, W = st.shape[:2]
@@ -175,26 +174,6 @@ def stitch(folder, engine='builtin', max_shift_um=40.0, sigma=None, alpha=0.01, 
                     r['Crosses'] = f"{nmv} moved with their frames (F in the viewer fits the grid again)"
     except Exception as e:                                  # сшивка важнее: кресты можно поставить заново
         L.event('STI-003', f"Crosses not moved: {type(e).__name__}: {e}", 30)
-    if crosses:
-        try:
-            from .mask import Grid
-            if Grid(folder).ready():
-                from .anchor import anchor
-                from .optics import load_dist, dist_corner
-                c0 = dist_corner(load_dist(folder, meta), W, H)
-                st.close()
-                ra = anchor(folder, verbose=verbose, preview=False)
-                if ra.info['fitted'] and abs(ra.info['corner_px'] - c0) > 0.5 and not _again:
-                    # дисторсия заметно другая: швы — заново по выпрямленным кадрам, затем кресты ещё раз
-                    return stitch(folder, engine, max_shift_um, sigma, alpha, preview, verbose, flat, crosses, True)
-                for k_ in list(ra)[1:]:
-                    r[k_] = ra[k_]
-                r['Crosses'] = ra['Crosses']
-                r.share = ra.share
-                pos = load_positions(folder)
-        except Exception as e:                              # кресты не нашлись — остаётся сшивка по швам
-            L.event('STI-006', f"Not stitched on the crosses: {type(e).__name__}: {e}", 30)
-            r['Crosses'] = f"not used: {e}"
     if preview:
         r['Preview'] = make_preview(folder, pos, verbose=verbose)
         r['Time, s'] = round(time.monotonic() - t0, 1)

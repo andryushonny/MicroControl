@@ -295,3 +295,24 @@ def anchor(folder, save=True, fit_dist=True, verbose=True, preview=True):
                   "Grid pitch, um": round(pitch_px * px, 3)})
     r.theta, r.share, r.info = th, share, info
     return r
+
+
+def fit_crosses(folder, verbose=True):
+    """Второй шаг сшивки: кадры — на кресты (после mc.stitch и разметки крестов в mc.view, C).
+    Решётка, положения кадров и дисторсия — вместе (anchor); если дисторсия заметно другая, чем была,
+    швы меряются заново по выпрямленным кадрам и кресты — ещё раз. Затем превью."""
+    from .storage import ScanData
+    from .stitch import stitch, make_preview, load_positions
+    from .optics import load_dist, dist_corner
+    if not os.path.exists(os.path.join(folder, 'join', 'positions_all.csv')):
+        raise ValueError("Stitch first (S): the frames need their seams before the crosses.")
+    st = ScanData(folder)
+    H, W = st.shape[:2]
+    c0 = dist_corner(load_dist(folder, st.meta), W, H)
+    st.close()
+    r = anchor(folder, verbose=verbose, preview=False)
+    if r.info['fitted'] and abs(r.info['corner_px'] - c0) > 0.5:
+        stitch(folder, preview=False, verbose=verbose)     # швы — по выпрямленным кадрам
+        r = anchor(folder, verbose=verbose, preview=False)
+    r['Preview'] = make_preview(folder, load_positions(folder), verbose=verbose)
+    return r

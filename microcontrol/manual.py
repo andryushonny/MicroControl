@@ -1434,8 +1434,12 @@ def _run(m, fullscreen=False, _keys=None):
                 if m._regions[m._sel].get('kind') == 'draft':  # не вышло (объектив мал)
                     return
                 only_ = [rs_['uid']]
-            elif SM.obj(m, rs_) == m.objective and rs_.get('kind') != 'group':
-                only_ = [rs_['uid']]                          # выбранное выделение этого объектива — только его
+            elif rs_.get('kind') != 'group':                  # выбранное выделение — только его
+                if SM.obj(m, rs_) != m.objective:
+                    msg = (f"Selection {rs_['num']} is for {SM.obj(m, rs_)}x, the objective is {m.objective}x: "
+                           f"switch it (M) or choose another selection")
+                    return
+                only_ = [rs_['uid']]
         ks = [k_ for k_, rg in enumerate(m._regions) if SM.obj(m, rg) == m.objective
               and rg.get('kind') not in ('group', 'draft') and (not only_ or rg['uid'] in only_)]
         if not ks:

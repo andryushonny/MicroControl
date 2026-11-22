@@ -824,6 +824,7 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
                 tw_ = UI.size(lab_, 0.42)[0]
                 UI.panel(img, x_l, y_l - 20, x_l + tw_ + 10, y_l - 2, 0.8, c_)
                 UI.put(img, lab_, x_l + 5, y_l - 6, 0.42, c_)
+        draw_new_drafts(img)                                  # выбранное здесь — черновиком сразу
         draw_subgrids(img)                                    # подсетки выделений и их клетки кисти
         for k_, q in enumerate(g.cr.marks):
             u_, v_ = to_view(q)
@@ -1175,6 +1176,23 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
             if pc_:                                         # выбранные клетки подсетки — зелёной рамкой
                 clear_ = [to_view_arr(stage_to_mosaic(folder, LT.cell_stage(L_, a, b, M_))) for a, b in pc_]
                 cv2.polylines(img, [np.int32(np.round(q_ * 16)) for q_ in clear_], True, (90, 200, 90), 1, cv2.LINE_AA, 4)
+
+    def draw_new_drafts(img):
+        """Выбранные квадраты, из которых черновик ещё не сделан (окно микроскопа сделает): пунктир «Draft (new)» —
+        видно сразу, каким он будет."""
+        regs_, rf_ = regions_now()
+        L_ = lat_now()
+        if L_ is None:
+            return
+        from .snap import stage_to_mosaic
+        tv_ = lambda A_: to_view_arr(stage_to_mosaic(folder, A_))
+        for r_ in [r2 for r2 in regs_ if r2.get('pending')]:
+            for ext_, hs_ in UI.geom_shapes(LT.cells_geom(L_, [tuple(c) for c in r_['cells']], 1), tv_):
+                UI.dashed_poly(img, ext_, (235, 235, 235), 2)
+                x_l, y_l = ext_[:, 0].min(), ext_[:, 1].min()
+                if 0 <= x_l < img.shape[1] - 90 and 30 <= y_l < img.shape[0]:
+                    UI.panel(img, x_l, y_l - 20, x_l + UI.size("Draft (new)", 0.42)[0] + 10, y_l - 2, 0.8, (235, 235, 235))
+                    UI.put(img, "Draft (new)", x_l + 5, y_l - 6, 0.42, (235, 235, 235))
 
     def pyramid_tint(img):
         """Пирамидка: внутри каждого выделения, в котором выбраны участки меньше (дети, клетки подсетки), всё,

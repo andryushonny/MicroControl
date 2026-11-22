@@ -30,7 +30,7 @@ def export_sample(m, ks=None, out=None, dwg=True, verbose=True):
     if ks is None:
         ks = [k for k, r in enumerate(m._regions) if r.get('kind') not in ('group', 'draft') and r.get('export', True)
               and Selection(m.sample, r).latest]
-    ks = [k for k in ks if m._regions[k].get('kind') not in ('group',)]
+    ks = [k for k in ks if m._regions[k].get('kind') not in ('group', 'draft')]   # черновик — вспомогательный
     if not ks:
         raise ValueError("Nothing to export: no scanned area is chosen")
     out = out or os.path.join(m.sample.folder, 'export', time.strftime('%Y-%m-%d_%H%M%S'))

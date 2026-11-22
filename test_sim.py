@@ -935,7 +935,7 @@ k50 = next(k for k, r in enumerate(m._regions) if r['obj'] == 50)
 r50 = m._regions[k50]
 assert r50['parent'] == uid and r50['factors'] == [3] and all(c[0] // 3 in (5, 6) and c[1] // 3 == 6 for c in r50['cells']), r50
 m.scan(); [mc.stitch(x, verbose=False) for x in m.last_scans]
-dx = mc.export_sample(m, ks=[0, kd, k50])                            # 10x, черновик (без картинки), 50x
+dx = mc.export_sample(m, ks=[0, kd, k50])                            # 10x и 50x; черновик в экспорт не идёт
 doc = ezdxf.readfile(dx if dx.endswith('.dxf') else dx[:-4] + '.dxf')
 ms = doc.modelspace()
 ims = ms.query('IMAGE')
@@ -943,7 +943,8 @@ assert len(ims) == 2, len(ims)
 nums = {t.dxf.text: np.array(t.dxf.insert)[:2] for t in ms.query('TEXT[layer=="NUMBERS"]')}
 assert "6,7" in nums and np.allclose(nums["6,7"] - (500, -600), (4, 4), atol=0.5), nums.get("6,7")  # крест 6,7: (5P, -6P)
 assert not any(k.startswith('0,') or k.endswith(',0') for k in nums)
-for k_ in (kd, k50):                                                 # каждая клетка — замкнутый квадрат на слое выделения
+assert not any('draft' in l_.dxf.name for l_ in doc.layers)
+for k_ in (k50,):                                                    # каждая клетка — замкнутый квадрат на слое выделения
     from shapely.geometry import Polygon as _Pg
     r_ = m._regions[k_]
     N_ = LT.level(r_)
@@ -952,7 +953,7 @@ for k_ in (kd, k50):                                                 # кажд�
           abs(_Pg([q[:2] for q in p.get_points()]).area / (100 / N_) ** 2 - 1) < 0.01]
     assert len(sq) == len(r_['cells']), (k_, lay, len(sq), len(r_['cells']), sorted({(p.dxf.layer, len(p), round(_Pg([q[:2] for q in p.get_points()]).area)) for p in ms.query('LWPOLYLINE')}))
 adr = [t.dxf.text for t in ms.query('TEXT[layer=="ADDRESSES"]')]
-assert "6,7" in adr and "6,8 > 1,1" not in adr and any(a.startswith("6,7 > ") for a in adr), adr[:8]
+assert "6,8 > 1,1" not in adr and any(a.startswith("6,7 > ") for a in adr), adr[:8]
 im50 = next(i for i in ims if '50x' in i.dxf.layer)
 pl = next(p for p in ms.query('LWPOLYLINE') if p.dxf.layer == im50.dxf.layer)
 V = np.array([p[:2] for p in pl.get_points()])
@@ -1156,3 +1157,33 @@ d2 = next(r for r in m._regions if r.get('parent') == d1['uid'])
 assert d1.get('sub') == 3 and d2['factors'] == [3] and LT.address(*d2['cells'][0], [3]) == "6,7 > 1,1"
 assert list(json.load(open(os.path.join(f, 'grid.json')))['refine']) == [d1['uid']]
 m.close(); print("Finer grid right over freshly selected squares (no draft yet): 3, a cell, then the drafts: OK")
+
+
+# ------------------------------------------------------------------ 39. Ctrl+Z в окне микроскопа — для всех операций над выделениями (вместе с квадратами в просмотре)
+import microcontrol.manual as M
+from microcontrol import samples as SM, layers as LY
+from microcontrol.mask import Grid
+m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp()); m.focus()
+fw, fh = m.frame_size
+m.area = mc.Area(0, 0, 3 * fw, 2 * fh); f = m.scan(); mc.stitch(f, verbose=False)
+px_um = json.load(open(os.path.join(f, 'meta.json')))['pixel_size_um']
+g = Grid(f); p0 = np.array([150.0, 120.0]); a_ = 100 / px_um
+g.cr.add(p0); g.cr.add(p0 + (a_, 0)); g.cr.add(p0 + (0, a_)); g.labels = {(0, 0): (5, 7), (2, 1): (7, 8)}
+g.selected |= {(0, 0), (2, 0)}; g.save(px_um)                              # выбрали в просмотре: два квадрата
+drafts = lambda: sorted(r['num'] for r in m._regions if r.get('kind') == 'draft')
+M.run(m, fullscreen=False, _keys=[-1, -1])                                 # окно сделало два черновика
+assert len(drafts()) == 2, m._regions
+M.run(m, fullscreen=False, _keys=[-1, 26, -1, -1])                         # черновики из просмотра — не шаг Ctrl+Z
+assert len(drafts()) == 2
+ks = lambda: [k for k, r in enumerate(m._regions) if r.get('kind') == 'draft']
+ops = [("merge", lambda: LY.union(m, ks())), ("delete", lambda: SM.delete_area(m, ks()[0])),
+       ("to selection", lambda: LY.to_area(m, ks()[0], 50)), ("move", lambda: LY.move(m, ks()[0], 20, 10)),
+       ("group", lambda: LY.group(m, ks())), ("hide", lambda: m._regions[ks()[0]].update(hidden=True))]
+for name, fn in ops:
+    before = json.dumps([{k: v for k, v in r.items() if k != 'thumbs'} for r in m._regions], sort_keys=True, default=str)
+    gs0 = Grid(f).selected
+    M.run(m, fullscreen=False, _keys=[-1, ('call', fn), -1, -1, 26, -1, -1])
+    M.run(m, fullscreen=False, _keys=[-1, -1])                               # и после синхронизации — как было
+    after = json.dumps([{k: v for k, v in r.items() if k != 'thumbs'} for r in m._regions], sort_keys=True, default=str)
+    assert after == before and Grid(f).selected == gs0, (name, before, after, gs0, Grid(f).selected)
+m.close(); print("Ctrl+Z in the microscope window: drafts from the view, merge, delete, to selection, move, group, hide: OK")

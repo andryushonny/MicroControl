@@ -559,7 +559,7 @@ def _run(m, fullscreen=False, _keys=None):
     SM.init_areas(m)                                     # области образцов (настоящие мкм)
     car = dict(scroll=0, hits=[], confirm=None, t=0.0, multi=[], tools=[])   # карусель справа; multi — отмеченные
     mdr = dict(on=False)                                 # Shift + тянуть: сдвиг выделения (индекс, начало, сдвиг)
-    gsel, gsel0 = {}, {}                                 # квадраты кисти в съёмках (что тронули за сеанс) — для Ctrl+Z
+    gsel, gsel0 = {}, {}                                 # квадраты и подсетки в съёмках (сейчас / как было) — для Ctrl+Z
 
     def grid_state(fd_):
         try:
@@ -568,17 +568,21 @@ def _run(m, fullscreen=False, _keys=None):
         except (OSError, ValueError):
             return {}
 
+    def refresh_gs():
+        """Выбранное в просмотре (grid.json последних съёмок) — в состояние окна: Ctrl+Z отменяет и его,
+        и всё, что из него вышло (черновики), вместе — иначе синхронизация тут же вернула бы отменённое."""
+        from .layers import _latest_grids
+        for _r, fd_, _d in _latest_grids(m):
+            st_ = grid_state(fd_)
+            gsel0.setdefault(fd_, st_)
+            gsel[fd_] = st_
+
     def note_brush(reg):
-        """Перед операцией над выделением кисти — запомнить квадраты его съёмки (Ctrl+Z их вернёт)."""
-        if reg.get('src'):                                 # кисть живёт в grid.json последних съёмок
-            from .layers import _latest_grids
-            for _r, fd_, _d in _latest_grids(m):
-                gsel0.setdefault(fd_, grid_state(fd_))
-                car.setdefault('noted', set()).add(fd_)
+        """Перед операцией — квадраты съёмок уже в состоянии (refresh_gs); оставлено для ясности вызовов."""
+        return None
 
     def noted_done():
-        for fd_ in car.pop('noted', set()):
-            gsel[fd_] = grid_state(fd_)
+        refresh_gs()
     A = B = None
     if not getattr(m, '_manual_steps', None):
         m._manual_steps = default_steps(m)
@@ -744,6 +748,23 @@ def _run(m, fullscreen=False, _keys=None):
                 best = (len(g_['p']), g_['B'])
         return best[1] if best else getattr(m, '_bl', None)
 
+    def draft_to_selection(k):
+        """Черновик -> выделение под объектив, что стоит (оно снимается и идёт в экспорт). Обратного хода нет.
+        Пирамидка: объектив больше, чем у снятого выделения, в котором черновик лежит. -> сообщение."""
+        from .layers import to_area, idx as _idx
+        rs_ = m._regions[k]
+        up_ = rs_
+        while up_ is not None and (up_ is rs_ or up_.get('kind') in ('draft', 'group')):
+            pk_ = _idx(m, up_.get('parent')) if up_.get('parent') else None
+            up_ = m._regions[pk_] if pk_ is not None else None
+        if up_ is not None and SM.obj(m, up_) >= m.objective:
+            return (f"{SM.title(m, k)} lies in a {SM.obj(m, up_)}x scan: put a larger objective (M), then make it "
+                    "a selection")
+        t0_ = SM.title(m, k)
+        to_area(m, k, m.objective)
+        SM.persist(m)
+        return f"{t0_} is now {SM.title(m, k)} ({m.objective}x): it will be scanned and goes into the export"
+
     def cycle_objective(k):
         """Объектив выделения — следующий из списка (только пока его не снимали: папка съёмок — по объективу)."""
         from .project import Selection
@@ -751,11 +772,8 @@ def _run(m, fullscreen=False, _keys=None):
         rg_ = m._regions[k]
         if rg_.get('kind') == 'group':
             return "A group has no objective"
-        if rg_.get('kind') == 'draft':                      # маску — в участок под стоящий объектив
-            from .layers import to_area
-            to_area(m, k, m.objective)
-            SM.persist(m)
-            return f"{SM.title(m, k)}: an area for {m.objective}x now (Scan area shoots it whole)"
+        if rg_.get('kind') == 'draft':                      # черновик — в выделение (обратно нельзя)
+            return draft_to_selection(k)
         if Selection(m.sample, rg_).latest:
             return f"{SM.title(m, k)} is already scanned with {SM.obj(m, rg_)}x: mark a new selection for another objective"
         obs = sorted(OBJECTIVES)
@@ -954,7 +972,7 @@ def _run(m, fullscreen=False, _keys=None):
                 items.append(dict(title=SM.title(m, k), obj="draft", color=SM.col(m, k), chosen=k in car['multi'],
                                   confirm=car['confirm'] == k, depth=depth, hidden=bool(reg.get('hidden')),
                                   muted=hd_, lines=[mm_ + ", from the view (M)" + (f", grid 1/{reg['sub']}" if reg.get('sub') else ""),
-                                                    "click draft: pick its objective" if not hd_
+                                                    f"click 'draft': make it a Selection ({m.objective}x)" if not hd_
                                                     else "hidden on the maps"]))
                 order.append(k)
                 continue
@@ -1136,7 +1154,6 @@ def _run(m, fullscreen=False, _keys=None):
         if not cand:
             msg = "Nothing scanned yet: Scan area first"
             return
-        cand += [k_ for k_, r_ in enumerate(m._regions) if r_.get('kind') == 'draft']   # черновики: контур и клетки
         rows = [f"{SM.title(m, k_):<14} {SM.obj(m, m._regions[k_]):>4}x   " +
                 (f"scanned {shot_of(k_)}" if m._regions[k_].get('kind') != 'draft' else "draft: outline and cells")
                 for k_ in cand]
@@ -1313,8 +1330,18 @@ def _run(m, fullscreen=False, _keys=None):
         from .util import Progress
         from .stitch import stitch as _stitch
         msg_t = time.monotonic()
+        only_ = None
+        if m._sel is not None and m._sel < len(m._regions):   # выбран черновик: он становится выделением
+            rs_ = m._regions[m._sel]                          # этого объектива (пойдёт в экспорт) и снимается
+            if rs_.get('kind') == 'draft':
+                msg = draft_to_selection(m._sel)
+                if m._regions[m._sel].get('kind') == 'draft':  # не вышло (объектив мал)
+                    return
+                only_ = [rs_['uid']]
+            elif SM.obj(m, rs_) == m.objective and rs_.get('kind') != 'group':
+                only_ = [rs_['uid']]                          # выбранное выделение этого объектива — только его
         ks = [k_ for k_, rg in enumerate(m._regions) if SM.obj(m, rg) == m.objective
-              and rg.get('kind') not in ('group', 'draft')]
+              and rg.get('kind') not in ('group', 'draft') and (not only_ or rg['uid'] in only_)]
         if not ks:
             msg = (f"Only drafts for {m.objective}x: click a draft's 'draft' chip to make it an area, then Scan area"
                    if any(r_.get('kind') == 'draft' for r_ in m._regions) else
@@ -1332,7 +1359,7 @@ def _run(m, fullscreen=False, _keys=None):
 
         def work():
             try:
-                folder = m.scan()
+                folder = m.scan(only=only_)
                 res['folder'] = folder
                 if res.get('stop'):
                     return
@@ -1510,10 +1537,7 @@ def _run(m, fullscreen=False, _keys=None):
                 d_.update(to_)
                 with open(gp_, 'w', encoding='utf-8') as f_:
                     json.dump(d_, f_, indent=1)
-            if fd_ in t.get('gs', {}):
-                gsel[fd_] = to_
-            else:
-                gsel.pop(fd_, None)
+            gsel[fd_] = to_
         if t['obj'] != m.objective:
             m.objective = t['obj']
             d0 = default_steps(m)
@@ -1531,8 +1555,16 @@ def _run(m, fullscreen=False, _keys=None):
             while tgt['z'] > m.position.z + 0.5 * m.motor_step:
                 m.goto(z=min(tgt['z'], m.position.z + m.max_move_z * 0.95))
 
+    refresh_gs()
     h_last = (h_sig(), h_snap())
     while True:
+        sg_ = h_sig()
+        if sg_ != h_last[0]:                              # что-то сделано: в историю (с квадратами съёмок)
+            refresh_gs()
+            sg_ = h_sig()
+            new_ = h_snap()
+            hist.push(h_label(h_last[1], new_), h_last[1], new_)
+            h_last = (sg_, new_)
         if time.monotonic() - car.get('sync_t', 0) > 1.0:   # кисть в просмотре -> выделения (раз в секунду)
             car['sync_t'] = time.monotonic()
             try:
@@ -1545,13 +1577,10 @@ def _run(m, fullscreen=False, _keys=None):
                     SM.persist(m)
                     msg, msg_t = r_, time.monotonic()
                     L.event('MAN-013', r_ + ".")
+                refresh_gs()
+                h_last = (h_sig(), h_snap())             # следствие выбранного в просмотре — не шаг Ctrl+Z
             except Exception as e:
                 L.debug('MAN-013', f"Brush sync skipped: {e}")
-        sg_ = h_sig()
-        if sg_ != h_last[0]:                              # что-то сделано: в историю
-            new_ = h_snap()
-            hist.push(h_label(h_last[1], new_), h_last[1], new_)
-            h_last = (sg_, new_)
         need = True
         if live is not None:                               # перерисовать: новый кадр, события мыши или раз в 0.3 с
             now_ = time.monotonic()                        # не чаще UI_FPS: камере 30 кадров/с не нужно
@@ -1854,6 +1883,8 @@ def _run(m, fullscreen=False, _keys=None):
             cv2.waitKey(1)
             if isinstance(key, tuple) and key[0] == 'mouse':   # тест: событие мыши как от окна (ev, x, y, flags)
                 on_mouse(*key[1:]); key = -1
+            elif isinstance(key, tuple) and key[0] == 'call':  # тест: сделать что-то, как кнопкой
+                key[1](); key = -1
             elif isinstance(key, tuple):                  # тест: щелчок мышью (x, y)
                 clicks.append(key); key = -1
         while clicks:                                     # щелчок по полю — ввод значения; по картинке — направляющие

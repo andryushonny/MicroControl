@@ -1576,7 +1576,7 @@ class Microscope:
         from .config import scan_overlap
         return plan(self, area=area, focus=focus, overlap=scan_overlap(self.objective) if overlap is None else overlap, path=path)
 
-    def scan(self, area=None, focus='auto', overlap=None, path='snake', name='', notes=''):
+    def scan(self, area=None, focus='auto', overlap=None, path='snake', name='', notes='', only=None):
         """Снять выделения ТЕКУЩЕГО объектива. Для каждого кадра: встать на координаты, Z, пауза, снимок.
         Каждая съёмка — новая версия в папке своего выделения: projects/<проект>/selections/Sxx_NNx/scans/<дата>/
         (прежние съёмки остаются; на картах и в списке — последняя). Выделения других объективов (слои: участки
@@ -1584,7 +1584,7 @@ class Microscope:
         focus: 'auto' — Z каждого кадра по точкам фокуса выделения (4 ближайшие, веса 1/d²), без точек — 'off';
                'points', 'off', 'plane', 'each' — см. справку. overlap — перекрытие 0..0.5; path — 'snake' / 'rows'.
         area=Area(...) — снять эту зону: она становится новым выделением проекта.
-        name, notes — подпись съёмки (в имени папки и в meta.json).
+        name, notes — подпись съёмки (в имени папки и в meta.json). only — uid выделений: снять только их.
         Возвращает папку съёмки (одно выделение) или папку проекта (несколько); все — в m.last_scans."""
         from .scan import plan, Area
         from .config import scan_overlap
@@ -1611,7 +1611,8 @@ class Microscope:
             regs = [self._regions[-1]]
         else:
             regs_all = self._regions
-            regs = [rg for rg in regs_all if _obj(self, rg) == self.objective and rg.get('kind') not in ('group', 'draft')]
+            regs = [rg for rg in regs_all if _obj(self, rg) == self.objective and rg.get('kind') not in ('group', 'draft')
+                    and (not only or rg.get('uid') in only)]
             if not regs_all:
                 raise SafetyError('E701', "No selection: mark one in m.manual() (keys 1 and 2) or set m.area.")
             if not regs and all(rg.get('kind') in ('group', 'draft') for rg in regs_all

@@ -949,8 +949,8 @@ def _run(m, fullscreen=False, _keys=None):
         bad = [o['num'] for o in m._regions if o.get('kind') != 'group' and SM.obj(m, o) == m.objective
                and g_.intersection(_geom(m, o)).area > 1e-3 * g_.area]
         if bad:
-            return str(_E('E704', f"It overlaps Selection {', '.join(map(str, bad))} of the same objective "
-                                  f"({m.objective}x): draw it beside, or merge them later"))
+            return str(_E('E704', f"Selection {', '.join(map(str, bad))} ({m.objective}x) is already there. "
+                                  f"For an area inside it put a larger objective (M), then drag again"))
         m._regions.append(r_)
         gp_ = geometric_parent(m, r_)
         r_['parent'] = m._regions[gp_]['uid'] if gp_ is not None else None

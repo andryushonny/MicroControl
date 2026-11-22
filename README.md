@@ -63,7 +63,7 @@ Both windows close with **Shift+Esc** or the window's ×. A single `Esc` only ca
 
 `mc.view(folder)` opens the stitched picture (drag — move, wheel — zoom).
 
-- Press `C` and click **two neighbouring crosses in one row**. From them the program knows the tilt and the size of the squares, turns the picture level and draws the red grid over everything. The mark lands exactly where you click; `Shift`+click snaps it to the cross centre, a mark can be dragged. `F` refines the grid using all crosses.
+- Press `C` and click **two neighbouring crosses in one row**. From them the program knows the tilt and the size of the squares, turns the picture level and draws the red grid over everything. The mark lands exactly where you click; `Shift`+click snaps it to the cross centre, a mark can be dragged. The grid is fitted to all crosses at once; `F` then puts every frame onto the crosses (see *Accuracy for lithography*).
 - **Numbers:** press `N`, click a square and type the number written next to it (`12 7`). Do this for two squares in different rows and columns — then every square has its real number.
 
 ### 4. Choose squares — the mask
@@ -87,6 +87,22 @@ Squares selected in the viewer become a **Draft** — a sketch that is never sca
 | *Layers on the map: 10x → Draft (grid 1/4) → 50x → 100x, the camera in the corner* | *50x scan: the grid is taken from the sample lattice (no crosses to mark), 1/4 and 1/8 cells* |
 | ![Export of the sample: the tilted scan is drawn square to the lattice, crosses with numbers from 1,1](docs/img/export.jpg) | ![Export, close-up: 10x picture, Draft 2 squares, 50x cells 1/4 and 100x cells 1/8 with their addresses](docs/img/export_zoom.jpg) |
 | *Drawing for AutoCAD: the 2.5° tilted chip comes out square to the lattice, crosses from 1,1* | *Close-up: every cell is a closed square on its own layer, address 16,10 > 2,3 > 1,1* |
+
+## Accuracy for lithography
+
+The drawing is used to write a circuit over the flakes, so every picture in it is placed **by the crosses around it**, not by the stage. What matters, and what the program does about it:
+
+| What | How |
+|---|---|
+| Stitching in two steps | `S` — frames by their overlaps (the preview). Then `C` (2–3 crosses) and `F` — every frame is put onto the crosses: the frames, the square lattice and the lens distortion are fitted together, so seam errors do not add up. The status line shows how many crosses lie within 0.5 µm of the grid. Python: `mc.stitch(folder)`, then `mc.fit_crosses(folder)` |
+| Picture in the drawing | every pixel is taken through the **4 crosses of its own square** (bilinear), crosses measured on that very scan; what is left of stitching, distortion and tilt does not reach the drawing |
+| Cross centre | template + **edges of the arms**: two straight lines through the middles of the arms, their crossing is the centre (≈0.1 px, also when the chip is turned; digits next to the cross are ignored) |
+| Lens distortion | `D` in the microscope window (`m.calibrate_distortion()`): 3×3 pictures with 50 % overlap around any details; matched pieces of the overlaps give $k_1, k_2, p_1, p_2$ without crosses and without trusting the stage. Remembered for the objective, used for every scan |
+| Frames | full camera resolution, JPG 95 by default; `m.frame_format = 'png'` — lossless. Crosses and seams are measured in the green channel (sharpest, no colour fringes) |
+| Before a scan | `A` (`m.prepare()`): lamp steady, autofocus, exposure (brightest details ≈80 %, no overexposure), white balance on an empty place, pause for the stage to settle |
+| Backlash | `B` — one-side approach (remembered). The stitch does not trust the stage anyway; this keeps the frames where they are expected and the camera overlay exact |
+
+For the circuit itself, outline the flakes at 50x / 100x: at 10x the optics blur edges by about 1 µm.
 
 ---
 
@@ -246,6 +262,8 @@ Arrows move; letters do things. As much as possible is done right in the window.
 | `S` | scan the selections of this objective and stitch them, in the window (`Esc` — stop) |
 | `V` | open the last scan in the viewer; closing it brings you back |
 | `L` · `I` · `W` | light on / off · laser on / off · white balance |
+| `A` · `D` | prepare here before a scan (lamp, focus, exposure, white balance, settling) · distortion of this objective |
+| `B` · `\` | one-side approach against backlash · turn the map 90° anticlockwise (both remembered) |
 | `R` | ruler: two clicks — the distance |
 | `Space` | take a picture |
 | `0` · `Shift+0` | zero here · real coordinates |
@@ -261,8 +279,8 @@ Arrows move; letters do things. As much as possible is done right in the window.
 | Key | Action |
 |---|---|
 | arrows, drag · wheel · `0` | move · zoom · whole picture |
-| `S` | stitch right here: progress in the window, then the view reopens stitched |
-| `C` · `F` | mark crosses (`Shift+C` — start again) · fit the grid to all crosses |
+| `S` | stitch right here (frames by their overlaps, the preview); the view reopens stitched |
+| `C` · `F` | mark crosses (`Shift+C` — start again) · frames onto the crosses (exact: frames, grid and distortion together) |
 | `N` | number a square |
 | `M` | select (click, box); `Shift` — unselect; right click — remove one, `Shift` + right click — the whole area; `A` / `X` — all / none |
 | `2`…`5` · `1` | over a selection: its own grid 2–5 times denser (`M` then selects its cells) · no finer grid |

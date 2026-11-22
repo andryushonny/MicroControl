@@ -50,6 +50,8 @@ HELP = ["Shift+Esc: Exit (or close the window)", "P: Hide / show the left panel"
         "S: Scan the selections of this objective and stitch them, here in the window (Esc: stop)",
         "V: Open the last scan in the view (crosses, squares, export); closing it brings you back here",
         "L: Light on / off   I: Laser on / off   W: White balance (aim at an empty place)   Space: Picture",
+        "A: Prepare here before a scan: lamp steady, focus, exposure (crosses ~80 % bright, no overexposure), white balance, stage settling pause",
+        "D: Distortion of this objective: 3 x 3 overlapping pictures around details (crosses, a flake edge); remembered, used for every scan",
         "R: Ruler: click two points (distance, um)   0: Zero here   Shift+0: Real coordinates",
         "Wheel: zoom   Drag (middle button too): move the zoomed picture   Z: whole frame",
         "Map (top right): click - the stage goes there, drag - a new area on this objective, wheel - zoom, right drag - move",
@@ -2436,6 +2438,21 @@ def _run(m, fullscreen=False, _keys=None):
                 else:
                     m.offset_clear()
                     msg = "Offset removed: real coordinates"
+            elif ch == 'a' or ch == 'd':                   # A: подготовка; D: дисторсия объектива
+                if live is not None:
+                    live.paused = True
+                try:
+                    res_ = busy("Prepare before the scan" if ch == 'a' else f"Distortion of {m.objective}x",
+                                (lambda: m.prepare()) if ch == 'a' else (lambda: m.calibrate_distortion()))
+                finally:
+                    if live is not None:
+                        live.paused = False
+                if 'e' in res_:
+                    msg = f"{'Prepare' if ch == 'a' else 'Distortion'} failed: {res_['e']}"
+                else:
+                    r_ = res_['r']
+                    msg = "   ".join(f"{k_}: {v_}" for k_, v_ in list(r_.items()))
+                msg_t = time.monotonic()
             elif ch == 'w':                                # баланс белого (навести на пустое место)
                 m.white_balance()
                 msg = "White balance done"

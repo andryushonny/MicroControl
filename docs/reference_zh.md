@@ -611,13 +611,21 @@ $S$ —— 灵敏度 0…100（50 —— 0.5 %；0 —— 5 %；100 —— 0.05 
 
 内存由 `max_mb` 限制（默认 2000 MB）：选区很大时图像会被缩小。
 
-### 12.5. 镜头畸变（`mc.distortion`）
+### 12.5. 镜头畸变、按十字拼接、按十字生成图纸
 
-模型（径向，一个系数）：$\mathbf{x}_d = \mathbf{c} + (\mathbf{x}_u - \mathbf{c})(1 + k_1\rho^2)$，$\rho = r/R$，$R$ —— 图像对角线的一半；角上的偏移为 $k_1R$。
+**模型。** 平直帧中的点 $\mathbf{u}$（$\mathbf{v} = \mathbf{u} - \mathbf{c}$，$\rho^2 = |\mathbf{v}|^2/R^2$，$R$ —— 帧对角线的一半）在照片中位于 $\mathbf{u} + \Delta(\mathbf{v})$：
+$$\Delta = k_1\mathbf{v}\rho^2 + k_2\mathbf{v}\rho^4 + \tfrac{1}{R}\bigl(p_1\,2xy + p_2(3x^2+y^2),\; p_1(x^2+3y^2) + p_2\,2xy\bigr),$$
+径向（$k_1, k_2$）与偏心（$p_1, p_2$）；对 $\theta = (k_1, k_2, p_1, p_2)$ 是线性的。
 
-测量 —— 利用十字网格（间距精确的标尺）：在 `mc.stitch` 并在 `mc.view` 中标记十字之后，调用 `mc.distortion(folder)`。在每个含两个或更多十字的图像中，在网格节点附近找到十字中心；偏差 $\mathbf{e}$ 减去其在该图像上的平均值（图像平移）后，用最小二乘拟合 $a(\mathbf{u}-\mathbf{c}) + b\,\mathrm{rot}_{90}(\mathbf{u}-\mathbf{c}) + k_1(\mathbf{u}-\mathbf{c})\rho^2$（网格缩放和旋转与畸变分开）。若角上偏移 ≥ 0.5 px 且校正明显减小偏差，$k_1$ 按该显微镜和物镜保存（`~/.microcontrol/devices/distortion_<序列号>_<M>x.json`），并应用于之后的所有拼接；测量后请重新运行 `mc.stitch(folder)`。
+**标定**（`m.calibrate_distortion()`，显微镜窗口中按 `D`）：在任意细节周围拍 3×3 张 50 % 重叠的帧。每个重叠区切成小块（约帧的 1/10），逐块测量精确位移 $\mathbf{r}_a - \mathbf{r}_b$。每块一个方程：$\mathbf{P}_b - \mathbf{P}_a + \theta\cdot[\varphi(\mathbf{r}_a) - \varphi(\mathbf{r}_b)] = \mathbf{r}_a - \mathbf{r}_b$（$\varphi$ —— 四个基场）：帧位置与 $\theta$ 一起用带抗离群权重的最小二乘求解。不需要十字，也不依赖载物台精度。按物镜保存，并写入每次扫描的 `meta.json`。模拟器：0.88 px（场的非线性部分的均方根）只剩 0.09 px。
 
-模拟器验证：设定的 $k_1 = -0.020$（角上 8 px）测得为 $-0.0196$；校正后接缝 0.21 → 0.12 px，网格间距 99.1 → 99.9 µm。无畸变时测得角上 1.3 px —— 视为不显著，不应用。
+**按十字拼接**（`mc.fit_crosses(folder)`，查看器中 `C` 之后按 `F`）：未知量 —— 所有帧的位置、正方形晶格 $(O, \mathbf{a})$、$\theta$。在**原始**帧 $k$ 中于 $\mathbf{r}$ 处找到的每个十字 $(i, j)$：$\mathbf{P}_k + \mathbf{r} - \Delta_\theta(\mathbf{u}) = O + i\mathbf{a} + j\,\mathrm{rot}_{90}\mathbf{a}$；每条接缝：$\mathbf{P}_b - \mathbf{P}_a + \theta\cdot G_{ab} = \mathbf{d}_{ab} + \theta_0\cdot G_{ab}$。含十字的帧绝对固定在晶格上，接缝误差不会累积。物镜已标定时，$\theta$ 保持在标定值附近。若 $\theta$ 在边缘处变化超过 0.5 px，则在校正后的帧上重新测量接缝。报告：距网格不超过 0.5 µm 的十字所占比例。模拟器（10x、倾斜 10°、回程间隙、畸变）：100 % 优于 0.5 µm，95 % 优于 0.08 µm。
+
+**十字中心**：先用「+」模板（按网格倾斜：先旋转窗口），再用**臂的边缘**：在每个臂上横向取 7–40 条剖面，每条求出两个亚像素边缘及其中点；通过水平臂中点的直线与通过垂直臂中点的直线，二者交点即中心。条带宽度不同的剖面（数字、污渍）被剔除。合成测试，十字倾斜 10°、有噪声和数字：0.1 px（仅模板为 0.2–0.3 px）。
+
+**按十字生成图纸。** 若某选区的扫描已用带编号的网格标注，其在图纸中的图片逐像素生成：图纸点 → 晶格 $(u, v)$ → 网格方格 → 由**该方格的 4 个十字**（在本次扫描中测得，未找到的取自网格）双线性映射到拼图上的点。图片与晶格对齐；拼接、畸变和倾斜的残差不会进入图纸。`drawing.json` 中列出每个区域测得了多少十字以及它们偏离理想网格多远。
+
+**帧**：相机全分辨率（`m.frame_scale = 1`），JPG 95；`m.frame_format = 'png'` —— 无损。十字和接缝在绿色通道中测量。
 
 ### 12.4. 简单拼图（`mc.join`）
 
@@ -1008,12 +1016,13 @@ m = mc.Microscope(port='auto', objective=10, camera=True, allow_laser=False,
 | `m.check_orientation()` | 用相机检查轴符号 | — |
 | `m.image()`, `m.photo()` | 图像 / 拍照 | `M240` |
 | `m.white_balance()`, `m.dark_frame()`, `m.empty_frame()` | 白平衡、参考图像 | — |
+| `m.prepare()` · `m.calibrate_distortion()` | 扫描前：灯、对焦、曝光、白平衡、稳定停顿 · 物镜的镜头畸变（第 12.5 节） | — |
 | `m.manual()` | 手动模式 | — |
 | `m.plan()`, `m.scan()` | 扫描程序 / 执行 | `G29`, `M240` |
 | `m.gcode(program)` | 执行 G 代码 | — |
 | `m.info()`, `m` | 仪器信息、状态 | — |
 | `m.close()` | 断开连接 | — |
-| `mc.stitch()`, `mc.view()`, `mc.hints()`, `mc.export()`, `mc.distortion()`, `mc.clean()` | 拼接、标注、提示、导出、镜头畸变、清理 | — |
+| `mc.stitch()`, `mc.fit_crosses()`, `mc.view()`, `mc.hints()`, `mc.export()`, `mc.clean()` | 拼接（预览）、帧放到十字上并求畸变（第 12.5 节）、标注、提示、导出、清理 | — |
 | `mc.train_hints()`, `mc.Agent()`, `mc.agent.chat()` | 提示用的空白基底模型；AI 智能体工具（第 25 节） | — |
 | `mc.join()`, `mc.ScanData()` | 简单拼图、访问图像 | — |
 | `mc.help()` | 简短帮助 | — |

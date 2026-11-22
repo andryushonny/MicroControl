@@ -13,9 +13,10 @@ class SimWorld:
     Образец рисуется в микрометрах, поэтому при смене объектива масштаб честный.
     Лазер — пятно в центре кадра: размер зависит от объектива и расфокуса, яркость — от мощности.
     От мощности burn_mw в фокусе на образце остаётся тёмный след (как настоящий ожог)."""
-    def __init__(self, seed=0, pitch=100.0, cross=20.0, line=2.5, burn_mw=20.0):
+    def __init__(self, seed=0, pitch=100.0, cross=20.0, line=2.5, burn_mw=20.0, turn_deg=10.0):
         rng = np.random.default_rng(seed)
         self.pitch, self.cross, self.line, self.burn_mw = pitch, cross, line, burn_mw
+        self.turn_deg = turn_deg                          # подложка повёрнута на столике (кресты наискосок), градусы
         n, self.tex_um = 3000, 0.5                    # фон: 3000 px по 0.5 мкм = 1.5 мм, дальше повторяется
         noise = np.zeros((n, n), np.float32)
         for k in (3, 10, 40):
@@ -192,7 +193,7 @@ class SimWorld:
             img = img * (1 - fm) + (0.4 * img + 0.6 * np.array([235, 240, 170], np.float32)) * fm   # тонкая: подложка видна
         # кресты: золото на подложке; каждый 5-й (через 5 × pitch) вдвое крупнее
         P_, soft = self.pitch, max(self.px_um, 0.3)
-        t = np.radians(getattr(self, 'turn_deg', 0.0))       # подложка повёрнута на столике вокруг Z
+        t = np.radians(self.turn_deg)                         # подложка повёрнута на столике вокруг Z
         Xr = np.cos(t) * X[None] + np.sin(t) * Y[:, None]
         Yr = -np.sin(t) * X[None] + np.cos(t) * Y[:, None]
         dx = (Xr + P_ / 2) % P_ - P_ / 2
@@ -292,7 +293,10 @@ class SimCamera:
         self.w, self.exposure_ms = world, 20.0
 
     def grab(self, flush=0):
-        return self.w.frame()
+        img = self.w.frame()
+        if abs(self.exposure_ms - 20.0) > 1e-6:          # экспозиция: ярче / темнее, пересвет — 255
+            img = np.clip(img.astype(np.float32) * (self.exposure_ms / 20.0), 0, 255).astype(np.uint8)
+        return img
 
     def set(self, exposure_ms=None, white_balance=False, **kw):
         if exposure_ms is not None:

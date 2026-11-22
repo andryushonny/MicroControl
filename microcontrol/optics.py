@@ -165,14 +165,18 @@ def _dist_path(meta):
 
 
 def load_dist(folder, meta):
-    """Дисторсия скана {k1, k2, p1, p2}: join/distortion.json в папке скана, иначе измеренная для этого
-    микроскопа и объектива; нет — нули."""
-    for p in (os.path.join(folder, 'join', 'distortion.json'), _dist_path(meta)):
-        if p and os.path.exists(p):
+    """Дисторсия скана {k1, k2, p1, p2}: join/distortion.json в папке скана (сшивка по крестам), иначе
+    калибровка объектива на момент съёмки (meta), иначе измеренная для этого микроскопа и объектива; нет — нули."""
+    for p in (os.path.join(folder, 'join', 'distortion.json'), 'meta', _dist_path(meta)):
+        if p == 'meta':                                     # калибровка объектива на момент съёмки
+            d = meta.get('distortion') or None
+        elif p and os.path.exists(p):
             with open(p, encoding='utf-8') as f:
                 d = json.load(f)
-            if d.get('apply', True):
-                return {k: float(d.get(k, 0.0)) for k in DIST_KEYS}
+        else:
+            d = None
+        if d and d.get('apply', True):
+            return {k: float(d.get(k, 0.0)) for k in DIST_KEYS}
     return {k: 0.0 for k in DIST_KEYS}
 
 

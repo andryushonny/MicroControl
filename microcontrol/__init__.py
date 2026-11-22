@@ -88,6 +88,9 @@ MANUAL WINDOW (arrows move; letters do things)
   S (twice)        Scan the selections of this objective and stitch them, here in the window (Esc: stop)
   V                Open the last scan in the view; closing it brings you back
   L                Light on / off           W       White balance (aim at an empty place)
+  A                Prepare here: lamp steady, focus, exposure, white balance, stage settling pause
+  D                Lens distortion of this objective (3 x 3 overlapping pictures around details)
+  B                One-side approach against backlash (remembered)   \\  Turn the map 90 deg
   I                Laser on / off (needs allow_laser=True; a red LASER ON banner while it is on)
   R                Ruler: click two points -> distance in um (also in mc.view)
   Space            Picture                  0 / Shift+0   Zero here / real coordinates
@@ -97,9 +100,9 @@ MANUAL WINDOW (arrows move; letters do things)
 
 VIEW WINDOW (mc.view)
   Arrows, drag     Move (right / middle button in any mode; Ctrl+left in M and B)   Wheel, + / -, 0   Zoom
-  S                Stitch this selection here (progress in the window), then the view reopens
+  S                Stitch this selection here: frames by their overlaps (the preview); the view reopens
   C                Mark crosses: two in a row = the tilt, the picture turns level (Shift+C: start again)
-  F                Fit the grid to all crosses
+  F                Frames onto the crosses (exact: frames, grid and lens distortion together)
   M / B            Select squares: click and box / brush rectangles (Shift: unselect)   A / X  All / none
   Right click      On a green area: remove it
   N                Number a square: click it, type X Y (two squares in another row and column fix all numbers)

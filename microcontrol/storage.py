@@ -4,6 +4,7 @@ scans/<скан>/
   meta.json          — объектив, масштаб кадра, настройки
   index.csv          — по строке на кадр: позиция, Z, резкость, где лежит (batch, slot)
   frames/00001_r001_c001.jpg — кадры в JPG (по умолчанию: компактно, открываются чем угодно сразу)
+                       или .png (m.frame_format = 'png': без потерь, для литографии — точнее края крестов)
   batches/b0000.h5   — или пачки по batch_size кадров (HDF5, без потерь; m.frame_format = 'h5')
 
 Почему пачки: 3000 кадров — это ~30 файлов, а не 3000; сбой при записи портит
@@ -106,9 +107,10 @@ class ScanData:
     # ---------- запись ----------
     @classmethod
     def create(cls, folder, meta, batch_size=100, compression='gzip', fmt='h5', quality=90):
-        """Новая карта для записи. fmt='jpg' — кадры файлами frames/*.jpg (качество quality), 'h5' — пачки HDF5."""
+        """Новая карта для записи. fmt='jpg' — кадры файлами frames/*.jpg (качество quality), 'png' — без потерь,
+        'h5' — пачки HDF5."""
         st = cls(folder, 'w')
-        os.makedirs(os.path.join(folder, 'frames' if fmt == 'jpg' else 'batches'), exist_ok=True)
+        os.makedirs(os.path.join(folder, 'frames' if fmt in ('jpg', 'png') else 'batches'), exist_ok=True)
         st.meta, st.batch_size, st.comp = meta, int(batch_size), compression
         st.fmt, st.quality = fmt, int(quality)
         st.n, st._h5, st._csv_f = 0, None, open(os.path.join(folder, 'index.csv'), 'w', newline='', encoding='utf-8')
@@ -123,11 +125,12 @@ class ScanData:
 
     def add(self, img, **row):
         """Дописать кадр. Возвращает его id."""
-        if self.fmt == 'jpg':
+        if self.fmt in ('jpg', 'png'):
             import cv2
             r_, c_ = row.get('row', ''), row.get('col', '')
-            name = f"{self.n + 1:05d}" + (f"_r{int(r_) + 1:03d}_c{int(c_) + 1:03d}" if r_ != '' else '') + ".jpg"
-            ok, buf = cv2.imencode('.jpg', img, [cv2.IMWRITE_JPEG_QUALITY, self.quality])
+            name = f"{self.n + 1:05d}" + (f"_r{int(r_) + 1:03d}_c{int(c_) + 1:03d}" if r_ != '' else '') + f".{self.fmt}"
+            ok, buf = cv2.imencode('.jpg', img, [cv2.IMWRITE_JPEG_QUALITY, self.quality]) if self.fmt == 'jpg' else \
+                cv2.imencode('.png', img, [cv2.IMWRITE_PNG_COMPRESSION, 1])   # без потерь: края крестов как сняты
             buf.tofile(os.path.join(self.folder, 'frames', name))
             r = dict(id=self.n, batch='', slot=0, file=name, **row)
             self._csv.writerow([r.get(c, '') for c in COLS])

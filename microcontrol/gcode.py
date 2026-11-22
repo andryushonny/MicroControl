@@ -19,7 +19,7 @@
   M114                          напечатать положение
 Комментарии: ; до конца строки и (в скобках).
 """
-import os, re, time
+import json, os, re, time
 from datetime import datetime
 import numpy as np
 import cv2
@@ -38,6 +38,20 @@ SPEC = {   # команда: (разрешённые буквы, смысл)
 }
 TOKEN = re.compile(r'([A-Z])\s*([-+]?(?:\d+\.?\d*|\.\d+))')
 
+
+
+def _dist_of(m):
+    """Калибровка дисторсии этого объектива (m.calibrate_distortion) — в meta скана: применяется к его кадрам."""
+    d = (getattr(m, '_dist_cal', None) or {}).get(int(m.objective))
+    if d is None:
+        from .optics import _dist_path
+        p = _dist_path({'device': dict(getattr(m, 'device', {}) or {}), 'objective': m.objective})
+        if p and os.path.exists(p):
+            try:
+                d = json.load(open(p, encoding='utf-8'))
+            except (OSError, ValueError):
+                d = None
+    return d if d and d.get('calibrated') else None
 
 class Program(str):
     """Текст G-кода. Печатается построчно; .save('файл.gcode') — сохранить."""
@@ -218,7 +232,7 @@ class _Recorder:
         os.makedirs(m.dirs['scans'], exist_ok=True)
         free = __import__('shutil').disk_usage(m.dirs['scans']).free / 2 ** 20
         n = program.count('M240')
-        need = n * m._frame_px[0] * m._frame_px[1] * 3 * m.frame_scale ** 2 * (0.7 if m.frame_format == 'h5' else 0.08) / 2 ** 20
+        need = n * m._frame_px[0] * m._frame_px[1] * 3 * m.frame_scale ** 2 * ({'h5': 0.7, 'png': 0.45}.get(m.frame_format, 0.1)) / 2 ** 20
         if free < 1.5 * need + 500:
             raise SafetyError('E702', f"Need about {need:.0f} MB, free {free:.0f} MB.")
         from .util import named_folder
@@ -236,7 +250,7 @@ class _Recorder:
                          focus=dict(metric=m.focus_method, range_um=m.focus_range, step_um=m.focus_step,
                                     every_frames=m.focus_every, refocus=m.refocus),
                          photo_pause_s=m.photo_pause, move_pause_s=m.move_pause, speed_um_s=m.motor_speed, references=dict(m.references),
-                         offset_um=dict(m._off), device=dict(getattr(m, 'device', {}) or {}),
+                         offset_um=dict(m._off), device=dict(getattr(m, 'device', {}) or {}), distortion=_dist_of(m),
                          frames_planned=n, status='running', log=L.path(),
                          crosses=m._crosses.to_dict() if getattr(m, '_crosses', None) is not None and m._crosses.marks else None,
                          **(extra or {}))

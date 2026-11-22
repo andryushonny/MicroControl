@@ -595,7 +595,8 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
         if snap:
             r = int(min(150, max(8, 15.0 / px_um)))
             reg = sc.render(Mc[0], Mc[1], 1.0, 4 * r + 1, 4 * r + 1)
-            d, resp = snap_cross(cv2.cvtColor(reg, cv2.COLOR_BGR2GRAY), r, arm=g.arm)
+            from .mask import meas_gray
+            d, resp = snap_cross(meas_gray(reg), r, arm=g.arm, angle=g.angle_deg())
         try:
             was_ = g.ready()
             if was_:

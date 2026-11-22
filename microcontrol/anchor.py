@@ -30,7 +30,7 @@ TOL_UM = 0.5                         # крест «на сетке», если 
 
 def _detect(st, g, P, D0, px, verbose):
     """Кресты в сырых кадрах около мест, где их ставит сетка. -> (k, i, j, r) — r в px сырого кадра."""
-    from .mask import snap_cross
+    from .mask import snap_cross, meas_gray
     from .optics import dist_shift
     H, W = st.shape[:2]
     c = np.array([W / 2, H / 2])
@@ -39,6 +39,7 @@ def _detect(st, g, P, D0, px, verbose):
     s = min(1.0, 4.0 * px)                                  # 50x, 100x: крест крупнее перебора плеч — уменьшить
     m = 6.0 / px                                            # узел не ближе 6 мкм к краю кадра (полкреста видно)
     arm = g.arm * s if g.arm else None
+    ang = g.angle_deg()                                     # крест стоит с наклоном сетки
     arms = []
     out = []
     pr = Progress(len(st), "Crosses: finding", unit='frames') if verbose else None
@@ -54,7 +55,7 @@ def _detect(st, g, P, D0, px, verbose):
         if not nodes:
             continue
         img = st.frame(k)
-        img = img if img.ndim == 2 else cv2.cvtColor(np.ascontiguousarray(img), cv2.COLOR_BGR2GRAY)
+        img = meas_gray(img)
         for i, j, u in nodes:
             rp = u + dist_shift(u - c, D0, R)[0]             # где узел в сыром кадре
             x0, y0 = (np.maximum(0, np.round(rp - 2 * rr))).astype(int)
@@ -70,7 +71,7 @@ def _detect(st, g, P, D0, px, verbose):
             mid = (np.array(win.shape[::-1], float) - 1) / 2
             o = (rp - (x0, y0) + 0.5) * (sx, sy) - 0.5 - mid  # узел относительно середины окна
             info = {}
-            d, resp = snap_cross(win, (rr * s + float(np.hypot(*o))), arm=arm, info=info)
+            d, resp = snap_cross(win, (rr * s + float(np.hypot(*o))), arm=arm, info=info, angle=ang)
             if resp < 0.1 or not np.any(d) or np.hypot(*(d - o)) > rr * s:
                 continue
             q = (mid + d + 0.5) / (sx, sy) - 0.5 + (x0, y0)
@@ -139,6 +140,7 @@ def anchor(folder, save=True, fit_dist=True, verbose=True, preview=True):
     R = float(np.hypot(W / 2, H / 2))
     D0 = load_dist(folder, st.meta)
     th0 = dist_vec(D0)
+    cal = bool((st.meta.get('distortion') or {}).get('calibrated'))   # объектив откалиброван: θ держится рядом
     Pabs = load_positions(folder, st)
     P0 = Pabs.min(0)
     P = Pabs - P0                                           # координаты сетки (мозаика от левого верхнего кадра)
@@ -222,7 +224,7 @@ def anchor(folder, save=True, fit_dist=True, verbose=True, preview=True):
     for it, cs in enumerate((1e9, 4.0, 2.0, 1.0, 1.0, 0.7, 0.7)):
         rows, mc_, ms_ = model_rows(U, None if fit_th else th0)
         w = np.r_[np.repeat(wc, 2), np.repeat(ws, 2) if len(I) else np.zeros(0),
-                  np.full(2 * n, 1e-3), np.full(4, 0.3 if fit_th else 1e4)]
+                  np.full(2 * n, 1e-3), np.full(4, (30.0 if cal else 0.3) if fit_th else 1e4)]
         if x is None:                                       # начальное: старые положения, решётка — по ним
             x = np.r_[P.reshape(-1), Ob, ab, th0]
         x = _solve(rows, N, w, x0=x)

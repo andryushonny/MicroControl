@@ -24,7 +24,7 @@ from .stats import timed_fn
 
 
 def _gray(a):
-    a = a if a.ndim == 2 else cv2.cvtColor(np.ascontiguousarray(a), cv2.COLOR_BGR2GRAY)
+    a = (a if a.ndim == 2 else a[..., 1]).astype(np.float32)   # зелёный канал: самый резкий, без цветной каймы
     return a.astype(np.float32)
 
 
@@ -108,7 +108,7 @@ def stitch(folder, engine='builtin', max_shift_um=40.0, sigma=None, alpha=0.01, 
     pred = -(p @ A.T)                                            # верхний левый угол кадра, px
     max_shift = min(max_shift_um / px, 0.5 * min(W, H))       # больше — уже не шов, а совпадение шума
     if sigma is None:
-        sigma = 1.0 if px < 0.5 else 0.0
+        sigma = 1.3 / px if px < 0.6 else 0.0               # детали ~1 мкм: шум пикселей не мешает (полный размер кадра)
     used = None
     if engine == 'ashlar':
         try:

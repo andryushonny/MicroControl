@@ -825,7 +825,8 @@ def _mark(ag, folder, x_px, y_px):
         raise AgentError('BAD_ARGS', f"Point outside the mosaic 0..{sc.size[0]:.0f} x 0..{sc.size[1]:.0f} px.")
     r = int(min(150, max(8, 15.0 / px_um)))
     reg = sc.render(Mc[0], Mc[1], 1.0, 4 * r + 1, 4 * r + 1)
-    d, resp = snap_cross(cv2.cvtColor(reg, cv2.COLOR_BGR2GRAY), r, arm=g.arm)
+    from .mask import meas_gray
+    d, resp = snap_cross(meas_gray(reg), r, arm=g.arm, angle=g.angle_deg())
     if resp < 0.05:
         raise AgentError('NO_CROSS', f"No cross found near ({x_px:.0f}, {y_px:.0f}) px (response {resp:.2f}).",
                          "Look closer (look target=mosaic with a small region) and give the centre of a cross.")

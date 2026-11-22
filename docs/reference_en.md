@@ -610,13 +610,21 @@ Each selected square (with a 16 px margin) is assembled directly from the frames
 
 Memory is limited by `max_mb` (2000 MB by default): for a large selection the image is reduced.
 
-### 12.5. Lens distortion (`mc.distortion`)
+### 12.5. Lens distortion, stitching on the crosses, the drawing by the crosses
 
-Model (radial, one coefficient): $\mathbf{x}_d = \mathbf{c} + (\mathbf{x}_u - \mathbf{c})(1 + k_1\rho^2)$, $\rho = r/R$, $R$ — half the frame diagonal; the offset in the corner is $k_1R$.
+**Model.** A point $\mathbf{u}$ of the straight frame ($\mathbf{v} = \mathbf{u} - \mathbf{c}$, $\rho^2 = |\mathbf{v}|^2/R^2$, $R$ — half the frame diagonal) is seen in the picture at $\mathbf{u} + \Delta(\mathbf{v})$:
+$$\Delta = k_1\mathbf{v}\rho^2 + k_2\mathbf{v}\rho^4 + \tfrac{1}{R}\bigl(p_1\,2xy + p_2(3x^2+y^2),\; p_1(x^2+3y^2) + p_2\,2xy\bigr),$$
+radial ($k_1, k_2$) and decentring ($p_1, p_2$); linear in $\theta = (k_1, k_2, p_1, p_2)$.
 
-Measurement — by the cross lattice (a ruler with an exact pitch): after `mc.stitch` and marking the crosses in `mc.view`, call `mc.distortion(folder)`. In every frame with two or more crosses the cross centres are found near the lattice nodes; the deviations $\mathbf{e}$ minus their mean over the frame (frame shift) are fitted by least squares with $a(\mathbf{u}-\mathbf{c}) + b\,\mathrm{rot}_{90}(\mathbf{u}-\mathbf{c}) + k_1(\mathbf{u}-\mathbf{c})\rho^2$ (lattice scale and rotation separately from distortion). If the corner offset is ≥ 0.5 px and the correction noticeably reduces the deviations, $k_1$ is saved for this microscope and objective (`~/.microcontrol/devices/distortion_<serial>_<M>x.json`) and applied to all following stitches; after measuring — run `mc.stitch(folder)` again.
+**Calibration** (`m.calibrate_distortion()`, key `D` in the microscope window): 3×3 frames with 50 % overlap around any details. Each overlap is cut into pieces (~1/10 of the frame); for every piece its exact shift $\mathbf{r}_a - \mathbf{r}_b$ is measured. One equation per piece: $\mathbf{P}_b - \mathbf{P}_a + \theta\cdot[\varphi(\mathbf{r}_a) - \varphi(\mathbf{r}_b)] = \mathbf{r}_a - \mathbf{r}_b$ ($\varphi$ — the four basis fields): frame positions and $\theta$ together, by least squares with outlier weights. Neither crosses nor stage accuracy are needed. Saved for the objective and written into `meta.json` of every scan. Simulator: of 0.88 px (rms, non-linear part of the field) 0.09 px is left.
 
-Simulator check: the set $k_1 = -0.020$ (8 px in the corner) was measured as $-0.0196$; after the correction seams 0.21 → 0.12 px, lattice pitch 99.1 → 99.9 µm. Without distortion 1.3 px in the corner was measured — considered insignificant, not applied.
+**Stitching on the crosses** (`mc.fit_crosses(folder)`, key `F` in the viewer after `C`): unknowns — positions of all frames, the square lattice $(O, \mathbf{a})$, $\theta$. Each cross $(i, j)$ found in the **raw** frame $k$ at $\mathbf{r}$: $\mathbf{P}_k + \mathbf{r} - \Delta_\theta(\mathbf{u}) = O + i\mathbf{a} + j\,\mathrm{rot}_{90}\mathbf{a}$; each seam: $\mathbf{P}_b - \mathbf{P}_a + \theta\cdot G_{ab} = \mathbf{d}_{ab} + \theta_0\cdot G_{ab}$. A frame with a cross is fixed to the lattice absolutely, seam errors do not add up. If the objective is calibrated, $\theta$ stays near the calibration. If $\theta$ changes by more than 0.5 px at the edge, the seams are measured again on straightened frames. Report: share of crosses within 0.5 µm of the grid. Simulator (10x, tilt 10°, backlash, distortion): 100 % within 0.5 µm, 95 % within 0.08 µm.
+
+**Cross centre**: template «+» (with the tilt of the grid: the window is turned first), then the **edges of the arms**: across each arm 7–40 profiles, in each two edges with sub-pixel accuracy, the middle; a straight line through the middles of the horizontal arms and one through the vertical; the centre is their crossing. Profiles with another stripe width (digits, dirt) are dropped. Synthetic test, cross at 10°, noise and digits: 0.1 px (template alone 0.2–0.3 px).
+
+**Drawing by the crosses.** For a selection whose scan has a numbered grid, its picture in the drawing is built pixel by pixel: drawing point → lattice $(u, v)$ → grid cell → mosaic point bilinearly from the **4 crosses of that cell** measured on this scan (missing ones — from the grid). The picture is square to the lattice; what is left of stitching, distortion and tilt does not reach the drawing. `drawing.json` lists, for every area, how many crosses were measured and how far they were from the straight grid.
+
+**Frames**: full camera resolution (`m.frame_scale = 1`), JPG 95; `m.frame_format = 'png'` — lossless. Crosses and seams are measured in the green channel.
 
 ### 12.4. Simple mosaic (`mc.join`)
 
@@ -1007,12 +1015,13 @@ Read `m.photo_pause`, change `m.photo_pause = 0.5`, table of all parameters `m.s
 | `m.check_orientation()` | check the axis signs with the camera | — |
 | `m.image()`, `m.photo()` | frame / picture | `M240` |
 | `m.white_balance()`, `m.dark_frame()`, `m.empty_frame()` | white balance, reference frames | — |
+| `m.prepare()` · `m.calibrate_distortion()` | before a scan: lamp, focus, exposure, white balance, settling pause · lens distortion of the objective (section 12.5) | — |
 | `m.manual()` | manual mode | — |
 | `m.plan()`, `m.scan()` | scan program / execution | `G29`, `M240` |
 | `m.gcode(program)` | run G-code | — |
 | `m.info()`, `m` | instrument info, state | — |
 | `m.close()` | disconnect | — |
-| `mc.stitch()`, `mc.view()`, `mc.hints()`, `mc.export()`, `mc.distortion()`, `mc.clean()` | stitching, marking, hints, export, lens distortion, clean-up | — |
+| `mc.stitch()`, `mc.fit_crosses()`, `mc.view()`, `mc.hints()`, `mc.export()`, `mc.clean()` | stitching (preview), frames onto the crosses with the distortion (section 12.5), marking, hints, export, clean-up | — |
 | `mc.train_hints()`, `mc.Agent()`, `mc.agent.chat()` | model of the empty substrate for hints; tools for AI agents (section 25) | — |
 | `mc.join()`, `mc.ScanData()` | simple mosaic, access to the frames | — |
 | `mc.help()` | short help | — |

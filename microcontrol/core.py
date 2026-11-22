@@ -248,8 +248,8 @@ class Microscope:
     refocus = Setting('bool', doc="Scan: focus again and re-take a blurry frame")
     scan_check = Setting('bool', doc="Scan: first check with the camera which way the picture moves (m.check_orientation())")
     still_check = Setting('bool', doc="Scan: before each picture check that the stage stopped shaking (2 frames compared)")
-    frame_format = Setting('choice', None, ('jpg', 'h5'), '', "Scan: frames as JPG files (small) or HDF5 batches (lossless)")
-    frame_scale = Setting('float', 0.1, 1, '', "Scan: stored frame size, 0.5 = half (0.5 keeps all optical detail up to 20x)")
+    frame_format = Setting('choice', None, ('jpg', 'png', 'h5'), '', "Scan: frames as JPG files (small), PNG files (lossless, for lithography) or HDF5 batches (lossless)")
+    frame_scale = Setting('float', 0.1, 1, '', "Scan: stored frame size, 1 = full camera resolution (most exact crosses), 0.5 = half (smaller)")
     jpg_quality = Setting('int', 50, 100, '', "Scan: JPG quality of the stored frames")
     batch_size = Setting('int', 1, 1000, 'frames', "Scan: frames per HDF5 file (a file can be opened when it is full)")
     save_jpg = Setting('bool', doc="Scan: also save every frame at once as JPG in <scan>/jpg/ to look at it during the scan")
@@ -295,7 +295,7 @@ class Microscope:
                          motor_speed=3000.0,
                          move_pause=0.0 if sim else 0.1, photo_pause=0.0 if sim else 0.1, light_pause=0.0 if sim else 2.0,
                          focus_method='laplacian', focus_every=5, refocus=False, batch_size=100, save_jpg=True, jpg_scale=0.5,
-                         frame_format='jpg', frame_scale=0.5, jpg_quality=90, scan_check=True, still_check=True,
+                         frame_format='jpg', frame_scale=1.0, jpg_quality=95, scan_check=True, still_check=True,
                          one_side=False, overshoot=10,
                          log_bytes=True)
         self._open_port(port, force)
@@ -1492,6 +1492,18 @@ class Microscope:
         self.last_photo = path
         L.event('CAM-001', f"Picture {path} at {p}.")
         return img
+
+    def prepare(self, **kw):
+        """Подготовка перед съёмкой здесь: свет прогрелся, фокус, экспозиция (кресты ~80 % шкалы без пересвета),
+        баланс белого (если пусто), пауза на успокоение столика. Подробно — prepare.py."""
+        from .prepare import prepare
+        return prepare(self, **kw)
+
+    def calibrate_distortion(self, n=3, overlap=0.5, **kw):
+        """Дисторсия объектива по n×n кадрам с перекрытием (наведите на место с деталями: кресты, край
+        чешуйки). Без крестов и без точности столика. Помнится для объектива, применяется к сканам."""
+        from .prepare import calibrate_distortion
+        return calibrate_distortion(self, n=n, overlap=overlap, **kw)
 
     def white_balance(self):
         """Однократный баланс белого по текущему кадру (наведите на пустой участок)."""

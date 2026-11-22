@@ -153,6 +153,14 @@ class Grid:
         with open(gp_, 'w', encoding='utf-8') as f:
             json.dump(d, f, indent=1)
 
+    def angle_deg(self):
+        """Наклон креста (сетки) на мозаике, градусы, -45..45 (крест симметричен на 90°); нет сетки — 0."""
+        if not self.ready():
+            return 0.0
+        v1, _ = self.cr.vectors()
+        a = np.degrees(np.arctan2(v1[1], v1[0]))
+        return float((a + 45) % 90 - 45)
+
     def snap_to_crosses(self, render, size, px_um, min_resp=0.1, render_s=None):
         """Сетка поставлена не по этим кадрам (по решётке образца через координаты столика): сдвинуть её на
         настоящие кресты этой мозаики. Каждый крест, куда попадает решётка, ищется по симметрии (до 16 узлов — быстро); сдвиг — медиана.
@@ -175,11 +183,11 @@ class Grid:
         for q in nodes:
             reg = render_s(q[0], q[1], k, 4 * r + 1, 4 * r + 1) if render_s is not None else \
                 render(q[0], q[1], 4 * r + 1, 4 * r + 1)
-            gq = cv2.cvtColor(reg, cv2.COLOR_BGR2GRAY) if reg.ndim == 3 else reg
+            gq = meas_gray(reg)
             if gq.std() < 2:
                 continue
             info = {}
-            d, resp = snap_cross(gq, r, arm=arm, info=info)
+            d, resp = snap_cross(gq, r, arm=arm, info=info, angle=self.angle_deg())
             if resp >= min_resp and np.any(d):
                 ds.append(np.asarray(d, float) / k)
                 if arm is None and info.get('arm'):
@@ -205,6 +213,7 @@ class Grid:
         Возвращает (число крестов, СКО отклонения от решётки, px)."""
         if not self.ready():
             return 0, None
+        ang_ = self.angle_deg()
         ks = min(1.0, 4.0 * px_um) if render_s is not None else 1.0
         r = int(min(150, max(8, 15.0 * ks / px_um)))
         R0 = 2 * r / ks
@@ -219,7 +228,7 @@ class Grid:
                 progress(0.8 * n_ / max(1, len(cand)), f"cross {n_ + 1} of {len(cand)}")
             q = self.cr.point(i, j)
             reg = render_s(q[0], q[1], ks, 4 * r + 1, 4 * r + 1) if ks < 1 else render(q[0], q[1], 4 * r + 1, 4 * r + 1)
-            g = cv2.cvtColor(reg, cv2.COLOR_BGR2GRAY) if reg.ndim == 3 else reg
+            g = meas_gray(reg)
             if g.std() < 2:                                      # пусто (вне кадров)
                 continue
             nodes.append(((i, j), q)); regs.append(g)
@@ -231,7 +240,7 @@ class Grid:
             for L in [a for a in ARMS if a <= 0.9 * r]:
                 P_, IJ_ = [], []
                 for k in pick:
-                    d, resp = snap_cross(regs[k], r, arm=L)
+                    d, resp = snap_cross(regs[k], r, arm=L, angle=ang_, edges=False)
                     if resp >= min_resp and np.any(d):              # не нашёл (d = 0) — не считается
                         P_.append(nodes[k][1] + np.asarray(d, float) / ks); IJ_.append(nodes[k][0])
                 if len(P_) < max(4, 0.5 * len(pick)):
@@ -249,7 +258,7 @@ class Grid:
             progress(0.85, "fitting the grid")
         IJ, Pts = [], []
         for (ij, q), g in zip(nodes, regs):
-            d, resp = snap_cross(g, r, arm=self.arm)
+            d, resp = snap_cross(g, r, arm=self.arm, angle=ang_)
             if resp >= min_resp:
                 IJ.append(ij); Pts.append(q + np.asarray(d, float) / ks)
         if ks < 1:                                              # плечо — в px мозаики
@@ -472,15 +481,141 @@ def _sym(g, p, h):
 ARMS = (6, 7, 9, 11, 13, 15, 19, 23, 27, 33, 40, 48)   # плечо креста, px (перебор, пока не известно)
 
 
-def snap_cross(region, r, arm=None, info=None):
+def meas_gray(img):
+    """Картинка для измерений: зелёный канал (самый резкий у объектива, без цветной каймы на краях; у
+    серой суммы каналов края размыты хроматизмом), float32."""
+    img = np.asarray(img)
+    return (img[..., 1] if img.ndim == 3 else img).astype(np.float32)
+
+
+def _edges1d(p):
+    """Два края полоски в профиле p (полоска светлее или темнее фона): (левый, правый, сила) с долями
+    пикселя (парабола по 3 точкам производной) или None."""
+    d = np.diff(p)
+    if len(d) < 5:
+        return None
+    sgn = 1 if (p[len(p) // 2 - 1:len(p) // 2 + 2].mean() > 0.5 * (p[:2].mean() + p[-2:].mean())) else -1
+    d = d * sgn                                          # теперь полоска светлая: слева рост, справа спад
+    m = len(d) // 2
+    a, b = int(np.argmax(d[:m + 1])), m + int(np.argmin(d[m:]))
+
+    def sub(k):
+        if 0 < k < len(d) - 1:
+            y0, y1, y2 = d[k - 1], d[k], d[k + 1]
+            den = y0 - 2 * y1 + y2
+            return k + 0.5 + (0.5 * (y0 - y2) / den if abs(den) > 1e-9 else 0.0)
+        return k + 0.5
+    st = min(d[a], -d[b])
+    if st <= 0:
+        return None
+    return sub(a), sub(b), float(st)
+
+
+def _edge_center(g, c, L, t, ang=0.0):
+    """Уточнение центра креста по краям плеч: поперёк каждого плеча — профили, в каждом два края полоски,
+    середина между ними; по серединам горизонтальных плеч — одна прямая, вертикальных — другая; центр —
+    их пересечение. g — окно (без вычитания фона), c — грубый центр (x, y), L, t — плечо и толщина, px,
+    ang — наклон креста, рад. -> (центр, наклон рад) или (None, None)."""
+    H_, W_ = g.shape
+    gs = cv2.GaussianBlur(g, (0, 0), 0.7)
+    h = int(max(3, 1.5 * t + 3))                          # полуширина профиля поперёк плеча
+    out = []
+    for vert in (False, True):
+        a_ = ang + (np.pi / 2 if vert else 0.0)
+        e = np.array([np.cos(a_), np.sin(a_)])           # вдоль плеча
+        n = np.array([-e[1], e[0]])                      # поперёк
+        pts, ws, wd = [], [], []
+        np_ = int(np.clip(L // 3, 7, 40))                  # профилей на плечо: крупный крест — больше
+        for s_ in np.r_[np.linspace(-0.92 * L, -0.4 * L, np_), np.linspace(0.4 * L, 0.92 * L, np_)]:
+            q = np.asarray(c, float) + s_ * e
+            off = np.arange(-h, h + 1, dtype=np.float32)
+            xs = (q[0] + off * n[0]).astype(np.float32)
+            ys = (q[1] + off * n[1]).astype(np.float32)
+            if xs.min() < 1 or ys.min() < 1 or xs.max() > W_ - 2 or ys.max() > H_ - 2:
+                continue
+            prof = cv2.remap(gs, xs[None, :], ys[None, :], cv2.INTER_LINEAR)[0]
+            r_ = _edges1d(prof)
+            if r_ is None:
+                continue
+            l_, rr_, st = r_
+            wdt = rr_ - l_
+            if not (0.4 * t <= wdt <= 2.5 * t + 2):
+                continue
+            mid_ = 0.5 * (l_ + rr_) - h                      # смещение середины полоски поперёк, px
+            pts.append(q + mid_ * n)
+            ws.append(st)
+            wd.append(wdt)
+        if len(pts) < 6:
+            return None, None
+        pts, ws, wd = np.array(pts), np.array(ws), np.array(wd)
+        ok = (ws > 0.3 * np.median(ws)) & (np.abs(wd - np.median(wd)) < max(1.0, 0.2 * np.median(wd)))   # цифры, грязь
+        pts, ws = pts[ok], ws[ok]
+        if len(pts) < 6:
+            return None, None
+        for _ in range(2):                               # прямая (МНК, вес — сила краёв), выбросы прочь
+            m_ = (pts * ws[:, None]).sum(0) / ws.sum()
+            C = ((pts - m_).T * ws) @ (pts - m_)
+            w_, V = np.linalg.eigh(C)
+            dvec = V[:, 1]
+            res = (pts - m_) @ V[:, 0]
+            keep = np.abs(res) < max(0.5, 3 * 1.48 * np.median(np.abs(res)))
+            if keep.all() or keep.sum() < 6:
+                break
+            pts, ws = pts[keep], ws[keep]
+        out.append((m_, dvec))
+    (p1, d1), (p2, d2) = out
+    A = np.c_[d1, -d2]
+    if abs(np.linalg.det(A)) < 0.5:
+        return None, None
+    s1 = np.linalg.solve(A, p2 - p1)[0]
+    cc = p1 + s1 * d1
+    a1 = np.arctan2(d1[1], d1[0])
+    a1 = (a1 + np.pi / 2) % np.pi - np.pi / 2            # наклон горизонтальной прямой, -90..90°
+    return cc, a1
+
+
+def snap_cross(region, r, arm=None, info=None, angle=0.0, edges=True):
     """Центр креста в окне region (серое). Крест ищется шаблоном «+» (плечо arm, px; без arm — перебор),
     кандидат оценивается по симметрии креста при повороте на 90° и 180°: цифры у креста (номера литографии)
     так не симметричны и центр не уводят. Запасной вариант — корреляция окна с повёрнутым на 180°.
-    Возвращает ((dx, dy) от середины окна, px; отклик 0…1). info (dict) получает плечо 'arm'."""
+    angle — наклон креста, градусы (наклон сетки): окно сначала поворачивается так, чтобы крест стоял ровно.
+    edges — затем центр уточняется по краям плеч (пересечение двух прямых, доли пикселя; _edge_center).
+    Возвращает ((dx, dy) от середины окна, px; отклик 0…1). info (dict) получает плечо 'arm', 'angle'
+    (наклон по краям, градусы) и 'edges' (уточнено ли)."""
+    region = np.asarray(region, np.float32)
+    mid = (np.array(region.shape[::-1], float) - 1) / 2
+    a0 = float(angle or 0.0)
+    if abs(a0) > 0.3:                                    # повернуть окно: крест — ровно
+        Rm = cv2.getRotationMatrix2D((float(mid[0]), float(mid[1])), a0, 1.0)
+        reg_r = cv2.warpAffine(region, Rm, region.shape[::-1], flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)
+    else:
+        Rm, reg_r = None, region
+    d, resp, L, t = _snap_plain(reg_r, r, arm, info)
+    if Rm is not None and np.any(d):                     # обратно в исходное окно
+        Ri = cv2.invertAffineTransform(Rm)
+        d = Ri[:, :2] @ (mid + d) + Ri[:, 2] - mid
+    if info is not None:
+        info['edges'] = False
+    if edges and L and np.any(d) and resp > 0:
+        th = np.radians(a0)
+        c_ = mid + d
+        for _ in range(2):                               # наклон по краям уточняется — второй проход ровнее
+            cc, a1 = _edge_center(region, c_, L, t, th)
+            if cc is None or np.hypot(*(cc - c_)) > max(1.5, 0.25 * t + 1):
+                break
+            c_, th = cc, a1
+            if info is not None:
+                info['edges'], info['angle'] = True, float(np.degrees(a1))
+        d = c_ - mid
+    return (d if np.hypot(*d) < r else np.zeros(2)), resp
+
+
+def _snap_plain(region, r, arm=None, info=None):
+    """snap_cross без поворота и краёв: (d, отклик, плечо, толщина)."""
     g0 = cv2.GaussianBlur(region.astype(np.float32), (0, 0), 1.0)
     g = g0 - cv2.GaussianBlur(g0, (0, 0), max(4.0, (arm or r / 3) * 0.8))     # убрать фон: только детали
     mid = (np.array(g.shape[::-1], float) - 1) / 2
-    best = (-1.0, None, None)
+    best = (-1.0, None, None, None)
     for L in ([int(arm)] if arm else [a for a in ARMS if a <= 0.9 * r]):
         for t in sorted({max(3, L // 2), max(3, L // 5)}):
             T = _plus(L, t)
@@ -495,19 +630,19 @@ def snap_cross(region, r, arm=None, info=None):
                     c += (w.sum(0) @ [-1, 0, 1] / w.sum(), w.sum(1) @ [-1, 0, 1] / w.sum())
             sc = v * max(0.0, _sym(g, c, int(1.3 * L)))
             if sc > best[0]:
-                best = (sc, c, L)
-    sc, c, L = best
+                best = (sc, c, L, t)
+    sc, c, L, t = best
     if c is None or sc < 0.03:                           # шаблон не нашёл — старый способ (симметрия 180°)
         win = cv2.createHanningWindow(g.shape[::-1], cv2.CV_32F)
         (sx, sy), resp = cv2.phaseCorrelate(g * win, np.ascontiguousarray(g[::-1, ::-1]) * win)
         d = -np.array([sx, sy]) / 2.0                    # повёрнутое окно сдвинуто на -2·d
         if info is not None:
             info['arm'] = None
-        return (d if np.hypot(*d) < r else np.zeros(2)), resp
+        return (d if np.hypot(*d) < r else np.zeros(2)), resp, None, None
     if info is not None:
         info['arm'] = L
     d = c - mid
-    return (d if np.hypot(*d) < r else np.zeros(2)), float(min(1.0, sc * 3))
+    return (d if np.hypot(*d) < r else np.zeros(2)), float(min(1.0, sc * 3)), L, t
 
 
 # ------------------------------------------------------------------ сборка нужных квадратов из кадров
@@ -556,8 +691,79 @@ class Frames:
             avg = np.where(ws[..., None] > 1e-3, mb, bg)
         return avg.astype(np.uint8), ws > 1e-3
 
+    def remap(self, mapx, mapy, bg=255, tile=1024):
+        """Картинка, где пиксель (u, v) берётся из точки мозаики (mapx[v, u], mapy[v, u]) — любое (не только
+        аффинное) отображение: по клеткам решётки от её 4 крестов. Смешивание — весами к краю кадра.
+        -> (BGR uint8, покрыто кадрами)."""
+        h, w = mapx.shape
+        out = np.full((h, w, 3), bg, np.uint8)
+        cov = np.zeros((h, w), bool)
+        for y0 in range(0, h, tile):
+            for x0 in range(0, w, tile):
+                mx = mapx[y0:y0 + tile, x0:x0 + tile]
+                my = mapy[y0:y0 + tile, x0:x0 + tile]
+                lo = np.array([np.nanmin(mx), np.nanmin(my)])
+                hi = np.array([np.nanmax(mx), np.nanmax(my)])
+                hit = np.flatnonzero((self.P[:, 0] < hi[0]) & (self.P[:, 0] + self.W > lo[0]) &
+                                     (self.P[:, 1] < hi[1]) & (self.P[:, 1] + self.H > lo[1]))
+                acc = np.zeros(mx.shape + (3,), np.float32)
+                ws = np.zeros(mx.shape, np.float32)
+                for k in hit:
+                    img = self.st.frame(int(k))
+                    img = img if img.ndim == 3 else cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+                    lx = (mx - self.P[k, 0]).astype(np.float32)
+                    ly = (my - self.P[k, 1]).astype(np.float32)
+                    t = cv2.remap(img, lx, ly, cv2.INTER_CUBIC, borderMode=cv2.BORDER_CONSTANT).astype(np.float32)
+                    f = cv2.remap(self.feather, lx, ly, cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+                    acc += t * f[..., None]
+                    ws += f
+                ok = ws > 1e-3
+                blk = np.where(ok[..., None], acc / np.maximum(ws, 1e-6)[..., None], bg)
+                out[y0:y0 + tile, x0:x0 + tile] = np.clip(blk, 0, 255).astype(np.uint8)
+                cov[y0:y0 + tile, x0:x0 + tile] = ok
+        return out, cov
+
     def close(self):
         self.st.close()
+
+
+def measure_crosses(folder, g, nodes, fr=None):
+    """Кресты сетки g в узлах nodes [(i, j)] на мозаике скана — точно (шаблон + края плеч, с наклоном
+    сетки). -> {(i, j): (x, y) px мозаики}; не нашёлся или далеко от сетки (> 3 px и 0.5 мкм) — нет в словаре."""
+    from .storage import ScanData as _SD
+    own = fr is None
+    fr = fr or Frames(folder)
+    px = fr.st.meta.get('pixel_size_um') or 1.0
+    ks = min(1.0, 4.0 * px)                              # 50x, 100x: крест крупнее перебора — уменьшить окно
+    r = int(min(150, max(8, 15.0 * ks / px)))
+    ang = g.angle_deg()
+    arm = (g.arm * ks) if g.arm else None
+    out = {}
+    try:
+        for i, j in nodes:
+            q = g.cr.point(i, j)
+            n = 4 * r + 1
+            M = np.array([[1 / ks, 0, q[0] - (n - 1) / 2 / ks], [0, 1 / ks, q[1] - (n - 1) / 2 / ks]])
+            reg, cov = fr.warp(M, (n, n), 0, blend='feather')
+            if cov.mean() < 0.9:
+                continue
+            gq = meas_gray(reg)
+            if gq.std() < 2:
+                continue
+            info = {}
+            d, resp = snap_cross(gq, r, arm=arm, info=info, angle=ang)
+            if resp < 0.1 or not np.any(d):
+                continue
+            if arm is None and info.get('arm'):
+                arm = info['arm']
+            p_ = q + np.asarray(d, float) / ks
+            if np.hypot(*(p_ - q)) > max(3.0, 0.5 / px) * 3:    # не тот крест
+                continue
+            out[(int(i), int(j))] = p_
+    finally:
+        if own:
+            fr.close()
+    return out
 
 
 @_per_sample

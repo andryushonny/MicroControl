@@ -660,7 +660,7 @@ fw, fh = m.frame_size
 m.area = mc.Area(0, 0, 3 * fw, 2 * fh)
 f = m.scan(); mc.stitch(f, verbose=False)
 px_um = json.load(open(os.path.join(f, 'meta.json')))['pixel_size_um']
-g = Grid(f); p0 = np.array([150.0, 120.0]); a_ = 100 / px_um
+g = Grid(f); p0 = np.array([66.0, 52.8]) / px_um; a_ = 100 / px_um   # 66, 53 мкм от угла мозаики
 g.cr.add(p0); g.cr.add(p0 + (a_, 0)); g.cr.add(p0 + (0, a_))
 g.selected |= {(0, 0), (1, 0), (3, 1), (3, 2)}                     # две фигуры по 2 квадрата
 g.save(px_um)
@@ -746,7 +746,7 @@ M.run(m, fullscreen=False, _keys=[-1, ('mdrag0', 400, 400), ('mdrag', 440, 380),
 assert np.allclose(np.subtract(m._regions[0]['A'], A0), d1, atol=0.01)       # Ctrl+Z вернул второй сдвиг
 LY.move(m, 0, -d1[0], -d1[1]); SM.persist(m)
 px_um = json.load(open(os.path.join(f, 'meta.json')))['pixel_size_um']
-g = Grid(f); p0 = np.array([150.0, 120.0]); a_ = 100 / px_um
+g = Grid(f); p0 = np.array([66.0, 52.8]) / px_um; a_ = 100 / px_um   # 66, 53 мкм от угла мозаики
 g.cr.add(p0); g.cr.add(p0 + (a_, 0)); g.cr.add(p0 + (0, a_))
 g.selected |= {(0, 0), (1, 0)}; g.save(px_um)
 gj = lambda: sorted(map(tuple, json.load(open(os.path.join(f, 'grid.json')))['selected']))
@@ -859,7 +859,7 @@ M.run(m, fullscreen=False, _keys=[-1, 9, -1, ('tbar', bx("Scan area")), -1, -1])
 assert m._nav_big and m.last_scan and os.path.exists(os.path.join(m.last_scan, 'join', 'preview_all.jpg'))
 f = m.last_scan
 px_um = json.load(open(os.path.join(f, 'meta.json')))['pixel_size_um']
-g = Grid(f); q0 = np.array([150.0, 120.0]); a_ = 100 / px_um
+g = Grid(f); q0 = np.array([66.0, 52.8]) / px_um; a_ = 100 / px_um
 g.cr.add(q0); g.cr.add(q0 + (a_, 0)); g.cr.add(q0 + (0, a_)); g.selected |= {(0, 0)}
 g.labels = {(0, 0): (3, 2), (2, 1): (5, 3)}; g.save(px_um)                # номера литографии: два квадрата
 m._sel = 0
@@ -895,7 +895,7 @@ fw, fh = m.frame_size
 m.area = mc.Area(0, 0, 3 * fw, 2 * fh)
 f = m.scan(); mc.stitch(f, verbose=False)
 px_um = json.load(open(os.path.join(f, 'meta.json')))['pixel_size_um']
-g = Grid(f); p0 = np.array([150.0, 120.0]); a_ = 100 / px_um
+g = Grid(f); p0 = np.array([66.0, 52.8]) / px_um; a_ = 100 / px_um   # 66, 53 мкм от угла мозаики
 g.cr.add(p0); g.cr.add(p0 + (a_, 0)); g.cr.add(p0 + (0, a_)); g.selected |= {(1, 0), (2, 0)}
 g.labels = {(0, 0): (5, 7), (2, 1): (7, 8)}; g.save(px_um)        # литография: квадрат (0, 0) — «5,7»
 print(LY.sync_brush(m)); SM.persist(m)
@@ -1068,7 +1068,7 @@ fw, fh = m.frame_size
 m.area = mc.Area(0, 0, 3 * fw, 2 * fh); f = m.scan(); mc.stitch(f, verbose=False)
 m.area = mc.Area(5 * fw, 0, 6 * fw, fh); f2 = m.scan(); mc.stitch(f2, verbose=False)
 px_um = json.load(open(os.path.join(f, 'meta.json')))['pixel_size_um']
-g = Grid(f); p0 = np.array([150.0, 120.0]); a_ = 100 / px_um
+g = Grid(f); p0 = np.array([66.0, 52.8]) / px_um; a_ = 100 / px_um   # 66, 53 мкм от угла мозаики
 g.cr.add(p0); g.cr.add(p0 + (a_, 0)); g.cr.add(p0 + (0, a_)); g.labels = {(0, 0): (5, 7), (2, 1): (7, 8)}
 g.selected |= {(0, 0), (1, 0), (2, 0), (2, 1)}; g.save(px_um)
 LY.sync_brush(m); SM.persist(m)
@@ -1146,7 +1146,7 @@ m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp()); m.focus()
 fw, fh = m.frame_size
 m.area = mc.Area(0, 0, 3 * fw, 2 * fh); f = m.scan(); mc.stitch(f, verbose=False)
 px_um = json.load(open(os.path.join(f, 'meta.json')))['pixel_size_um']
-g = Grid(f); p0 = np.array([150.0, 120.0]); a_ = 100 / px_um
+g = Grid(f); p0 = np.array([66.0, 52.8]) / px_um; a_ = 100 / px_um   # 66, 53 мкм от угла мозаики
 g.cr.add(p0); g.cr.add(p0 + (a_, 0)); g.cr.add(p0 + (0, a_)); g.labels = {(0, 0): (5, 7), (2, 1): (7, 8)}; g.save(px_um)
 LY.sync_brush(m); SM.persist(m)                                       # решётка образца есть, черновиков нет
 q = lambda i, j, a=0.5, b=0.5: g.cr.point(i + a, j + b)
@@ -1171,7 +1171,7 @@ m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp()); m.focus()
 fw, fh = m.frame_size
 m.area = mc.Area(0, 0, 3 * fw, 2 * fh); f = m.scan(); mc.stitch(f, verbose=False)
 px_um = json.load(open(os.path.join(f, 'meta.json')))['pixel_size_um']
-g = Grid(f); p0 = np.array([150.0, 120.0]); a_ = 100 / px_um
+g = Grid(f); p0 = np.array([66.0, 52.8]) / px_um; a_ = 100 / px_um   # 66, 53 мкм от угла мозаики
 g.cr.add(p0); g.cr.add(p0 + (a_, 0)); g.cr.add(p0 + (0, a_)); g.labels = {(0, 0): (5, 7), (2, 1): (7, 8)}
 g.selected |= {(0, 0), (2, 0)}; g.save(px_um)                              # выбрали в просмотре: два квадрата
 drafts = lambda: sorted(r['num'] for r in m._regions if r.get('kind') == 'draft')
@@ -1203,7 +1203,7 @@ m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp()); m.focus()
 fw, fh = m.frame_size
 m.area = mc.Area(0, 0, 3 * fw, 2 * fh); f = m.scan(); mc.stitch(f, verbose=False)
 px_um = json.load(open(os.path.join(f, 'meta.json')))['pixel_size_um']
-g = Grid(f); p0 = np.array([150.0, 120.0]); a_ = 100 / px_um
+g = Grid(f); p0 = np.array([66.0, 52.8]) / px_um; a_ = 100 / px_um   # 66, 53 мкм от угла мозаики
 g.cr.add(p0); g.cr.add(p0 + (a_, 0)); g.cr.add(p0 + (0, a_)); g.labels = {(0, 0): (5, 7), (2, 1): (7, 8)}; g.save(px_um)
 LY.sync_brush(m); SM.persist(m)
 L = m.sample.data['lattice']
@@ -1271,7 +1271,7 @@ m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp()); m.focus()
 fw, fh = m.frame_size
 m.area = mc.Area(0, 0, 3 * fw, 2 * fh); f = m.scan(); mc.stitch(f, verbose=False)
 px_um = json.load(open(os.path.join(f, 'meta.json')))['pixel_size_um']
-g = Grid(f); p0 = np.array([150.0, 120.0]); a_ = 100 / px_um
+g = Grid(f); p0 = np.array([66.0, 52.8]) / px_um; a_ = 100 / px_um   # 66, 53 мкм от угла мозаики
 g.cr.add(p0); g.cr.add(p0 + (a_, 0)); g.cr.add(p0 + (0, a_)); g.labels = {(0, 0): (5, 7), (2, 1): (7, 8)}
 g.selected |= {(-1, -1)}; g.save(px_um)                                   # квадрат на краю: середина внутри съёмки
 print(LY.sync_brush(m)); SM.persist(m)
@@ -1295,7 +1295,7 @@ m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp()); m.focus()
 fw, fh = m.frame_size
 m.area = mc.Area(0, 0, 3 * fw, 2 * fh); f = m.scan(); mc.stitch(f, verbose=False)
 px_um = json.load(open(os.path.join(f, 'meta.json')))['pixel_size_um']
-g = Grid(f); p0 = np.array([150.0, 120.0]); a_ = 100 / px_um
+g = Grid(f); p0 = np.array([66.0, 52.8]) / px_um; a_ = 100 / px_um   # 66, 53 мкм от угла мозаики
 g.cr.add(p0); g.cr.add(p0 + (a_, 0)); g.cr.add(p0 + (0, a_)); g.labels = {(0, 0): (5, 7), (2, 1): (7, 8)}
 g.selected |= {(1, 0), (2, 0)}; g.save(px_um)
 LY.sync_brush(m); SM.persist(m)
@@ -1408,7 +1408,7 @@ m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp()); m.focus()
 fw, fh = m.frame_size
 m.area = mc.Area(0, 0, 3 * fw, 2 * fh); f = m.scan(); mc.stitch(f, verbose=False)
 px_um = json.load(open(os.path.join(f, 'meta.json')))['pixel_size_um']
-g = Grid(f); p0 = np.array([150.0, 120.0]); a_ = 100 / px_um
+g = Grid(f); p0 = np.array([66.0, 52.8]) / px_um; a_ = 100 / px_um   # 66, 53 мкм от угла мозаики
 g.cr.add(p0); g.cr.add(p0 + (a_, 0)); g.cr.add(p0 + (0, a_)); g.labels = {(0, 0): (5, 7), (2, 1): (7, 8)}
 g.selected |= {(0, 0), (1, 0)}; g.save(px_um)
 LY.sync_brush(m); SM.persist(m)
@@ -1435,3 +1435,63 @@ k3 = [r['uid'] for r in m._regions if r.get('parent') == d3['uid']]
 g = Grid(f); g.selected.discard((2, 0)); g.save(px_um); LY.sync_brush(m)  # его квадрат сняли в просмотре
 assert LY.idx(m, d3['uid']) is None and all(LY.idx(m, u) is not None and m._regions[LY.idx(m, u)]['parent'] == S1 for u in k3)
 m.close(); print("Deleting a draft keeps the drafts inside it (released to its parent), also when its squares are unselected: OK")
+
+# ------------------------------------------------------------------ 45. Точность для литографии: крест по краям плеч с наклоном, калибровка дисторсии, подготовка, кадры без потерь, кадры на кресты, картинка чертежа по крестам клеток
+from microcontrol.mask import snap_cross, Grid, meas_gray
+from microcontrol.snap import stage_to_mosaic
+from microcontrol.drawing import local_picture, _grid_uv
+from microcontrol.optics import dist_shift
+rng = np.random.default_rng(5)
+def _cross_img(c, ang, L=30, t=6, N=241, ss=8):
+    n = N * ss; im = np.zeros((n, n), np.float32); C = (np.asarray(c) + 0.5) * ss - 0.5
+    R = cv2.getRotationMatrix2D((float(C[0]), float(C[1])), -ang, 1.0)
+    for P_ in ([[C[0]-L*ss, C[1]-t*ss/2], [C[0]+L*ss, C[1]-t*ss/2], [C[0]+L*ss, C[1]+t*ss/2], [C[0]-L*ss, C[1]+t*ss/2]],
+               [[C[0]-t*ss/2, C[1]-L*ss], [C[0]+t*ss/2, C[1]-L*ss], [C[0]+t*ss/2, C[1]+L*ss], [C[0]-t*ss/2, C[1]+L*ss]]):
+        cv2.fillPoly(im, [cv2.transform(np.array([P_], np.float32), R)[0].astype(np.int32)], 1.0)
+    im = cv2.GaussianBlur(cv2.resize(im, (N, N), interpolation=cv2.INTER_AREA), (0, 0), 1.5)
+    out = (120 + 60 * im + rng.normal(0, 3, im.shape)).clip(0, 255).astype(np.uint8)
+    cv2.putText(out, "12", (int(c[0]) + 8, int(c[1]) - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, 90, 1)   # номер у креста
+    return out
+e_ = []
+for k in range(20):
+    c = np.array([120, 120]) + rng.uniform(-6, 6, 2); im = _cross_img(c, 10.0)
+    d, resp = snap_cross(im, 60, angle=7.0); e_.append(np.hypot(*((np.array(im.shape[::-1]) - 1) / 2 + d - c)))
+assert np.sqrt(np.mean(np.square(e_))) < 0.2, e_                          # крест под 10°: центр точнее 0.2 px
+m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp())
+m._world.dist = dict(k1=-0.02, k2=0.006, p1=0.002, p2=-0.0015); m.focus(); m.goto(x=100, y=100); m.exposure = 6.0
+r = m.prepare(); print(r)
+assert m.exposure > 10 and 'overexposed 0.00' in r['Exposure'], r
+r = m.calibrate_distortion(); print(r)
+W_, H_ = 640, 480; R_ = np.hypot(W_ / 2, H_ / 2)
+yy, xx = np.mgrid[0:H_:8, 0:W_:8]; v = np.c_[xx.ravel() - W_ / 2, yy.ravel() - H_ / 2]
+Mx = np.r_[np.c_[np.ones(len(v)), np.zeros(len(v)), v[:, 0], -v[:, 1]], np.c_[np.zeros(len(v)), np.ones(len(v)), v[:, 1], v[:, 0]]]
+nl = lambda f_: (lambda q: q - Mx @ np.linalg.lstsq(Mx, q, rcond=None)[0])(np.r_[f_[:, 0], f_[:, 1]])  # без сдвига, масштаба, поворота
+left = np.sqrt(np.mean(nl(dist_shift(v, m._world.dist, R_) - dist_shift(v, r.info, R_)) ** 2) * 2)
+assert left < 0.25 * np.sqrt(np.mean(nl(dist_shift(v, m._world.dist, R_)) ** 2) * 2), left   # дисторсия убрана > 75 %
+m.frame_format = 'png'; w = m._world; w.backlash = {'x': 1.0, 'y': 1.0}
+fw, fh = m.frame_size
+m.area = mc.Area(0, 0, 4 * fw, 3 * fh); f = m.scan(); mc.stitch(f, verbose=False)
+assert os.listdir(os.path.join(f, 'frames'))[0].endswith('.png')        # кадры без потерь
+assert json.load(open(os.path.join(f, 'meta.json')))['distortion']['calibrated']   # калибровка объектива — в скане
+m.close()
+px = json.load(open(os.path.join(f, 'meta.json')))['pixel_size_um']
+t = np.radians(w.turn_deg); wp = lambda i, j: np.array([np.cos(t)*i*100 - np.sin(t)*j*100, np.sin(t)*i*100 + np.cos(t)*j*100])
+g = Grid(f)
+for ij in ((2, 1), (3, 1), (2, 2)):
+    g.cr.add(np.asarray(stage_to_mosaic(f, wp(*ij)[None]), float).reshape(-1)[:2])
+g.labels = {(0, 0): (12, 7), (1, 0): (13, 7), (0, 1): (12, 8)}; g.save(px)
+r = mc.fit_crosses(f, verbose=False); print(r)
+assert r.share >= 0.95 and r.info['p95_um'] < 0.2, r.info                 # кадры на крестах: 95 % точнее 0.2 мкм
+g = Grid(f); uv0, uv1 = np.array([10.7, 5.7]), np.array([14.3, 8.3])
+img4, res, rep = local_picture(f, g, uv0, uv1, 100.0)
+gq = meas_gray(img4[..., :3]); errs = []; r_ = int(15 / res)
+for X in range(12, 16):
+    for Y in range(7, 10):
+        q = (np.array([X - 1, Y - 1], float) - uv0) * 100 / res - 0.5; x, y = int(round(q[0])), int(round(q[1]))
+        if x - 2 * r_ >= 0 and y - 2 * r_ >= 0 and x + 2 * r_ < gq.shape[1] and y + 2 * r_ < gq.shape[0]:
+            d, resp = snap_cross(gq[y - 2 * r_:y + 2 * r_ + 1, x - 2 * r_:x + 2 * r_ + 1], r_)
+            if resp > 0.1:
+                errs.append(np.hypot(*(np.array([x, y]) + d - q)) * res)
+assert len(errs) >= 6 and max(errs) < 0.15, errs                           # кресты на чертеже — в своих точках решётки
+print("Lithography accuracy: cross centre by arm edges at 10 deg, distortion calibration, prepare, PNG frames, frames onto crosses "
+      f"({100 * r.share:.0f} % within 0.5 um), drawing picture by the crosses of its cells (max {max(errs):.3f} um): OK")

@@ -66,7 +66,7 @@ def geom(m, reg, _depth=0):
 
 def set_geom(m, reg, g):
     """Записать контур; углы A, B (центры крайних кадров) — по охватывающему прямоугольнику."""
-    g = g.buffer(0)
+    g = g.buffer(0).simplify(EPS)                            # без лишних точек на прямых сторонах
     reg['shape'] = to_json(g)
     fw, fh = frame(reg, *m.frame_size)
     x0, y0, x1, y1 = g.bounds
@@ -100,6 +100,15 @@ def contains(m, reg, x, y):
 def touches_frame(m, reg, x, y, fw, fh):
     """Кадр с центром (x, y) задевает контур (не только краем)?"""
     return geom(m, reg).intersection(box(x - fw / 2, y - fh / 2, x + fw / 2, y + fh / 2)).area > 1e-3 * fw * fh
+
+
+def refresh_groups(m):
+    """Углы групп (A, B) — по охватывающему прямоугольнику детей (для мест, где нужен прямоугольник)."""
+    for gr in m._regions:
+        if is_group(gr):
+            g = geom(m, gr)
+            x0, y0, x1, y1 = g.bounds if not g.is_empty else (0, 0, 0, 0)
+            gr.update(A=(x0, y0), B=(x1, y1), fw=0.0, fh=0.0)
 
 
 # ---------------------------------------------------------------- дерево
@@ -219,10 +228,13 @@ def group(m, ks):
     first = m._regions[ks[0]]
     from .samples import obj
     gr = dict(kind='group', uid=uuid.uuid4().hex, num=new_num(m), parent=first.get('parent'),
-              rank=first.get('rank'), obj=min(obj(m, m._regions[k]) for k in ks), pts=[], thumbs=[])
+              obj=min(obj(m, m._regions[k]) for k in ks), pts=[], thumbs=[])
+    if first.get('rank') is not None:
+        gr['rank'] = first['rank']
     for k in ks:
         m._regions[k]['parent'] = gr['uid']
     m._regions.append(gr)
+    refresh_groups(m)
     m._sel = len(m._regions) - 1
     return f"Group {gr['num']}: {len(ks)} selection{'s' if len(ks) > 1 else ''}"
 

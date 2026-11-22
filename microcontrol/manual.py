@@ -52,6 +52,7 @@ HELP = ["Shift+Esc: Exit (or close the window)", "P: Hide / show the left panel"
         "R: Ruler: click two points (distance, um)   0: Zero here   Shift+0: Real coordinates",
         "Wheel: zoom   Drag (middle button too): move the zoomed picture   Z: whole frame",
         "Selections are layers: Ctrl+click cards to mark them, then Merge / Minus / Overlap / Group / Ungroup above the list",
+        "The eye on a card hides the selection on the maps (and shows it again); Show all above the list",
         "Squares chosen with the brush in the view become selections (one per figure, next objective)   Shift+drag over a selection: move it",
         "T: Turn the camera picture by 180 degrees (remembered)",
         "[ / ]: Arrows left-right / up-down the other way; the mini map always follows the arrows (remembered)",
@@ -705,11 +706,17 @@ def _run(m, fullscreen=False, _keys=None):
             car['tools'] = ["Ungroup"] if m._regions[mk_[0]].get('kind') == 'group' else ["Group"]
         else:
             car['tools'] = []
+        if not car['tools'] and any(r_.get('hidden') for r_ in m._regions):
+            car['tools'] = ["Show all"]
         return car['tools']
 
     def layer_op(name):
         """Операция над отмеченными выделениями (первое отмеченное — цель)."""
         from . import layers as LY
+        if name == "Show all":
+            n_ = sum(1 for r_ in m._regions if r_.pop('hidden', None))
+            SM.persist(m)
+            return f"{n_} hidden selection{'s' if n_ != 1 else ''} shown again"
         fn = {"Merge": LY.union, "Minus": LY.subtract, "Overlap": LY.intersect, "Group": LY.group,
               "Ungroup": LY.ungroup}[name]
         ks_ = list(car['multi'])
@@ -748,19 +755,22 @@ def _run(m, fullscreen=False, _keys=None):
             if reg.get('kind') == 'group':
                 nk_ = sum(1 for r_ in m._regions if r_.get('parent') == reg['uid'])
                 items.append(dict(title=SM.title(m, k), color=SM.col(m, k), depth=depth, chosen=k in car['multi'],
-                                  lines=[f"{nk_} inside, {mm_}"]))
+                                  hidden=bool(reg.get('hidden')), muted=SM.hidden(m, k),
+                                  lines=[f"{nk_} inside, {mm_}"] + (["hidden on the maps"] if SM.hidden(m, k) else [])))
                 order.append(k)
                 continue
             nx_, ny_ = SM.frames_of(m, k)                  # кадры и время — для объектива этого выделения
             nfr_ = nx_ * ny_
             fr_ = (f"{nx_} x {ny_} = {nfr_} frames, " if ny_ > 1 or not reg.get('shape') else f"{nfr_} frames, ") + \
                 TM.fmt(TM.estimate(m, nfr_, 'points' if m._use_fp and reg['pts'] else 'off', o_)[0])
+            hd_ = SM.hidden(m, k)
             items.append(dict(title=SM.title(m, k), obj=f"{o_}x", color=SM.col(m, k), chosen=k in car['multi'],
-                              thumbs=reg.get('thumbs', []), confirm=car['confirm'] == k, depth=depth,
-                              muted=o_ != m.objective,
-                              lines=[fr_, mm_ + (",  brush" if reg.get('src') else ""),
-                                     f"focus points {first_num(k)}"]
-                              + ([f"put {o_}x in place to scan it"] if o_ != m.objective else [])))
+                              thumbs=[] if hd_ else reg.get('thumbs', []), confirm=car['confirm'] == k, depth=depth,
+                              muted=o_ != m.objective or hd_, hidden=bool(reg.get('hidden')),
+                              lines=([fr_, mm_ + (",  brush" if reg.get('src') else ""),
+                                      f"focus points {first_num(k)}"]
+                                     + ([f"put {o_}x in place to scan it"] if o_ != m.objective else []))
+                              if not hd_ else [mm_ + ", hidden on the maps"]))
             order.append(k)
         if m._pending:
             k = len(m._regions)
@@ -1114,7 +1124,8 @@ def _run(m, fullscreen=False, _keys=None):
             last_n, last_t = (live.n if live is not None else last_n), time.monotonic()
             if m._pending:                                 # карта и строка состояния — по новой или выбранной области
                 A, B, zk = work(m._pending['A']), None, len(m._regions)
-            elif m._sel is not None and SM.obj(m, m._regions[m._sel]) == m.objective:
+            elif m._sel is not None and SM.obj(m, m._regions[m._sel]) == m.objective and not SM.hidden(m, m._sel) \
+                    and m._regions[m._sel].get('kind') != 'group':
                 A, B, zk = work(m._regions[m._sel]['A']), work(m._regions[m._sel]['B']), m._sel
             else:                                          # выделение другого объектива — только контуром на карте
                 A = B = zk = None
@@ -1134,7 +1145,7 @@ def _run(m, fullscreen=False, _keys=None):
             ov_ = None
             from .layers import rings
             for k_, rg_ in enumerate(m._regions):
-                if rg_.get('kind') == 'group':
+                if rg_.get('kind') == 'group' or SM.hidden(m, k_):
                     continue
                 x0_, y0_, x1_, y1_ = SM._rect(m, rg_)
                 if x1_ < rp_[0] - rad_ or x0_ > rp_[0] + rad_ or y1_ < rp_[1] - rad_ or y0_ > rp_[1] + rad_:
@@ -1345,7 +1356,7 @@ def _run(m, fullscreen=False, _keys=None):
                        f"{SM.obj(m, rg)}x" if SM.obj(m, rg) != m.objective else "",
                        [r_ - (m._off['x'], m._off['y']) for r_ in _rings(m, rg)] if rg.get('shape') else None)
                       for k_, rg in sorted(enumerate(m._regions), key=lambda t: SM.obj(m, t[1]))
-                      if k_ != zk and rg.get('kind') != 'group']
+                      if k_ != zk and rg.get('kind') != 'group' and not SM.hidden(m, k_)]
             minimap(view, m, A, B, zcolor=SM.col(m, zk) if zk is not None else None, others=others, right=SM.CAR_W)
             items = car_items()
             selk_ = len(m._regions) if m._pending else m._sel
@@ -1399,7 +1410,7 @@ def _run(m, fullscreen=False, _keys=None):
                 if c_[0] == 'mdrag0':
                     from .layers import contains
                     hit_ = [k_ for k_, rg_ in enumerate(m._regions)
-                            if rg_.get('kind') != 'group' and contains(m, rg_, q_[0], q_[1])]
+                            if rg_.get('kind') != 'group' and not SM.hidden(m, k_) and contains(m, rg_, q_[0], q_[1])]
                     k_ = max(hit_, key=lambda k2: SM.obj(m, m._regions[k2])) if hit_ else None   # самое верхнее
                     if k_ is None:                                  # не над выделением — сдвиг картинки
                         mdr.update(k=None)
@@ -1475,6 +1486,15 @@ def _run(m, fullscreen=False, _keys=None):
                 if h_:
                     act, k = h_
                     k = car['order'][k] if k < len(car.get('order', [])) else k
+                    if act == 'eye' and k < len(m._regions):       # скрыть / показать на картах
+                        rg_ = m._regions[k]
+                        rg_['hidden'] = not rg_.get('hidden')
+                        if not rg_['hidden']:
+                            rg_.pop('hidden')
+                        SM.persist(m)
+                        msg, msg_t = (f"{SM.title(m, k)} " + ("hidden on the maps (the eye shows it again)"
+                                                                if rg_.get('hidden') else "shown on the maps")), time.monotonic()
+                        continue
                     if act == 'obj' and k < len(m._regions):       # плашка объектива: следующий (пока не снято)
                         msg, msg_t = cycle_objective(k), time.monotonic()
                         continue
@@ -1730,7 +1750,9 @@ def _run(m, fullscreen=False, _keys=None):
     cv2.destroyWindow(WIN)
     cv2.waitKey(1)
     regs = m._regions
-    m.area = reg_area(regs[m._sel if m._sel is not None else 0]) if regs else None
+    real_ = [k for k, r in enumerate(regs) if r.get('kind') != 'group']
+    k_area = m._sel if m._sel in real_ else (real_[0] if real_ else None)
+    m.area = reg_area(regs[k_area]) if k_area is not None else None
     m._focus_pts = [dict(p_, tag=str(n_)) for n_, k_, p_ in SM.numbered(m) if k_ == (m._sel or 0)] if regs else []
     L.event('MAN-002', f"Manual mode closed at {m.position}. Selections: {len(regs)}.")
     if not regs:
@@ -1740,9 +1762,13 @@ def _run(m, fullscreen=False, _keys=None):
     for k, depth in SM.tree(m):                                          # деревом слоёв: 10x > 50x > 100x
         rg = regs[k]
         o_ = SM.obj(m, rg)
+        if rg.get('kind') == 'group':
+            lines_.append(f"  {'    ' * depth}{'└ ' if depth else ''}{SM.title(m, k)}")
+            continue
         nx, ny = SM.frames_of(m, k)
-        lines_.append(f"  {'    ' * depth}{'└ ' if depth else ''}Selection {rg['num']}  {o_}x  {reg_area(rg)}   "
-                      f"{nx} x {ny} = {nx * ny} frames   focus points {first_num(k)}")
+        fr_ = f"{nx * ny} frames (by the outline)" if rg.get('shape') else f"{nx} x {ny} = {nx * ny} frames"
+        lines_.append(f"  {'    ' * depth}{'└ ' if depth else ''}{SM.title(m, k)}  {o_}x  {reg_area(rg)}   "
+                      f"{fr_}   focus points {first_num(k)}" + ("   (hidden)" if SM.hidden(m, k) else ""))
     print("Manual mode closed." + (" The new selection without corner 2 is kept for the next time." if m._pending else "")
           + "\n" + "\n".join(lines_) + f"\n  m.scan() shoots the selections of {m.objective}x, each into its own "
           "folder; the others wait for their objective.")

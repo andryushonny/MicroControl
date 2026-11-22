@@ -796,3 +796,42 @@ st = mc.storage.ScanData(f); nfr = len(st.index); st.close()
 assert nfr == n_shape < n_bbox[0] * n_bbox[1], (nfr, n_shape, n_bbox)
 r = mc.stitch(f, verbose=False)
 m.close(); print(f"Scan by the outline: {nfr} frames instead of {n_bbox[0] * n_bbox[1]}, stitched: OK")
+
+# ------------------------------------------------------------------ 29. Сетка под наклоном + люфт: углы выделений кисти — на настоящих крестах
+from microcontrol import layers as LY, snap
+from microcontrol.mask import Grid
+for turn in (5.0, -12.0):
+    m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp()); m.focus()
+    m._world.turn_deg = turn; m._world.backlash = {'x': 2, 'y': 2}
+    fw, fh = m.frame_size
+    m.area = mc.Area(0, 0, 4 * fw, 3 * fh)
+    f = m.scan(); mc.stitch(f, verbose=False)
+    g_ = snap.geometry(f); ms = g_['ms']; t = np.radians(turn); P = 100.0
+    W2q = lambda X, Y: g_['Mo'] @ (np.array([X, Y]) / ms) + g_['c'] + (g_['W'] / 2, g_['H'] / 2)
+    lat = lambda i, j: (i * P * np.cos(t) - j * P * np.sin(t), i * P * np.sin(t) + j * P * np.cos(t))
+    g = Grid(f)
+    for ij in [(1, 1), (2, 1), (1, 2)]:                             # кресты отмечены там, где они на мозаике
+        g.cr.add(W2q(*lat(*ij)))
+    g.selected |= {(0, 0), (1, 0), (1, 1)}                          # «Г» из трёх квадратов
+    g.save(json.load(open(os.path.join(f, 'meta.json')))['pixel_size_um'])
+    LY.sync_brush(m)
+    r = next(r for r in m._regions if r.get('src'))
+    V_ = np.array(r['shape'][0]['ext'])
+    L_ = np.array([lat(i, j) for i in range(-2, 6) for j in range(-2, 6)])
+    d_ = max(np.min(np.hypot(*(L_ - v).T)) for v in V_)
+    assert len(V_) == 6 and d_ < 0.5, (turn, len(V_), d_)            # 6 углов, каждый — на кресте (< 0.5 мкм)
+    m.close()
+print("Tilted grid (5, -12 deg) with backlash: brush outlines sit on the real crosses (< 0.5 um): OK")
+
+# ------------------------------------------------------------------ 30. Скрыть / показать выделение (глаз на карточке, Show all)
+import microcontrol.manual as M
+from microcontrol import samples as SM
+m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp()); m.focus()
+fw, fh = m.frame_size
+m.area = mc.Area(0, 0, 2 * fw, 2 * fh)
+SM.init_areas(m); SM.persist(m)
+M.run(m, fullscreen=False, _keys=[-1, ('car', 1184, 64), -1, -1])   # глаз первой карточки
+assert SM.hidden(m, 0) and m.sample.data['selections'][0].get('hidden'), m._regions
+M.run(m, fullscreen=False, _keys=[-1, ('car', 1280 - SM.CAR_W + 30, 54), -1, -1])   # Show all над списком
+assert not SM.hidden(m, 0) and not m.sample.data['selections'][0].get('hidden')
+m.close(); print("Hide / show a selection (eye), Show all: OK")

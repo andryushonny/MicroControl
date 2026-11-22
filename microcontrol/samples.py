@@ -99,6 +99,8 @@ def init_areas(m):
             rg['num'] = seq
         seq = max(seq, rg['num'])
     m._area_seq = seq
+    from .layers import refresh_groups
+    refresh_groups(m)
     for k_, rg in enumerate(m._regions):                   # родитель — явно (дальше не пересчитывается)
         if 'parent' not in rg:
             gp_ = _geo_parent(m, k_)
@@ -110,6 +112,8 @@ def init_areas(m):
 def persist(m):
     """Выделения -> project.json открытого проекта (переживают перезапуск)."""
     try:
+        from .layers import refresh_groups
+        refresh_groups(m)
         from .project import save_regions
         save_regions(m)
     except Exception:
@@ -226,7 +230,8 @@ def siblings(m, p, par=None):
     (порядок, заданный перетаскиванием), новые — в конце, по объективу и номеру."""
     par = par if par is not None else {k: parent(m, k) for k in range(len(m._regions))}
     par = {k: (v if v != k else None) for k, v in par.items()}
-    key = lambda c: (m._regions[c].get('rank', 1e9), obj(m, m._regions[c]), m._regions[c]['num'])
+    rk = lambda r: r.get('rank') if r.get('rank') is not None else 1e9
+    key = lambda c: (rk(m._regions[c]), obj(m, m._regions[c]), m._regions[c]['num'])
     return sorted((c for c in range(len(m._regions)) if par[c] == p), key=key)
 
 
@@ -553,7 +558,7 @@ def remove_sample(folder):
 
 # ---------------------------------------------------------------- карусель справа
 
-CAR_W = 252          # ширина карусели, px
+CAR_W = 300          # ширина карусели, px (кнопки карточки и операции помещаются и у вложенных)
 _FONT = cv2.FONT_HERSHEY_SIMPLEX
 
 
@@ -569,13 +574,36 @@ def _button(img, x0, y0, x1, y1, label, hover=False, danger=False, active=False)
                 (245, 245, 245), 1, cv2.LINE_AA)
 
 
+def _eye(img, cx, cy, open_=True):
+    """Значок глаза: открытый — видно на карте, перечёркнутый — скрыто."""
+    c = (235, 235, 235) if open_ else (130, 130, 136)
+    cv2.ellipse(img, (cx, cy), (8, 5), 0, 0, 360, c, 1, cv2.LINE_AA)
+    cv2.circle(img, (cx, cy), 2, c, -1, cv2.LINE_AA)
+    if not open_:
+        cv2.line(img, (cx - 8, cy + 6), (cx + 8, cy - 6), (235, 235, 235), 1, cv2.LINE_AA)
+
+
+def hidden(m, k):
+    """Выделение скрыто (само или его группа / родитель)?"""
+    from .layers import idx
+    seen = 0
+    while k is not None and k < len(m._regions) and seen < 30:
+        if m._regions[k].get('hidden'):
+            return True
+        p_ = m._regions[k].get('parent')
+        k = idx(m, p_) if p_ else None
+        seen += 1
+    return False
+
+
 def carousel(H, items, sel, scroll=0, title="Selections", go=True, hover=None, tools=None):
     """Вертикальная карусель на всю высоту. items: [dict(title, lines, color, thumbs, confirm, depth, obj, muted)].
     depth — слой (матрёшка): карточка участка лежит внутри рамки выделения, в котором её отметили, а та — внутри
     своего; obj — объектив («50x») плашкой у заголовка; muted — объектив не тот, что стоит сейчас.
     hover — (x, y) мыши в координатах карусели (подсветка кнопок и карточки) или None.
     Возвращает (картинка H x CAR_W, области щелчков [(x0, y0, x1, y1, действие, индекс)], высота содержимого).
-    Действия: 'sel' — выбрать, 'go' — поехать (если go), 'del' — удалить; 'tool' — кнопка tools[i] под заголовком
+    Действия: 'sel' — выбрать, 'go' — поехать (если go), 'del' — удалить, 'eye' — скрыть / показать (если у карточки
+    есть hidden: True / False); 'tool' — кнопка tools[i] под заголовком
     (операции над отмеченными карточками). Карточка с chosen=True отмечена (Ctrl+щелчок)."""
     W = CAR_W
     img = np.full((H, W, 3), 30, np.uint8)
@@ -588,7 +616,15 @@ def carousel(H, items, sel, scroll=0, title="Selections", go=True, hover=None, t
         cv2.rectangle(img, (W - tw - 26, 10), (W - 12, 30), (62, 62, 70), -1)
         cv2.putText(img, n_, (W - tw - 19, 25), _FONT, 0.45, (220, 220, 220), 1, cv2.LINE_AA)
     cv2.line(img, (0, 38), (W, 38), (62, 62, 70), 1)
-    top = 39 + (30 if tools else 0)
+    rows_, x_ = [[]], 8                                                   # кнопки операций — в строки по ширине
+    for t in tools or []:
+        tw_ = cv2.getTextSize(t, _FONT, 0.45, 1)[0][0] + 12
+        if x_ + tw_ > W - 8 and rows_[-1]:
+            rows_.append([])
+            x_ = 8
+        rows_[-1].append((t, x_, tw_))
+        x_ += tw_ + 4
+    top = 39 + (26 * len(rows_) + 4 if tools else 0)
     PAD, IND = 6, 10                                                      # поле рамки слоя, отступ на слой
     # 1) раскладка: высота карточек, место каждой рамки (своя карточка + все вложенные)
     depth = [min(4, it.get('depth', 0)) for it in items]
@@ -640,6 +676,10 @@ def carousel(H, items, sel, scroll=0, title="Selections", go=True, hover=None, t
         gx1 = bx0 - 6                                                      # кнопка «поехать»
         gx0 = gx1 - 36
         right = gx0 - 6 if (go and it.get('go', True)) else bx0 - 6
+        if it.get('hidden') is not None:                                   # кнопка «глаз»: скрыть / показать
+            ex1 = right
+            ex0 = ex1 - 24
+            right = ex0 - 6
         tx = ix + 12
         ob = it.get('obj')
         if ob:                                                             # плашка объектива
@@ -662,6 +702,10 @@ def carousel(H, items, sel, scroll=0, title="Selections", go=True, hover=None, t
         if go and it.get('go', True):
             _button(img, gx0, y0 + 8, gx1, y0 + 28, 'Go', over(gx0, y0 + 8, gx1, y0 + 28))
             hits.append((gx0, y0 + 8, gx1, y0 + 28, 'go', k))
+        if it.get('hidden') is not None:
+            _button(img, ex0, y0 + 8, ex1, y0 + 28, '', over(ex0, y0 + 8, ex1, y0 + 28))
+            _eye(img, (ex0 + ex1) // 2, y0 + 18, not it['hidden'])
+            hits.append((ex0, y0 + 8, ex1, y0 + 28, 'eye', k))
         yy = y0 + 44
         for ln in it.get('lines', []):
             cv2.putText(img, ln, (tx, yy), _FONT, 0.4, (200, 200, 205) if not it.get('muted') else (160, 160, 165),
@@ -684,12 +728,13 @@ def carousel(H, items, sel, scroll=0, title="Selections", go=True, hover=None, t
     cv2.putText(img, title, (14, 25), _FONT, 0.6, (240, 240, 240), 1, cv2.LINE_AA)
     tool_hits = []
     if tools:                                                             # операции над отмеченными
-        x_ = 8
-        for i, t in enumerate(tools):
-            tw_ = cv2.getTextSize(t, _FONT, 0.45, 1)[0][0] + 12
-            _button(img, x_, 44, x_ + tw_, 64, t, over(x_, 44, x_ + tw_, 64))
-            tool_hits.append((x_, 44, x_ + tw_, 64, 'tool', i))
-            x_ += tw_ + 4
+        i = 0
+        for r_, row in enumerate(rows_):
+            yb = 44 + 26 * r_
+            for t, x_, tw_ in row:
+                _button(img, x_, yb, x_ + tw_, yb + 20, t, over(x_, yb, x_ + tw_, yb + 20))
+                tool_hits.append((x_, yb, x_ + tw_, yb + 20, 'tool', i))
+                i += 1
     if items:
         cv2.rectangle(img, (W - tw - 26, 10), (W - 12, 30), (62, 62, 70), -1)
         cv2.putText(img, n_, (W - tw - 19, 25), _FONT, 0.45, (220, 220, 220), 1, cv2.LINE_AA)

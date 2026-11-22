@@ -56,7 +56,7 @@ HELP = ["Shift+Esc: Exit (or close the window)", "P: Hide / show the left panel"
         "Buttons on top: Scan area (scan + stitch), New area, Export (drawing for AutoCAD: DWG + DXF), Settings",
         "Selections are layers: Ctrl+click cards to mark them, then Merge / Minus / Overlap / Group / Ungroup above the list",
         "The eye on a card hides the selection on the maps (and shows it again); Show all above the list",
-        "Squares chosen with the brush in the view become selections (one per figure, next objective)   Shift+drag over a selection: move it",
+        "Squares selected in the view (M) become Drafts, one per figure   Shift+drag over a selection: move it",
         "T: Turn the camera picture by 180 degrees (remembered)",
         "[ / ]: Arrows left-right / up-down the other way; the mini map always follows the arrows (remembered)",
         "O: check with the camera which way the picture moves",
@@ -261,7 +261,7 @@ def camera_box(m, shape):
 STEPS = ["1 Overview", "2 Pick areas", "3 Detail", "4 Export"]
 STEP_HELP = [
     "Step 1: put a small objective (4x or 10x), drag a rectangle on the map over the chip, then Scan area",
-    "Step 2: open the overview (double-click it on the map or V), mark 3 crosses (C), paint flakes with the brush (B)",
+    "Step 2: open the overview (double-click it on the map or V), mark 3 crosses (C), number two squares (N), select the squares with flakes (M)",
     "Step 3: put 50x or 100x, choose an area on the right and press Scan area",
     "Step 4: press Export, tick the areas: one drawing for AutoCAD (DWG + DXF with pictures, outlines, crosses)"]
 BUTTONS = ["New area", "Scan area", "Export", "Settings"]
@@ -920,7 +920,7 @@ def _run(m, fullscreen=False, _keys=None):
                 hd_ = SM.hidden(m, k)
                 items.append(dict(title=SM.title(m, k), obj="draft", color=SM.col(m, k), chosen=k in car['multi'],
                                   confirm=car['confirm'] == k, depth=depth, hidden=bool(reg.get('hidden')),
-                                  muted=hd_, lines=[mm_ + ", from the brush" + (f", grid 1/{reg['sub']}" if reg.get('sub') else ""),
+                                  muted=hd_, lines=[mm_ + ", from the view (M)" + (f", grid 1/{reg['sub']}" if reg.get('sub') else ""),
                                                     "click draft: pick its objective" if not hd_
                                                     else "hidden on the maps"]))
                 order.append(k)

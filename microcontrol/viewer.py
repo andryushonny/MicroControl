@@ -119,17 +119,17 @@ class _Scene:
 
 HELP_V2 = "Arrows / drag: move  Wheel: zoom  0: whole  , / .: selection  H: all keys  Shift+Esc: exit"
 HELP_MODE = {
-    'look': "S: stitch  C: crosses  N: numbers  T: level  M / B: select / brush cells (Drafts)  2-5: finer grid of a selection  Y: hints  R: ruler  E: export",
+    'look': "S: stitch  C: crosses  N: numbers  T: level  M: select cells (Drafts)  2-5: finer grid of a selection  Y: hints  R: ruler  E: export",
     'cross': "Click: cross exactly there (2 in a row = tilt)  Shift+click: snap to centre  Drag a mark: move  Right click: remove  Shift+C: again  F: fit grid  C / Esc: done",
-    'select': "Click: square  Drag: box  Shift: unselect  Right click: remove green area  A: all  X: none  Esc: done",
-    'paint': "Drag a rectangle: select all squares in it  Shift+drag: unselect  Click: one square  A: all  X: none  Esc: done",
+    'select': "Click: square  Drag: box  Shift: unselect  Right click: remove a square (Shift: the whole area)  A: all  X: none  Esc: done",
+    'paint': "Drag a rectangle: select all squares in it  Shift+drag: unselect  Click: one square  Right click: remove one (Shift: whole area)  A: all  X: none  Esc: done",
     'label': "Click a square, type its number X Y  Enter: set  Esc: done",
     'ruler': "Click two points: the distance (a third click starts again)  Drag: move  R or Esc: off",
-    'refine': "Over a selection: 2-5 its finer grid (1: none), then B / M paint its cells: they become Drafts inside it",
+    'refine': "Over a selection: 2-5 its finer grid (1: none), then M selects its cells: they become Drafts inside it",
 }
 HELP_HINTS = "Y: hints on / off  Shift+Y: select them  < / >: sensitivity  U: type it"
 HELP_V = ("S: stitch   C: crosses (2 in a row = tilt; right click = remove, Shift+C = again)   F: fit grid   M: select "
-          "(click, box; Shift = unselect; right click = remove the green area)   B: brush   N: number squares (X Y)   "
+          "(click, box; Shift = unselect; right click = remove a square, Shift + right click = the whole area)   N: number squares (X Y)   "
           "Y: hints, Shift+Y: select them, U, < / >: sensitivity   A / X: all / none   R: ruler   E: export   Esc: exit")
 HELP_ALL = [
     ("Look", "Arrows or drag (right / middle in any mode): move   Wheel, + / -: zoom   0: whole"),
@@ -142,8 +142,8 @@ HELP_ALL = [
     ("", "The mark goes exactly where you click   Shift+click: snap to the cross centre   Drag a mark: move it"),
     ("", "Right click: remove a cross   Backspace: the last one   Shift+C: start again   F: fit the grid to all crosses"),
     ("Numbers", "N: click a square, type the number written next to it (X Y), Enter. Two squares fix all numbers"),
-    ("Select", "M: click / drag a box (Shift: unselect)   B: brush (drag rectangles)   A / X: all / none"),
-    ("", "Right click on green: remove that green area"),
+    ("Select", "M: click a square (again: off) / drag a box (Shift: unselect)   A / X: all / none"),
+    ("", "Right click on green: remove that square (or cell)   Shift + right click: the whole green area"),
     ("Hints", "Y: yellow hints on / off   Shift+Y: select them   < / >: sensitivity -/+ 5   U: type it"),
     ("Export", "E: export the selected squares (PNG + DXF)"),
 ]
@@ -189,6 +189,17 @@ def _preview(folder, w):
                 pass
         _PREV[key] = small
     return _PREV[key]
+
+
+def _connected(cells, c):
+    """Связная (по сторонам) область множества клеток, в которой лежит c."""
+    area, todo = set(), [c]
+    while todo:
+        q = todo.pop()
+        if q in cells and q not in area:
+            area.add(q)
+            todo += [(q[0] + 1, q[1]), (q[0] - 1, q[1]), (q[0], q[1] + 1), (q[0], q[1] - 1)]
+    return area
 
 
 def _car_items(subs, cur, car):
@@ -291,12 +302,13 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
     smp0 = P0_.sample_obj(folder)
     LAT = smp0.data.get('lattice') if smp0 is not None else None
     seeded_ = False
-    if not g.ready() and LAT is not None:                   # решётка образца уже есть: кресты ставить не нужно
+    if not g.ready() and LAT is not None and LAT.get('numbered'):   # решётка образца с номерами есть: кресты не нужны
         try:
             LT.seed_grid(folder, g, LAT)
             g.save(px_um)
             d_ = json.load(open(os.path.join(folder, 'grid.json'), encoding='utf-8'))
             d_['seeded'] = True
+            d_['seeded_labels'] = [list(c_) for c_ in g.labels]
             try:                                                # кисть прежних съёмок — в новую сетку
                 from .layers import brush_into_grid
                 g2_ = Grid(folder)
@@ -519,7 +531,27 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
         d = (np.asarray(b, float) - np.asarray(a, float)) * px_um
         return f"{np.hypot(*d):.2f} um   (dx {d[0]:+.2f}, dy {d[1]:+.2f})"
 
+    def unseed():
+        """Сетку поставили по решётке образца, а человек сам правит кресты или номера: номера, подставленные
+        программой, убираются (иначе они спорят с его подписями: «labels disagree»), сетка — уже его."""
+        gp_ = os.path.join(folder, 'grid.json')
+        try:
+            d_ = json.load(open(gp_, encoding='utf-8')) if os.path.exists(gp_) else {}
+        except (OSError, ValueError):
+            d_ = {}
+        if not d_.get('seeded'):
+            return
+        for c_ in d_.get('seeded_labels') or [tuple(k_) for k_ in g.labels]:
+            g.labels.pop(tuple(c_), None)
+        g.save(px_um)
+        d_ = json.load(open(gp_, encoding='utf-8'))
+        d_.pop('seeded', None)
+        d_.pop('seeded_labels', None)
+        with open(gp_, 'w', encoding='utf-8') as f_:
+            json.dump(d_, f_, indent=1)
+
     def add_cross(v, snap=False):
+        unseed()
         """Крест — ровно там, где щёлкнули (середина пикселя экрана); snap (Shift+щелчок) — к центру креста
         на снимке (поиск по шаблону «+»)."""
         Mc = from_view((v[0] + 0.5, v[1] + 0.5))
@@ -631,6 +663,7 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
             mk, st['mdrag'] = st.get('mdrag'), None
             if mk is not None:
                 if moved:
+                    unseed()
                     g.refined = None
                     g.save(px_um)
                     st['msg'] = f"Cross mark moved; tilt {g.cr.angle():+.3f} deg" if len(g.cr.marks) > 1 else "Cross mark moved"
@@ -674,23 +707,24 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
                     dists = [np.hypot(*(to_view(q) - (x, y))) for q in g.cr.marks]
                     k = int(np.argmin(dists))
                     if dists[k] < 25:
+                        unseed()
                         g.cr.remove(k)
                         g.save(px_um)
                         st['msg'] = "Cross mark removed"
+                elif st['mode'] in ('look', 'select', 'paint') and g.ready() and \
+                        unpaint_refine(from_view((x, y)), sh0):   # клетка подсетки (Shift — вся её область)
+                    pass
                 elif st['mode'] in ('look', 'select', 'paint') and g.ready() and g.selected:
-                    c = g.cell_at(from_view((x, y)))        # правый щелчок по зелёному — убрать всю эту область
-                    if c in g.selected:
-                        area, todo = set(), [c]
-                        while todo:
-                            q = todo.pop()
-                            if q in g.selected and q not in area:
-                                area.add(q)
-                                todo += [(q[0] + 1, q[1]), (q[0] - 1, q[1]), (q[0], q[1] + 1), (q[0], q[1] - 1)]
+                    c = g.cell_at(from_view((x, y)))        # правый щелчок по зелёному: этот квадрат,
+                    if c in g.selected:                     # с Shift — вся связная область
+                        area = _connected(g.selected, c) if sh0 else {c}
                         g.selected -= area
                         g.save(px_um)
-                        st['msg'] = f"Area of {len(area)} squares removed, {len(g.selected)} left"
+                        st['msg'] = (f"Area of {len(area)} squares removed" if sh0 else f"Square {c} removed "
+                                     "(Shift + right click: the whole area)") + f", {len(g.selected)} left"
                 elif st['mode'] == 'label' and g.ready():
                     c = g.cell_at(from_view((x, y)))
+                    unseed()
                     if g.labels.pop(c, None) is not None:
                         g.save(px_um)
                         st['msg'] = f"Label removed. {g.numbering()[2]}"
@@ -964,14 +998,14 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
         hit_ = [r_ for r_ in regs_ if r_.get('cells') and
                 [int(np.floor(u_ * LT.level(r_))), int(np.floor(v_ * LT.level(r_)))] in r_['cells']]
         if not hit_:
-            st['msg'] = "Put the mouse over a selection made of cells (paint lithography squares with B first)"
+            st['msg'] = "Put the mouse over a selection made of cells (select lithography squares with M first)"
             return
         r_ = max(hit_, key=LT.level)
         old_ = rf_.get(r_['uid']) or {}
         write_refine(r_['uid'], n, old_.get('cells', []) if int(old_.get('n') or 0) == n else [])
         kind_ = 'Draft' if r_.get('kind') == 'draft' else 'Selection'
         st['msg'] = (f"{kind_} {r_['num']}: grid 1/{n} inside it (cells {LT.pitch_text(lat_now(), LT.level(r_) * n)}); "
-                     "B / M paint its cells" if n > 1 else f"{kind_} {r_['num']}: no finer grid")
+                     "M selects its cells" if n > 1 else f"{kind_} {r_['num']}: no finer grid")
 
     def paint_refine(tg_, pts, on, single=False):
         """Кисть / щелчок по подсетке выделения: клетки уровня N·n внутри него."""
@@ -996,6 +1030,29 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
         write_refine(tg_['uid'], n_, have_)
         st['msg'] = (f"Grid 1/{M_} of {tg_['kind']} {tg_['num']}: {len(have_)} cells painted "
                      f"(they become Drafts in the microscope window)")
+
+    def unpaint_refine(q, whole):
+        """Правый щелчок по закрашенной клетке подсетки: убрать её (whole — всю связную область). -> bool."""
+        L_ = lat_now()
+        if L_ is None:
+            return False
+        from .snap import mosaic_to_stage
+        regs_, rf_ = regions_now()
+        for uid_, rq_ in rf_.items():
+            r_ = next((r2 for r2 in regs_ if r2['uid'] == uid_), None)
+            if r_ is None or not rq_.get('cells'):
+                continue
+            M_ = LT.level(r_) * int(rq_.get('n') or 1)
+            u_, v_ = LT.to_uv(L_, mosaic_to_stage(folder, [q]))[0]
+            c_ = (int(np.floor(u_ * M_)), int(np.floor(v_ * M_)))
+            have_ = {tuple(c2) for c2 in rq_['cells']}
+            if c_ in have_:
+                gone_ = _connected(have_, c_) if whole else {c_}
+                write_refine(uid_, rq_.get('n'), have_ - gone_)
+                st['msg'] = (f"{len(gone_)} cells of grid 1/{M_} removed" if whole else
+                             "Cell removed (Shift + right click: the whole area)")
+                return True
+        return False
 
     def draw_subgrids(img):
         """Подсетки выделений (тонкие линии внутри их клеток) и клетки кисти в них (зелёные)."""
@@ -1087,6 +1144,32 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
                 new_ = g_snap()
                 hist.push(g_label(), h_last[1], new_, folder=folder, px=px_um)
                 h_last[:] = [sg_, new_]
+        if _t.monotonic() - st.get('_sync_t', 0) > 0.5:  # окно микроскопа поменяло образец или кисть —
+            st['_sync_t'] = _t.monotonic()                 # показать то же, что и там
+            mt_ = tuple(os.path.getmtime(p_) if os.path.exists(p_) else 0 for p_ in
+                        ((smp.file if smp is not None else ''), os.path.join(folder, 'grid.json')))
+            if st.get('_mt') is None:
+                st['_mt'] = mt_
+            elif mt_ != st['_mt'] and st['down'] is None:
+                st['_mt'] = mt_
+                subs2 = SM.session_of(folder)[1]
+                if subs2 != subs:                            # выделение удалили / вернули / сняли новое
+                    subs[:] = subs2
+                    st['car_dirty'] = st['dirty'] = True
+                    if smp is not None and not any(os.path.abspath(folder).startswith(os.path.abspath(
+                            P0_.sel_folder(smp.folder, r_)) + os.sep) for r_ in json.load(
+                            open(smp.file, encoding='utf-8')).get('selections', [])):
+                        st['msg'] = ("This selection was deleted in the microscope window "
+                                     "(Ctrl+Z there brings it back)")
+                try:
+                    g2_ = Grid(folder)
+                    if g2_.selected != g.selected:           # кисть поменяли там (удалили черновик и т. п.)
+                        g.selected = set(g2_.selected)
+                        h_last[:] = [g_sig(), g_snap()]      # это не своё действие: не в историю
+                        st['dirty'] = True
+                except Exception:
+                    pass
+                st['dirty'] = True
         if st['switch'] is not None:                      # другой образец из карусели
             break
         if not fullscreen:
@@ -1120,7 +1203,15 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
             if isinstance(key, tuple):                      # тест: ('click'|'rclick', x, y[, shift]) или ('drag', ...)
                 kind, *a = key
                 fl = cv2.EVENT_FLAG_SHIFTKEY if (len(a) > 2 and a[-1] == 'shift') else 0
-                if kind[0] == 'q':                          # ('qclick', ...) — точки в пикселях мозаики
+                if kind == 'call':                          # тест: сделать что-то «из другого окна»
+                    a[0]()
+                    key = -1
+                    kind = ''
+                elif kind == 'sleep':
+                    _t.sleep(a[0])
+                    key = -1
+                    kind = ''
+                if kind[:1] == 'q':                         # ('qclick', ...) — точки в пикселях мозаики
                     kind = kind[1:]
                     nums_ = [v_ for v_ in a if not isinstance(v_, str)]
                     a = [int(round(v_)) for xy_ in zip(nums_[0::2], nums_[1::2]) for v_ in to_view(xy_)] + \
@@ -1183,6 +1274,7 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
                 st['lab'] = None; st['msg'] = "Cancelled"
             elif key in (13, 10):
                 parts = buf.split()
+                unseed()                                    # свои номера — вместо подставленных
                 if not buf:
                     g.labels[c] = g.name(*c)                # Enter без цифр — подтвердить показанный номер
                 elif len(parts) == 2 and all(p_.lstrip('-').isdigit() for p_ in parts):
@@ -1212,7 +1304,7 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
         elif raw in (',', '.') and len(subs) > 1:           # предыдущий / следующий образец
             st['switch'] = subs[(subs.index(folder) + (1 if raw == '.' else -1)) % len(subs)]
         elif raw == 'C':                                     # Shift+C: кресты заново (Ctrl+Z вернёт)
-            g.cr.clear(); g.refined = None; set_straight(False); g.save(px_um)
+            unseed(); g.cr.clear(); g.refined = None; set_straight(False); g.save(px_um)
             st['mode'] = 'cross'
             st['msg'] = "Crosses cleared (Ctrl+Z brings them back). Click a cross, then its neighbour in the same row"
         elif ch in 'sj' and ch:                              # S: сшить прямо здесь; окно потом откроется заново
@@ -1233,13 +1325,10 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
                 st['mode'] = 'cross'
                 st['msg'] = ("Click a cross, then its neighbour in the same row: the picture turns level. "
                              "Shift+C: start again")
-        elif ch == 'm':                                      # M: маска — выбирать квадраты
+        elif ch in 'mb' and ch:                              # M (и B по привычке): выбирать клетки
             st['mode'] = 'select' if g.ready() else st['mode']
-            st['msg'] = "Click = square, drag = box (Shift = unselect), right button = move" if g.ready() \
-                else "Mark at least 2 crosses first (C)"
-        elif ch == 'b':
-            st['mode'] = 'paint' if g.ready() else st['mode']
-            st['msg'] = "Brush: drag a rectangle: all squares in it are selected (Shift = unselect)" if g.ready() \
+            st['msg'] = ("Select: click = square (again = off), drag = box (Shift = unselect); right click = remove "
+                         "one, Shift + right click = the whole area; they become Drafts") if g.ready() \
                 else "Mark at least 2 crosses first (C)"
         elif key == 25 or raw == 'Y':                       # Ctrl+Y / Shift+Y: жёлтое -> зелёное
             if g.ready():
@@ -1248,9 +1337,9 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
                 n0 = len(g.selected)
                 g.selected |= set(g.useful)
                 g.save(px_um)
-                st['mode'] = 'paint'                        # сразу кисть: поправить выделение руками
+                st['mode'] = 'select'                       # сразу выбор: поправить выделение руками
                 st['msg'] = f"Hints selected: +{len(g.selected) - n0} squares, total {len(g.selected)}. " \
-                            "Brush: drag rectangles to add, Shift+drag to unselect"
+                            "Select: drag boxes to add, Shift+drag to unselect"
         elif ch == 'y' and g.ready():                       # Y: подсказка вкл. / выкл. (первый раз — посчитать)
             if not st.get('hints', _cfg.AUTO_HINTS) and not getattr(g, 'scores', None):
                 st['msg'] = "Looking for squares with something in them..."
@@ -1272,7 +1361,7 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
                 else "Mark at least 2 crosses first (C)"
         elif key == 8:
             if st['mode'] == 'cross':
-                g.cr.undo(); g.save(px_um); st['msg'] = "Last cross mark removed"
+                unseed(); g.cr.undo(); g.save(px_um); st['msg'] = "Last cross mark removed"
         elif ch == 'f' and g.ready():
             n_, rms = g.refine(lambda x, y, w, h: sc.render(x, y, 1.0, w, h), sc.size, px_um)
             if _cfg.AUTO_HINTS or (getattr(g, 'scores', None) and st.get('hints')):

@@ -422,9 +422,20 @@ def all_scans(sample_folder):
 
 
 def latest_scans(sample_folder):
-    """Последняя съёмка каждого выделения образца."""
+    """Последняя съёмка каждого выделения образца — только тех, что есть в sample.json (удалённое в окне
+    микроскопа не показывается и в просмотре; папки остаются: Ctrl+Z там вернёт выделение)."""
     out = []
+    keep = None
+    sj = os.path.join(sample_folder, 'sample.json')
+    if os.path.exists(sj):
+        try:
+            regs = json.load(open(sj, encoding='utf-8')).get('selections') or []
+            keep = {os.path.abspath(sel_folder(sample_folder, r)) for r in regs if 'num' in r}
+        except (OSError, ValueError):
+            keep = None
     for sd in sorted(glob.glob(os.path.join(sample_folder, 'selections', 'S*'))):
+        if keep is not None and os.path.abspath(sd) not in keep:
+            continue
         v = [s for s in sorted(glob.glob(os.path.join(sd, 'scans', '*'))) if is_scan(s)]
         if v:
             out.append(v[-1])

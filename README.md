@@ -68,7 +68,7 @@ Both windows close with **Shift+Esc** or the window's ×. A single `Esc` only ca
 
 ### 4. Choose squares — the mask
 
-- `M` — click squares or drag a box; `Shift` — unselect. `B` — brush: drag rectangles, every square in a rectangle is chosen (`Shift` — unchosen). Chosen squares are green.
+- `M` — select: click a square (again — off) or drag a box, every square it touches is chosen (`Shift` — unselect). Right click — remove one square, `Shift` + right click — the whole green area. Chosen squares are green (`B` does the same, out of habit).
 - **Hints:** `Y` finds and shows yellow squares where something is (flakes, crystals); they are not computed by themselves — it takes a few seconds. `Shift+Y` takes all of them and switches to the brush to correct the choice; `<` / `>` change the sensitivity.
 
 ### 5. Export
@@ -79,7 +79,7 @@ The final result is the drawing `export/drawing.dwg`: every chosen square is its
 
 `mc.projects()` and `mc.all_samples()` print a table: id, name, samples, selections, scans, created, updated, description (the Open dialogs show the same). In the viewer, Open → **New window** shows another project in its own window (`mc.view_window(folder)`), the current one stays open.
 
-Squares chosen with the brush become a **Draft** — a sketch that is never scanned (click its *draft* chip to give it the objective in place). Over any selection, keys `2`–`5` give it its own grid 2–5 times denser; the brush then paints cells of that grid strictly inside it, and they become drafts one level deeper (address `13,7 > 2,1`). On the map, drag over such a selection: the new area for the objective in place is made of whole cells of its grid. **Export** asks which areas go into the drawing and writes one AutoCAD drawing of the sample: origin at cross 1,1, pictures in place, every cell as a closed square, crosses with their numbers.
+Squares selected in the viewer become a **Draft** — a sketch that is never scanned (click its *draft* chip to give it the objective in place). Over any selection, keys `2`–`5` give it its own grid 2–5 times denser; `M` then selects cells of that grid strictly inside it, and they become drafts one level deeper (address `13,7 > 2,1`). On the map, drag over such a selection: the new area for the objective in place is made of whole cells of its grid. **Export** asks which areas go into the drawing and writes one AutoCAD drawing of the sample: origin at cross 1,1, pictures in place, every cell as a closed square, crosses with their numbers.
 
 | | |
 |---|---|
@@ -264,8 +264,8 @@ Arrows move; letters do things. As much as possible is done right in the window.
 | `S` | stitch right here: progress in the window, then the view reopens stitched |
 | `C` · `F` | mark crosses (`Shift+C` — start again) · fit the grid to all crosses |
 | `N` | number a square |
-| `M` · `B` | select (click, box) · brush (rectangles); `Shift` — unselect; `A` / `X` — all / none |
-| `2`…`5` · `1` | over a selection: its own grid 2–5 times denser (the brush paints its cells) · no finer grid |
+| `M` | select (click, box); `Shift` — unselect; right click — remove one, `Shift` + right click — the whole area; `A` / `X` — all / none |
+| `2`…`5` · `1` | over a selection: its own grid 2–5 times denser (`M` then selects its cells) · no finer grid |
 | `Y` · `Shift+Y` · `<` `>` | hints · take the hints · sensitivity |
 | `T` | picture level / as shot |
 | `R` | ruler: two clicks — the distance |

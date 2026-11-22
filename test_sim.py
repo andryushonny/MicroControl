@@ -1052,3 +1052,47 @@ M.run(m, fullscreen=False, _keys=[-1, ('mouse', _cv.EVENT_LBUTTONDOWN, mx + 40, 
                                   ('mouse', _cv.EVENT_LBUTTONUP, mx + 40, my + 30, 0), -1, -1])
 assert (m.real_position.x, m.real_position.y) != p0                      # щелчок по маленькой карте — поехали
 m.close(); print("Small map in the corner: wheel zooms in and out, click drives there: OK")
+
+
+# ------------------------------------------------------------------ 36. Просмотр и окно микроскопа показывают одно и то же; правый щелчок; свои номера вместо подставленных
+import microcontrol.viewer as V_
+from microcontrol import samples as SM, layers as LY, project as P_
+from microcontrol.mask import Grid
+m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp()); m.focus()
+fw, fh = m.frame_size
+m.area = mc.Area(0, 0, 3 * fw, 2 * fh); f = m.scan(); mc.stitch(f, verbose=False)
+m.area = mc.Area(5 * fw, 0, 6 * fw, fh); f2 = m.scan(); mc.stitch(f2, verbose=False)
+px_um = json.load(open(os.path.join(f, 'meta.json')))['pixel_size_um']
+g = Grid(f); p0 = np.array([150.0, 120.0]); a_ = 100 / px_um
+g.cr.add(p0); g.cr.add(p0 + (a_, 0)); g.cr.add(p0 + (0, a_)); g.labels = {(0, 0): (5, 7), (2, 1): (7, 8)}
+g.selected |= {(0, 0), (1, 0), (2, 0), (2, 1)}; g.save(px_um)
+LY.sync_brush(m); SM.persist(m)
+assert len(P_.latest_scans(m.sample.folder)) == 2
+q = lambda i, j: g.cr.point(i + 0.5, j + 0.5)
+V_.view(f, _keys=[-1, ord('m'), ('qrclick', *q(1, 0)), -1, 27])           # правый щелчок: один квадрат
+assert Grid(f).selected == {(0, 0), (2, 0), (2, 1)}, Grid(f).selected
+V_.view(f, _keys=[-1, ord('m'), ('qrclick', *q(2, 0), 'shift'), -1, 27])  # Shift + правый: вся область
+assert Grid(f).selected == {(0, 0)}, Grid(f).selected
+LY.sync_brush(m); SM.persist(m)
+kd = next(k for k, r in enumerate(m._regions) if r.get('kind') == 'draft')
+k2 = next(k for k, r in enumerate(m._regions) if r.get('kind') != 'draft' and k != 0)
+
+def _delete_there():                                                       # «в окне микроскопа» удалили
+    SM.delete_area(m, kd)                                                  # черновик и Selection 2
+    SM.delete_area(m, next(k for k, r in enumerate(m._regions) if r['num'] == 2))
+
+V_.view(f, _keys=[-1, ('call', _delete_there), ('sleep', 0.6), -1, -1, ord('m'), ('qclick', *q(1, 1)), -1, 27])
+assert Grid(f).selected == {(1, 1)}, Grid(f).selected                      # удалённое не вернулось из просмотра
+assert len(P_.latest_scans(m.sample.folder)) == 1                          # и Selection 2 в просмотре нет
+LY.sync_brush(m); SM.persist(m)
+assert [r['num'] for r in m._regions if r.get('kind') == 'draft'] and not any(r['num'] == 2 for r in m._regions)
+m.area = mc.Area(0, 0, 2 * fw, fh); f3 = m.scan(); mc.stitch(f3, verbose=False)   # новая съёмка: сетка — по решётке
+V_.view(f3, _keys=[-1, 27])
+g3 = Grid(f3)
+assert json.load(open(os.path.join(f3, 'grid.json'))).get('seeded') and g3.labels
+c3 = g3.cell_at(g3.cr.point(0.5, 0.5))
+V_.view(f3, _keys=[-1, ord('n'), ('qclick', *g3.cr.point(0.5, 0.5)), ord('9'), ord(' '), ord('9'), 13, -1, 27])
+g3 = Grid(f3)
+assert g3.labels == {c3: (9, 9)} and 'disagree' not in g3.numbering()[2], (g3.labels, g3.numbering()[2])
+m.close(); print("View follows the microscope window (deleted stays deleted), right click: one square / Shift: the area,"
+                 " own numbers replace the seeded ones: OK")

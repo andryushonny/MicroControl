@@ -178,7 +178,7 @@ def _geo_parent(m, k):
     c = ((r[0] + r[2]) / 2, (r[1] + r[3]) / 2)
     best = None
     for i, o in enumerate(m._regions):
-        if i == k or o.get('kind') == 'group' or (o.get('kind') != 'mask' and obj(m, o) >= obj(m, rg)):
+        if i == k or o.get('kind') == 'group' or (o.get('kind') != 'draft' and obj(m, o) >= obj(m, rg)):
             continue
         q = _rect(m, o)
         if inside(q, *c):
@@ -200,7 +200,7 @@ def frames_of(m, k):
         s_ = m.motor_step
         st = {a: max(1, math.floor(rg.get(f, 1.0) * (1 - scan_overlap(o)) / s_ + 1e-9)) * s_
               for a, f in (('x', 'fw'), ('y', 'fh'))}
-    if rg.get('kind') in ('group', 'mask'):                # группа и маска не снимаются
+    if rg.get('kind') in ('group', 'draft'):                # группа и маска не снимаются
         return 0, 0
     if not rg.get('shape'):
         return _area(m, rg).size(st)
@@ -261,7 +261,7 @@ def reorder(m, src, dst, after=False):
 def title(m, k):
     """«Selection 3» или «Group 4» (или имя, если дали)."""
     rg = m._regions[k] if k < len(m._regions) else m._pending
-    kind_ = {'group': 'Group', 'mask': 'Mask'}.get(rg.get('kind'), 'Selection')
+    kind_ = {'group': 'Group', 'draft': 'Draft'}.get(rg.get('kind'), 'Selection')
     return rg.get('name') or f"{kind_} {num(m, k)}"
 
 
@@ -331,7 +331,7 @@ def corner(m, which, img=None):
                obj=m.objective, fw=m._pending.get('fw', m.frame_size[0]), fh=m._pending.get('fh', m.frame_size[1]))
     from .layers import geom
     gn = geom(m, new)
-    bad = [rg['num'] for rg in m._regions if rg.get('kind') not in ('group', 'mask') and obj(m, rg) == m.objective
+    bad = [rg['num'] for rg in m._regions if rg.get('kind') not in ('group', 'draft') and obj(m, rg) == m.objective
            and gn.intersection(geom(m, rg)).area > 1e-3]
     if bad:
         raise MicroControlError('E704', f"This selection overlaps Selection {', '.join(map(str, bad))} of the same "

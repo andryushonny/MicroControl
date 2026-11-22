@@ -5,8 +5,10 @@
              без него — прямоугольник углов A, B (центры крайних кадров) плюс полкадра.
     Дерево   reg['parent'] — uid выделения, в котором оно лежит (None — верхний уровень); группа
              (reg['kind'] == 'group') — папка без своего контура и съёмки: контур — объединение детей.
-    Кисть    выделение, рождённое кистью по квадратам решётки в просмотре: reg['src'] — папка съёмки (от образца),
-             reg['cells'] — квадраты. Пока его не меняли операциями, оно следует за кистью (sync_brush).
+    Клетки   выделение — набор клеток вложенной сетки (lattice.py): reg['cells'] — клетки уровня
+             lattice.level(reg), reg['factors'] — цепочка подсеток, reg['sub'] — подсетка для его детей (2…5).
+    Draft    черновик (reg['kind'] == 'draft'): выделение без объектива, кистью в просмотре; не снимается.
+             Пока его не меняли операциями (reg['src'] — откуда кисть), оно следует за кистью (sync_brush).
 
 Операции: union (слить в первое), subtract (из первого вычесть остальные), intersect, group, ungroup, move.
 """
@@ -45,12 +47,15 @@ def is_group(reg):
 
 
 def is_mask(reg):
-    """Маска — черновик с кисти: показывает, где искать; не снимается; внутри рисуют участки нужного объектива."""
-    return reg.get('kind') == 'mask'
+    """Draft — черновик с кисти: показывает, где искать; не снимается, пока не выбран объектив."""
+    return reg.get('kind') == 'draft'
+
+
+is_draft = is_mask
 
 
 def to_area(m, k, o):
-    """Маску — в обычный участок на объективе o (снимать её целиком)."""
+    """Черновик — в обычный участок на объективе o (чтобы снять его)."""
     r = m._regions[k]
     k_ = m.objective / o
     detach(m, r)
@@ -159,9 +164,8 @@ def geometric_parent(m, reg, skip=None):
 def detach(m, reg):
     """Выделение кисти меняют операциями — дальше оно живёт само: его квадраты кисть больше не трогает."""
     if reg.get('src'):
-        _ignore_cells(m, reg['src'], reg.get('cells') or [])
+        remove_brush_cells(m, reg)
     reg.pop('src', None)
-    reg.pop('cells', None)
 
 
 # ---------------------------------------------------------------- операции
@@ -191,6 +195,7 @@ def union(m, ks):
     if is_group(t):
         raise ValueError("Groups are not merged: ungroup first")
     g = unary_union([geom(m, m._regions[k]) for k in ks])
+    cells_op(m, [m._regions[k] for k in ks], lambda a, *o: a.union(*o))
     for k in ks:
         detach(m, m._regions[k])
     for k in ks[1:]:
@@ -199,7 +204,7 @@ def union(m, ks):
         for c in m._regions:
             if c.get('parent') == r.get('uid'):
                 c['parent'] = t['uid']
-    set_geom(m, t, g)
+    _geom_or_cells(m, t, g)
     nums = [m._regions[k]['num'] for k in ks]
     _drop(m, ks[1:])
     m._sel = idx(m, t['uid'])
@@ -217,8 +222,9 @@ def subtract(m, ks):
     g = geom(m, t).difference(unary_union([geom(m, m._regions[k]) for k in ks[1:]]))
     if g.area < 1e-3:
         raise ValueError("Nothing would be left: not subtracted")
+    cells_op(m, [m._regions[k] for k in ks], lambda a, *o: a.difference(*o))
     detach(m, t)
-    set_geom(m, t, g)
+    _geom_or_cells(m, t, g)
     return f"Selection {t['num']} minus {', '.join(str(m._regions[k]['num']) for k in ks[1:])}"
 
 
@@ -233,8 +239,9 @@ def intersect(m, ks):
         g = g.intersection(geom(m, m._regions[k]))
     if g.area < 1e-3:
         raise ValueError("They do not overlap: nothing changed")
+    cells_op(m, [m._regions[k] for k in ks], lambda a, *o: a.intersection(*o))
     detach(m, t)
-    set_geom(m, t, g)
+    _geom_or_cells(m, t, g)
     return f"Selection {t['num']} = its overlap with {', '.join(str(m._regions[k]['num']) for k in ks[1:])}"
 
 
@@ -275,42 +282,40 @@ def move(m, k, dx, dy):
         return
     g = affinity.translate(geom(m, r), dx, dy)
     detach(m, r)
+    r.pop('cells', None)                                        # сдвинутое — уже не по сетке
+    r.pop('factors', None)
     set_geom(m, r, g)
     r['pts'] = [dict(p, x=p['x'] + dx, y=p['y'] + dy) for p in r.get('pts') or []]
 
 
-# ---------------------------------------------------------------- кисть по квадратам -> выделения
-def _figures(cells):
-    """Квадраты -> замкнутые фигуры (соседи по стороне)."""
-    left, out = set(map(tuple, cells)), []
-    while left:
-        st, comp = [left.pop()], []
-        while st:
-            c = st.pop()
-            comp.append(c)
-            for d in ((1, 0), (-1, 0), (0, 1), (0, -1)):
-                n = (c[0] + d[0], c[1] + d[1])
-                if n in left:
-                    left.remove(n)
-                    st.append(n)
-        out.append(sorted(comp))
-    return sorted(out, key=lambda f: (-len(f), f[0]))
+# ---------------------------------------------------------------- клетки
+def cells_op(m, regs, fn):
+    """Операция над клетками: если у всех выделений клетки одного уровня — результат клетками (первому)."""
+    t = regs[0]
+    lv = [tuple(r.get('factors') or []) for r in regs]
+    if all(r.get('cells') for r in regs) and len(set(lv)) == 1:
+        sets = [set(map(tuple, r['cells'])) for r in regs]
+        t['_cells_new'] = sorted(fn(sets[0], *sets[1:]))
+    else:
+        t['_cells_new'] = None
 
 
-def _grid_path(m, src):
-    return os.path.join(m.sample.folder, src, 'grid.json')
+def _geom_or_cells(m, t, g):
+    from . import lattice as LT
+    new = t.pop('_cells_new', None)
+    L = lattice_of(m)
+    if new and L:
+        t['cells'] = [list(c) for c in new]
+        set_geom(m, t, LT.cells_geom(L, new, LT.level(t)))
+    else:
+        t.pop('cells', None)
+        set_geom(m, t, g)
 
 
-def _ignore_cells(m, src, cells):
-    p = _grid_path(m, src)
-    try:
-        d = json.load(open(p, encoding='utf-8'))
-    except (OSError, ValueError):
-        return
-    ign = {tuple(c) for c in d.get('brush_detached', [])} | {tuple(c) for c in cells}
-    d['brush_detached'] = sorted([list(c) for c in ign])
-    with open(p, 'w', encoding='utf-8') as f:
-        json.dump(d, f, indent=1)
+def lattice_of(m):
+    """Решётка образца (sample.json 'lattice') или None."""
+    sm = getattr(m, '_sample', None)
+    return sm.data.get('lattice') if sm is not None else None
 
 
 def next_objective(o):
@@ -320,105 +325,201 @@ def next_objective(o):
     return up[0] if up else o
 
 
-def sync_brush(m):
-    """Квадраты кисти последних съёмок -> выделения: каждая замкнутая фигура — своё выделение, ребёнок того,
-    чью съёмку разметили, на следующий объектив. Возвращает сообщение или None (ничего не изменилось)."""
+def _latest_grids(m):
+    """[(выделение, папка последней съёмки, grid.json)] — для съёмок, где есть сетка."""
     from .project import Selection
-    from .selections import marked_squares
+    out = []
+    for r in m._regions:
+        if is_group(r) or is_mask(r):
+            continue
+        sc = Selection(m.sample, r).latest
+        if sc and os.path.exists(os.path.join(sc.folder, 'grid.json')):
+            try:
+                out.append((r, sc.folder, json.load(open(os.path.join(sc.folder, 'grid.json'), encoding='utf-8'))))
+            except (OSError, ValueError):
+                pass
+    return out
+
+
+def update_lattice(m):
+    """Решётка образца — по размеченной съёмке (подписи номеров предпочтительнее). True, если изменилась."""
+    from . import lattice as LT
+    from .mask import Grid
+    best = None
+    for r, f, d in _latest_grids(m):
+        try:
+            g = Grid(f)
+        except Exception:
+            continue
+        if not g.ready() or getattr(g, 'seeded', False) or d.get('seeded'):
+            continue
+        L = LT.from_grid(f, g)
+        if L and (best is None or (L['numbered'], -obj_of(m, r)) > (best[0]['numbered'], -best[1])):
+            best = (L, obj_of(m, r))
+    if best is None:
+        return False
+    old = m.sample.data.get('lattice')
+    if old and old.get('numbered') and not best[0]['numbered']:
+        return False
+    if old is None or any(not np.allclose(old[k], best[0][k], atol=1e-3) for k in ('O', 'e1', 'e2')) \
+            or old.get('numbered') != best[0]['numbered']:
+        m.sample.data['lattice'] = best[0]
+        m.sample.save()
+        return True
+    return False
+
+
+def obj_of(m, r):
     from .samples import obj
+    return obj(m, r)
+
+
+def sync_brush(m):
+    """Кисть в просмотре -> черновики (Draft): каждая замкнутая фигура клеток — свой черновик.
+    Уровень 1 (квадраты литографии, grid.json 'selected') — дети снятого выделения; подсетка выделения
+    (grid.json 'refine': {uid: {'n': 2…5, 'cells': [[a, b], ...]}}) — его дети на уровне N·n (строго внутри него).
+    Заодно — решётка образца по разметке. Возвращает сообщение или None."""
+    from . import lattice as LT
+    from .samples import obj
+    from .snap import mosaic_to_stage
+    from .mask import Grid
     if getattr(m, '_sample', None) is None:
         return None
-    changed = []
-    for par in [r for r in m._regions if not is_group(r) and not is_mask(r)]:   # снятые участки (и из масок)
-        sc = Selection(m.sample, par).latest
-        if not sc:
-            continue
-        mk = marked_squares(sc.folder)
-        src = os.path.relpath(sc.folder, m.sample.folder).replace('\\', '/')
-        try:
-            ign = {tuple(c) for c in json.load(open(os.path.join(sc.folder, 'grid.json'), encoding='utf-8'))
-                   .get('brush_detached', [])}
-        except (OSError, ValueError):
-            ign = set()
-        quads = dict(zip(mk['cells'], mk['um'])) if mk else {}
-        figs = _figures([c for c in quads if c not in ign])
+    changed = ["Lattice of the sample updated"] if update_lattice(m) else []
+    L = lattice_of(m)
+    if L is None:
+        return "; ".join(changed) or None
+    want = {}                                                    # (uid родителя, уровень) -> множество клеток
+    seen1, seenR = set(), set()                                  # чья кисть известна: уровень 1 / подсетки
+    for par, f, d in _latest_grids(m):
+        seen1.add(par['uid'])
+        seenR.update((d.get('refine') or {}).keys())
+        if d.get('selected'):                                    # квадраты литографии
+            g = Grid(f)
+            if g.ready():
+                q = np.array([g.cr.point(i + 0.5, j + 0.5) for i, j in g.selected])
+                if len(q):
+                    uv = LT.to_uv(L, mosaic_to_stage(f, q))
+                    pg = geom(m, par)
+                    from shapely.geometry import Point
+                    S_ = mosaic_to_stage(f, q)
+                    cs = {(int(np.floor(u)), int(np.floor(v))) for (u, v), S1 in zip(uv, S_)
+                          if pg.buffer(EPS).contains(Point(*S1))}
+                    want.setdefault((par['uid'], ()), set()).update(cs)
+        for uid, rq in (d.get('refine') or {}).items():          # подсетки выделений
+            k = idx(m, uid)
+            if k is None:
+                continue
+            r = m._regions[k]
+            n = int(rq.get('n') or 1)
+            if n > 1:
+                r['sub'] = n
+            elif r.get('sub'):
+                r.pop('sub')
+            if n > 1 and rq.get('cells'):
+                fac = tuple((r.get('factors') or []) + [n])
+                inside = {tuple(c) for c in r.get('cells') or []}
+                cs = {tuple(c) for c in rq['cells'] if not inside or (c[0] // n, c[1] // n) in inside}
+                want.setdefault((uid, fac), set()).update(cs)
+    for (puid, fac), cells in list(want.items()):
+        par = m._regions[idx(m, puid)]
+        src = f"{puid}@{'x'.join(map(str, fac)) or '1'}"
         mine = [r for r in m._regions if r.get('src') == src]
         used = set()
-        for f in figs:
-            fs = set(f)
+        N = int(np.prod(fac)) if fac else 1
+        for fg in LT.figures(cells):
+            fs = set(fg)
             best = max(((len(fs & {tuple(c) for c in r.get('cells') or []}), i) for i, r in enumerate(mine)
                         if i not in used), default=(0, None))
-            g = unary_union([Polygon(quads[c]) for c in f]).buffer(0)
             if best[0] > 0:
                 r = mine[best[1]]
                 used.add(best[1])
-                if sorted(map(tuple, r.get('cells') or [])) != f:
-                    r['cells'] = [list(c) for c in f]
-                    set_geom(m, r, g)
-                    changed.append(f"Mask {r['num']} follows the brush")
+                if sorted(map(tuple, r.get('cells') or [])) != fg:
+                    r['cells'] = [list(c) for c in fg]
+                    set_geom(m, r, LT.cells_geom(L, fg, N))
+                    changed.append(f"{_t(r)} follows the brush")
             else:
-                fw0, fh0 = m.frame_size
-                r = dict(uid=uuid.uuid4().hex, num=new_num(m), obj=obj(m, par), fw=par.get('fw', fw0),
-                         fh=par.get('fh', fh0), pts=[], thumbs=[], kind='mask', parent=par['uid'], src=src,
-                         cells=[list(c) for c in f])
-                set_geom(m, r, g)
+                r = dict(uid=uuid.uuid4().hex, num=new_num(m), obj=obj(m, par), fw=par.get('fw', m.frame_size[0]),
+                         fh=par.get('fh', m.frame_size[1]), pts=[], thumbs=[], kind='draft', parent=puid, src=src,
+                         cells=[list(c) for c in fg], factors=list(fac))
+                set_geom(m, r, LT.cells_geom(L, fg, N))
                 m._regions.append(r)
-                changed.append(f"Mask {r['num']} from the brush: draw an area of a larger objective inside it")
+                changed.append(f"Draft {r['num']} ({LT.address(*fg[0], list(fac))}{' ...' if len(fg) > 1 else ''})")
         for i, r in enumerate(mine):
             if i not in used:
                 m._regions.remove(r)
-                changed.append(f"Mask {r['num']} gone with its squares")
+                changed.append(f"{_t(r)} gone with its cells")
+    for r in [r for r in m._regions if r.get('src') and is_mask(r)]:   # кисть очищена (или подсетка сменилась)
+        pu, lev = r['src'].split('@')
+        fac = () if lev == '1' else tuple(map(int, lev.split('x')))
+        if (pu, fac) not in want and (pu in seen1 if lev == '1' else pu in seenR):
+            m._regions.remove(r)
+            changed.append(f"{_t(r)} gone with its cells")
     return "; ".join(changed) if changed else None
 
 
-def sync_drawn(m):
-    """Участки, нарисованные в просмотре (клавиша D: прямоугольник по сшитой картинке; grid.json 'areas'),
-    -> выделения образца. Объектив — стоящий, если он больше объектива съёмки, иначе следующий.
-    Возвращает сообщение или None."""
-    from .project import Selection
-    from .samples import obj
-    from .snap import mosaic_to_stage
-    if getattr(m, '_sample', None) is None:
-        return None
-    out = []
-    for par in [r for r in m._regions if not is_group(r) and not is_mask(r)]:
-        sc = Selection(m.sample, par).latest
-        if not sc:
-            continue
-        gp = os.path.join(sc.folder, 'grid.json')
-        try:
-            d = json.load(open(gp, encoding='utf-8'))
-        except (OSError, ValueError):
-            continue
-        if not d.get('areas'):
-            continue
-        for a in d['areas']:
-            o = m.objective if m.objective > obj(m, par) else next_objective(obj(m, par))
-            k_ = m.objective / o
-            r = dict(uid=uuid.uuid4().hex, num=new_num(m), obj=o, fw=m.frame_size[0] * k_, fh=m.frame_size[1] * k_,
-                     pts=[], thumbs=[])
-            set_geom(m, r, Polygon(mosaic_to_stage(sc.folder, a['px'])))
-            gp_ = geometric_parent(m, r)
-            r['parent'] = m._regions[gp_]['uid'] if gp_ is not None else par['uid']
-            m._regions.append(r)
-            out.append(f"Selection {r['num']} ({o}x) drawn in the view")
-        d['areas'] = []
-        with open(gp, 'w', encoding='utf-8') as f:
-            json.dump(d, f, indent=1)
-    return "; ".join(out) if out else None
+def brush_into_grid(regs, L, folder, g):
+    """Новая сетка съёмки (по решётке образца) получает кисть из sample.json: квадраты черновиков уровня 1
+    этого выделения -> g.selected; подсетки и клетки черновиков в них -> возвращаемый 'refine'."""
+    from . import lattice as LT
+    from .snap import stage_to_mosaic
+    me = next((r for r in regs if not is_group(r) and not is_mask(r) and
+               os.path.abspath(folder).startswith(os.path.abspath(_sel_dir(folder, r)) + os.sep)), None)
+    if me is not None:
+        for r in regs:
+            if r.get('src') == f"{me['uid']}@1":
+                for a, b in r.get('cells') or []:
+                    q = stage_to_mosaic(folder, LT.to_stage(L, [(a + 0.5, b + 0.5)]))[0]
+                    g.selected.add(g.cell_at(q))
+    rf = {}
+    for r in regs:
+        if r.get('sub'):
+            fac = 'x'.join(map(str, (r.get('factors') or []) + [r['sub']]))
+            cs = [c for o in regs if o.get('src') == f"{r['uid']}@{fac}" for c in o.get('cells') or []]
+            rf[r['uid']] = dict(n=int(r['sub']), cells=sorted(cs))
+    return rf
+
+
+def _sel_dir(folder, r):
+    from .project import sel_folder, sample_of
+    return sel_folder(sample_of(folder), r)
+
+
+def _t(r):
+    return f"{'Draft' if is_mask(r) else 'Selection'} {r['num']}"
+
+
+def remove_brush_cells(m, reg):
+    """Клетки выделения кисти уходят из кисти (удалили или изменили операцией): кисть его больше не создаст.
+    Снятые квадраты уровня 1 — в grid.json 'selected_removed'."""
+    from . import lattice as LT
+    from .snap import stage_to_mosaic
+    from .mask import Grid
+    if not reg.get('src') or not reg.get('cells'):
+        return
+    L = lattice_of(m)
+    puid, lev = reg['src'].split('@')
+    gone = {tuple(c) for c in reg['cells']}
+    for par, f, d in _latest_grids(m):
+        if lev == '1' and par['uid'] == puid and L:
+            g = Grid(f)
+            if not g.ready():
+                continue
+            q = stage_to_mosaic(f, LT.to_stage(L, [(a + 0.5, b + 0.5) for a, b in gone]))
+            drop = {g.cell_at(p) for p in q}
+            d2 = json.load(open(os.path.join(f, 'grid.json'), encoding='utf-8'))
+            d2['selected_removed'] = d2.get('selected_removed', []) + [list(c) for c in sorted(drop & g.selected)]
+            d2['selected'] = [c for c in d2.get('selected', []) if tuple(c) not in drop]
+            with open(os.path.join(f, 'grid.json'), 'w', encoding='utf-8') as fo:
+                json.dump(d2, fo, indent=1)
+        rq = (d.get('refine') or {}).get(puid)
+        if lev != '1' and rq and rq.get('cells'):
+            d2 = json.load(open(os.path.join(f, 'grid.json'), encoding='utf-8'))
+            d2['refine'][puid]['cells'] = [c for c in rq['cells'] if tuple(c) not in gone]
+            with open(os.path.join(f, 'grid.json'), 'w', encoding='utf-8') as fo:
+                json.dump(d2, fo, indent=1)
 
 
 def delete_brush_cells(m, reg):
-    """Выделение кисти удаляют: его квадраты снимаются с выбора в съёмке (снятые — в 'selected_removed')."""
-    if not reg.get('src'):
-        return
-    p = _grid_path(m, reg['src'])
-    try:
-        d = json.load(open(p, encoding='utf-8'))
-    except (OSError, ValueError):
-        return
-    gone = {tuple(c) for c in reg.get('cells') or []}
-    d['selected_removed'] = d.get('selected_removed', []) + [list(c) for c in sorted(gone)]
-    d['selected'] = [c for c in d.get('selected', []) if tuple(c) not in gone]
-    with open(p, 'w', encoding='utf-8') as f:
-        json.dump(d, f, indent=1)
+    """Черновик кисти удаляют: его клетки снимаются с кисти."""
+    remove_brush_cells(m, reg)

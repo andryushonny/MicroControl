@@ -666,10 +666,10 @@ g.selected |= {(0, 0), (1, 0), (3, 1), (3, 2)}                     # две фи
 g.save(px_um)
 print(LY.sync_brush(m))
 kids = [k for k, r in enumerate(m._regions) if r.get('src')]
-assert len(kids) == 2 and all(m._regions[k]['parent'] == m._regions[0]['uid'] and m._regions[k]['kind'] == 'mask'
+assert len(kids) == 2 and all(m._regions[k]['parent'] == m._regions[0]['uid'] and m._regions[k]['kind'] == 'draft'
                               for k in kids), m._regions
 assert abs(LY.geom(m, m._regions[kids[0]]).area - 2 * 100 * 100) < 50      # 2 квадрата 100 x 100 мкм, контур без клеток
-assert [d for k, d in SM.tree(m)] == [0, 1, 1]                      # матрёшка: карта 10x > две маски
+assert [d for k, d in SM.tree(m)] == [0, 1, 1]                      # матрёшка: карта 10x > два черновика
 assert LY.sync_brush(m) is None                                     # ничего не изменилось
 g = Grid(f); g.selected |= {(2, 0)}; g.save(px_um)                  # кисть дорисовала квадрат — выделение растёт
 LY.sync_brush(m)
@@ -677,9 +677,9 @@ assert len([r for r in m._regions if r.get('src')]) == 2 and \
     abs(LY.geom(m, [r for r in m._regions if r.get('src')][0]).area - 3e4) < 80
 ks = [k for k, r in enumerate(m._regions) if r.get('src')]
 print(LY.union(m, ks))                                              # слить: одно выделение, отпущено от кисти
-assert len([r for r in m._regions if r.get('kind') == 'mask']) == 1 and not any(r.get('src') for r in m._regions)
+assert len([r for r in m._regions if r.get('kind') == 'draft']) == 1 and not any(r.get('src') for r in m._regions)
 assert LY.sync_brush(m) is None                                     # кисть его не пересоздаёт
-k20 = next(k for k, r in enumerate(m._regions) if r.get('kind') == 'mask')
+k20 = next(k for k, r in enumerate(m._regions) if r.get('kind') == 'draft')
 a0 = LY.geom(m, m._regions[k20]).area
 m._regions.append(dict(uid='cut', num=LY.new_num(m), obj=20, fw=fw / 2, fh=fh / 2, pts=[], parent=m._regions[0]['uid']))
 x0_, y0_, x1_, y1_ = LY.geom(m, m._regions[k20]).bounds
@@ -693,7 +693,7 @@ print(LY.ungroup(m, [gk]))
 assert [d for k, d in SM.tree(m)] == [0, 1, 1]
 SM.persist(m)
 assert any(r.get('shape') for r in m.sample.data['selections'])     # контуры — в sample.json
-m.close(); print("Brush -> masks (one per figure), merge / minus / group / ungroup, outline in sample.json: OK")
+m.close(); print("Brush -> drafts (one per figure), merge / minus / group / ungroup, outline in sample.json: OK")
 
 # ------------------------------------------------------------------ 25. Порядок карточек перетаскиванием, прокрутка карусели
 import copy as _cp
@@ -860,7 +860,8 @@ assert m._nav_big and m.last_scan and os.path.exists(os.path.join(m.last_scan, '
 f = m.last_scan
 px_um = json.load(open(os.path.join(f, 'meta.json')))['pixel_size_um']
 g = Grid(f); q0 = np.array([150.0, 120.0]); a_ = 100 / px_um
-g.cr.add(q0); g.cr.add(q0 + (a_, 0)); g.cr.add(q0 + (0, a_)); g.selected |= {(0, 0)}; g.save(px_um)
+g.cr.add(q0); g.cr.add(q0 + (a_, 0)); g.cr.add(q0 + (0, a_)); g.selected |= {(0, 0)}
+g.labels = {(0, 0): (3, 2), (2, 1): (5, 3)}; g.save(px_um)                # номера литографии: два квадрата
 m._sel = 0
 M.run(m, fullscreen=False, _keys=[-1, ('tbar', bx("Export")), -1, -1])   # чертёж одной кнопкой
 import glob as _glob
@@ -883,12 +884,11 @@ p_.terminate()
 print("Projects as a table with dates, the viewer in its own window: OK")
 
 
-# ------------------------------------------------------------------ 33. Маска — черновик; участок рисуется в просмотре (D) и на карте внутри маски; чертёж образца
-import glob as _glob
+# ------------------------------------------------------------------ 33. Решётка образца с 1,1; черновики из клеток; подсетка 2-5 в просмотре; адреса; чертёж от креста 1,1
 import ezdxf
 import microcontrol.manual as M
 import microcontrol.viewer as V_
-from microcontrol import samples as SM, layers as LY
+from microcontrol import samples as SM, layers as LY, lattice as LT
 from microcontrol.mask import Grid
 m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp()); m.focus()
 fw, fh = m.frame_size
@@ -896,45 +896,70 @@ m.area = mc.Area(0, 0, 3 * fw, 2 * fh)
 f = m.scan(); mc.stitch(f, verbose=False)
 px_um = json.load(open(os.path.join(f, 'meta.json')))['pixel_size_um']
 g = Grid(f); p0 = np.array([150.0, 120.0]); a_ = 100 / px_um
-g.cr.add(p0); g.cr.add(p0 + (a_, 0)); g.cr.add(p0 + (0, a_)); g.selected |= {(1, 0), (2, 0)}; g.save(px_um)
-LY.sync_brush(m); SM.persist(m)
-km = next(k for k, r in enumerate(m._regions) if r.get('kind') == 'mask')
-assert SM.title(m, km).startswith('Mask') and SM.frames_of(m, km) == (0, 0)
-assert len(m.scan(name='again') and m.last_scans) == 1            # маска не снимается
-f = mc.project.Selection(m.sample, m._regions[0]).latest.folder; mc.stitch(f, verbose=False)
-g = Grid(f); g.cr.add(p0); g.cr.add(p0 + (a_, 0)); g.cr.add(p0 + (0, a_)); g.selected |= {(1, 0), (2, 0)}; g.save(px_um)
-LY.sync_brush(m); SM.persist(m)
-km = next(k for k, r in enumerate(m._regions) if r.get('kind') == 'mask')
-gm = LY.geom(m, m._regions[km]); c_ = np.array(gm.centroid.coords[0])
-m.objective = 50; m.focus()                                         # 50x: участок внутри маски — на карте
+g.cr.add(p0); g.cr.add(p0 + (a_, 0)); g.cr.add(p0 + (0, a_)); g.selected |= {(1, 0), (2, 0)}
+g.labels = {(0, 0): (5, 7), (2, 1): (7, 8)}; g.save(px_um)        # литография: квадрат (0, 0) — «5,7»
+print(LY.sync_brush(m)); SM.persist(m)
+L = m.sample.data['lattice']
+assert L['numbered'] and abs(L['pitch'] - 100) < 0.5, L
+kd = next(k for k, r in enumerate(m._regions) if r.get('kind') == 'draft')
+assert SM.title(m, kd).startswith('Draft') and SM.frames_of(m, kd) == (0, 0)
+assert sorted(map(tuple, m._regions[kd]['cells'])) == [(5, 6), (6, 6)], m._regions[kd]['cells']   # квадраты 6,7 и 7,7
+assert LT.address(5, 6, []) == "6,7"
+assert len(m.scan(name='again') and m.last_scans) == 1            # черновик не снимается
+f = m.last_scans[0]; mc.stitch(f, verbose=False)
+uid = m._regions[kd]['uid']
+q1 = g.cr.point(1 + 0.5 / 3, 0.5 / 3)                              # левая верхняя клетка 1/3 квадрата 6,7
+V_.view(f, _keys=[-1, ('qmove', *q1), ord('3'), ord('b'), ('qclick', *q1), -1, 27])   # 3 — подсетка; кисть — клетка
+rf = json.load(open(os.path.join(f, 'grid.json')))['refine'][uid]
+assert rf['n'] == 3 and rf['cells'] == [[15, 18]], rf
+print(LY.sync_brush(m)); SM.persist(m)
+kc = next(k for k, r in enumerate(m._regions) if r.get('parent') == uid)
+rc = m._regions[kc]
+assert rc['kind'] == 'draft' and rc['factors'] == [3] and m._regions[kd]['sub'] == 3
+assert LT.address(*rc['cells'][0], rc['factors']) == "6,7 > 1,1"
+assert abs(LY.geom(m, rc).area - (100 / 3) ** 2) < 5, LY.geom(m, rc).area
+rq = json.load(open(os.path.join(f, 'grid.json')))                 # ещё уровень: клетка 1/3 -> 1/2 внутри
+rq['refine'][rc['uid']] = dict(n=2, cells=[[31, 37]]); json.dump(rq, open(os.path.join(f, 'grid.json'), 'w'))
+LY.sync_brush(m)
+r3 = next(r for r in m._regions if r.get('parent') == rc['uid'])
+assert LT.address(*r3['cells'][0], r3['factors']) == "6,7 > 1,1 > 2,2" and LT.level(r3) == 6
+rq['refine'][rc['uid']] = dict(n=2, cells=[[40, 40]]); json.dump(rq, open(os.path.join(f, 'grid.json'), 'w'))
+LY.sync_brush(m)                                                     # клетка вне родителя — не берётся
+assert not any(r.get('parent') == rc['uid'] for r in m._regions)
+c_ = np.array(LY.geom(m, m._regions[kd]).centroid.coords[0])
+m.objective = 50; m.focus()                                          # 50x на карте: клетки подсетки 1/3 черновика
 M.run(m, fullscreen=False, _keys=[-1, -1])
 nav = m._nav
-M.run(m, fullscreen=False, _keys=[-1, ('maprect', *nav.to_px(c_ - 30), *nav.to_px(c_ + 30)), -1, -1])
+M.run(m, fullscreen=False, _keys=[-1, ('maprect', *nav.to_px(c_ - (60, 40)), *nav.to_px(c_ + (60, 40))), -1, -1])
 k50 = next(k for k, r in enumerate(m._regions) if r['obj'] == 50)
-assert m._regions[k50]['parent'] == m._regions[km]['uid'], m._regions      # ребёнок маски, перекрытие разрешено
-V_.view(f, _keys=[-1, ord('d'), ('drag', 300, 250, 380, 310), -1, 27])   # D в просмотре: участок по картинке
-assert json.load(open(os.path.join(f, 'grid.json')))['areas'], "no drawn area"
-print(LY.sync_drawn(m)); SM.persist(m)
-assert len([r for r in m._regions if r['obj'] == 50]) == 2 and not json.load(open(os.path.join(f, 'grid.json')))['areas']
+r50 = m._regions[k50]
+assert r50['parent'] == uid and r50['factors'] == [3] and all(c[0] // 3 in (5, 6) and c[1] // 3 == 6 for c in r50['cells']), r50
 m.scan(); [mc.stitch(x, verbose=False) for x in m.last_scans]
-m._regions[next(k for k, r in enumerate(m._regions) if r['obj'] == 50 and k != k50)]['export'] = False
-dx = mc.export_sample(m)                                            # 10x + один 50x (второй снят с экспорта)
+dx = mc.export_sample(m, ks=[0, kd, k50])                            # 10x, черновик (без картинки), 50x
 doc = ezdxf.readfile(dx if dx.endswith('.dxf') else dx[:-4] + '.dxf')
-ims = doc.modelspace().query('IMAGE')
-assert len(ims) == 2 and len(doc.modelspace().query('LINE[layer=="CROSSES"]')) > 10, (len(ims),)
+ms = doc.modelspace()
+ims = ms.query('IMAGE')
+assert len(ims) == 2, len(ims)
+nums = {t.dxf.text: np.array(t.dxf.insert)[:2] for t in ms.query('TEXT[layer=="NUMBERS"]')}
+assert "6,7" in nums and np.allclose(nums["6,7"] - (500, -600), (4, 4), atol=0.5), nums.get("6,7")  # крест 6,7: (5P, -6P)
+assert not any(k.startswith('0,') or k.endswith(',0') for k in nums)
+for k_ in (kd, k50):                                                 # каждая клетка — замкнутый квадрат на слое выделения
+    from shapely.geometry import Polygon as _Pg
+    r_ = m._regions[k_]
+    N_ = LT.level(r_)
+    lay = f"S{r_['num']:02d}_{SM.obj(m, r_)}x" + ("_draft" if r_.get('kind') == 'draft' else "")
+    sq = [p for p in ms.query('LWPOLYLINE') if p.dxf.layer == lay and p.closed and len(p) == 4 and
+          abs(_Pg([q[:2] for q in p.get_points()]).area / (100 / N_) ** 2 - 1) < 0.01]
+    assert len(sq) == len(r_['cells']), (k_, lay, len(sq), len(r_['cells']), sorted({(p.dxf.layer, len(p), round(_Pg([q[:2] for q in p.get_points()]).area)) for p in ms.query('LWPOLYLINE')}))
+adr = [t.dxf.text for t in ms.query('TEXT[layer=="ADDRESSES"]')]
+assert "6,7" in adr and "6,8 > 1,1" not in adr and any(a.startswith("6,7 > ") for a in adr), adr[:8]
 im50 = next(i for i in ims if '50x' in i.dxf.layer)
-pl = next(p for p in doc.modelspace().query('LWPOLYLINE') if p.dxf.layer == im50.dxf.layer)
+pl = next(p for p in ms.query('LWPOLYLINE') if p.dxf.layer == im50.dxf.layer)
 V = np.array([p[:2] for p in pl.get_points()])
 ins, u, v = np.array(im50.dxf.insert)[:2], np.array(im50.dxf.u_pixel)[:2], np.array(im50.dxf.v_pixel)[:2]
 w_, h_ = im50.dxf.image_size.x, im50.dxf.image_size.y
 uv = np.linalg.solve(np.c_[u, v], (V - ins).T).T                   # углы контура — в пикселях картинки
-tol = 0.6 * m.motor_step / np.hypot(*u)                           # кадры стоят на целых шагах мотора (5.6 мкм)
+tol = 0.6 * m.motor_step / np.hypot(*u)
 assert (uv[:, 0] > -tol).all() and (uv[:, 0] < w_ + tol).all() and (uv[:, 1] > -tol).all() and (uv[:, 1] < h_ + tol).all(), uv
-f10 = mc.project.Selection(m.sample, m._regions[0]).latest.folder     # чертёж по квадратам: общая грань — на каждом слое
-g = Grid(f10); g.selected = {(1, 0), (2, 0)}; g.save(px_um)
-mc.export(f10)
-d2 = ezdxf.readfile(os.path.join(f10, 'export', 'drawing.dxf')).modelspace()
-sq = d2.query('LWPOLYLINE[layer=="SQUARES"]'); ol = d2.query('LINE[layer=="OUTLINE"]')
-assert len(sq) == 2 and all(len(p_) == 4 and p_.closed for p_ in sq) and len(ol) == 6, (len(sq), len(ol))
-m.close(); print("Mask is a draft, areas drawn in the view (D) and on the map inside it, one drawing of chosen areas;"
-                 " every square has all 4 sides, the outline repeats the shared edges: OK")
+m.close(); print("Lattice from cross 1,1; drafts of cells; finer grid 2-5 in the viewer, addresses 6,7 > 1,1 > 2,2; "
+                 "50x on the 1/3 grid; drawing from cross 1,1, every cell closed on its layer: OK")

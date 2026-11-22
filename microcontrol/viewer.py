@@ -117,13 +117,13 @@ class _Scene:
 
 HELP_V2 = "Arrows / drag: move  Wheel: zoom  0: whole  , / .: selection  H: all keys  Shift+Esc: exit"
 HELP_MODE = {
-    'look': "S: stitch  C: crosses  T: level  F: fit grid  M: select  B: brush (mask)  D: draw an area  N: numbers  Y: hints  R: ruler  E: export",
+    'look': "S: stitch  C: crosses  N: numbers  T: level  M / B: select / brush cells (Drafts)  2-5: finer grid of a selection  Y: hints  R: ruler  E: export",
     'cross': "Click: cross exactly there (2 in a row = tilt)  Shift+click: snap to centre  Drag a mark: move  Right click: remove  Shift+C: again  F: fit grid  C / Esc: done",
     'select': "Click: square  Drag: box  Shift: unselect  Right click: remove green area  A: all  X: none  Esc: done",
     'paint': "Drag a rectangle: select all squares in it  Shift+drag: unselect  Click: one square  A: all  X: none  Esc: done",
     'label': "Click a square, type its number X Y  Enter: set  Esc: done",
     'ruler': "Click two points: the distance (a third click starts again)  Drag: move  R or Esc: off",
-    'area': "Drag a rectangle over what you want to shoot closer: a new area (larger objective)  Right drag: move  D or Esc: done",
+    'refine': "Over a selection: 2-5 its finer grid (1: none), then B / M paint its cells: they become Drafts inside it",
 }
 HELP_HINTS = "Y: hints on / off  Shift+Y: select them  < / >: sensitivity  U: type it"
 HELP_V = ("S: stitch   C: crosses (2 in a row = tilt; right click = remove, Shift+C = again)   F: fit grid   M: select "
@@ -284,13 +284,40 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
         g.refined = None
     if g.cr.marks:
         g.save(px_um)
+    from . import project as P0_
+    from . import lattice as LT
+    smp0 = P0_.sample_obj(folder)
+    LAT = smp0.data.get('lattice') if smp0 is not None else None
+    seeded_ = False
+    if not g.ready() and LAT is not None:                   # решётка образца уже есть: кресты ставить не нужно
+        try:
+            LT.seed_grid(folder, g, LAT)
+            g.save(px_um)
+            d_ = json.load(open(os.path.join(folder, 'grid.json'), encoding='utf-8'))
+            d_['seeded'] = True
+            try:                                                # кисть прежних съёмок — в новую сетку
+                from .layers import brush_into_grid
+                g2_ = Grid(folder)
+                rf0_ = brush_into_grid(smp0.data.get('selections', []), LAT, folder, g2_)
+                d_['selected'] = [list(c) for c in sorted(g2_.selected)]
+                if rf0_:
+                    d_['refine'] = rf0_
+            except Exception:
+                pass
+            with open(os.path.join(folder, 'grid.json'), 'w', encoding='utf-8') as f_:
+                json.dump(d_, f_, indent=1)
+            g = Grid(folder)
+            seeded_ = True
+        except Exception:
+            pass
     ses, subs = SM.session_of(folder)
     Wv, Hv = car['size']
     Hv -= UI.MENU_H                                         # сверху — строка меню
     st = dict(cx=sc.size[0] / 2, cy=sc.size[1] / 2, s=None, rot=0.0, mode='look', down=None, box=None,
               poly=[], dirty=True, Wv=Wv - SM.CAR_W, Hv=Hv, straight=False, switch=None, ruler=[], mouse=None,
               msg=car.pop('msg', None) or (f"Selection {SM.sample_index(folder)} ({subs.index(folder) + 1} of {len(subs)})" if len(subs) > 1 else "")
-              + (f"   Crosses moved with the stitched frames ({moved_}); F: fit the grid again" if moved_ else ""))
+              + (f"   Crosses moved with the stitched frames ({moved_}); F: fit the grid again" if moved_ else "")
+              + ("   The grid comes from the sample lattice (marked once): no crosses to mark here" if seeded_ else ""))
 
     def car_click(x, y):
         h_ = SM.hit(car.get('hits', []), x - st['Wv'], y)
@@ -520,6 +547,10 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
 
     def apply_poly(poly_view, on, touch=False):
         pts = [from_view(v) for v in poly_view]
+        tg_ = refine_target(np.mean(pts, axis=0))
+        if tg_ is not None:                                  # внутри выделения с подсеткой — её клетки
+            paint_refine(tg_, pts, on)
+            return
         cells = g.cells_touching(pts) if touch else g.cells_in(pts, sc.size)
         if on:
             g.selected |= cells
@@ -545,6 +576,8 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
             return
         if car.get('hov') is not None:                      # мышь ушла с карусели
             car['hov'], car['hxy'], st['car_dirty'] = None, None, True
+        if ev == cv2.EVENT_MOUSEMOVE:
+            st['hov'] = (x, y)
         if ev == cv2.EVENT_MOUSEMOVE and st['mode'] == 'ruler' and len(st['ruler']) == 1:
             st['mouse'] = (x + 0.5, y + 0.5)               # линейка тянется за мышью до второй точки
             st['dirty'] = True
@@ -570,10 +603,6 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
                 # сдвиг: правой / средней кнопкой — в любом режиме; левой — везде, кроме рамки (S) и кисти (B),
                 # а там — с Ctrl
                 pan = ev0 != cv2.EVENT_LBUTTONDOWN or st['mode'] in ('look', 'cross', 'label', 'ruler') or st.get('ctrl')
-                if st['mode'] == 'area' and not pan:          # новый участок: прямоугольник по картинке
-                    st['abox'] = (x0, y0, x, y)
-                    st['dirty'] = True
-                    return
                 if pan:
                     c = np.array([cx, cy]) - R().T @ (np.array([x - x0, y - y0], float) / st['s'])
                     st['cx'], st['cy'] = c
@@ -592,16 +621,15 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
                 else:
                     st['msg'] = "Drag the mark to move it; right click removes it"
                 st['dirty'] = True
-            elif st.get('abox') is not None:
-                ax0, ay0, ax1, ay1 = st.pop('abox')
-                if abs(ax1 - ax0) > 4 and abs(ay1 - ay0) > 4:
-                    q_ = [from_view(v_).tolist() for v_ in ((ax0, ay0), (ax1, ay0), (ax1, ay1), (ax0, ay1))]
-                    add_area(q_)
             elif st['box'] is not None:
                 bx0, by0, bx1, by1, shb = st['box']
                 st['box'] = None
                 if g.ready():                               # рамка берёт всё, чего касается
                     apply_poly([(bx0, by0), (bx1, by0), (bx1, by1), (bx0, by1)], not shb, touch=True)
+            elif st['mode'] in ('paint', 'select') and ev0 == cv2.EVENT_LBUTTONDOWN and not moved and \
+                    refine_target(from_view((x, y))) is not None:  # щелчок по клетке подсетки
+                q_ = from_view((x, y))
+                paint_refine(refine_target(q_), [q_], not sh0, single=True)
             elif st['mode'] == 'paint' and ev0 == cv2.EVENT_LBUTTONDOWN and not moved:
                 if g.ready():                               # щелчок кистью: один квадрат (Shift — снять)
                     c_ = g.cell_at(from_view((x, y)))
@@ -736,9 +764,7 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
                 tw_ = UI.size(lab_, 0.42)[0]
                 UI.panel(img, x_l, y_l - 20, x_l + tw_ + 10, y_l - 2, 0.8, c_)
                 UI.put(img, lab_, x_l + 5, y_l - 6, 0.42, c_)
-        if st.get('abox'):                                    # рисуемый участок
-            ax0, ay0, ax1, ay1 = st['abox']
-            UI.dashed_poly(img, [(ax0, ay0), (ax1, ay0), (ax1, ay1), (ax0, ay1)], (255, 255, 255), 2)
+        draw_subgrids(img)                                    # подсетки выделений и их клетки кисти
         for k_, q in enumerate(g.cr.marks):
             u_, v_ = to_view(q)
             UI.plus(img, u_, v_, yellow if k_ == st.get("mdrag") else red)
@@ -751,9 +777,9 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
             q2 = st['ruler'][1] if len(st['ruler']) == 2 else (from_view(b_) if b_ is not None else None)
             UI.ruler(img, a_, b_, ruler_text(st['ruler'][0], q2) if q2 is not None else "")
         mode = {'look': 'Look', 'cross': 'Mark crosses', 'select': 'Select',
-                'paint': 'Brush', 'label': 'Number squares', 'ruler': 'Ruler', 'area': 'Draw an area'}[st['mode']]
+                'paint': 'Brush', 'label': 'Number squares', 'ruler': 'Ruler'}[st['mode']]
         mcol = {'look': (170, 170, 178), 'cross': (90, 90, 255), 'select': (90, 210, 90),
-                'paint': (90, 210, 90), 'label': UI.ACCENT, 'ruler': (0, 220, 255), 'area': (235, 235, 235)}[st['mode']]
+                'paint': (90, 210, 90), 'label': UI.ACCENT, 'ruler': (0, 220, 255)}[st['mode']]
         if st.get('lab'):
             st['msg'] = f"Square number X Y: {st['lab'][1]}_   (Enter = set, Esc = cancel)"
         if st.get('sens') is not None:
@@ -855,18 +881,136 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
         elif not g.ready():
             set_straight(False)
 
-    def add_area(q_):
-        """Нарисованный участок -> grid.json 'areas' (окно микроскопа сделает из него выделение)."""
+    def regions_now():
+        """Выделения образца (sample.json) и запросы подсеток этой съёмки (grid.json 'refine')."""
+        if smp is None:
+            return [], {}
+        try:
+            regs_ = json.load(open(smp.file, encoding='utf-8')).get('selections', [])
+        except (OSError, ValueError):
+            regs_ = []
+        try:
+            rf_ = json.load(open(os.path.join(folder, 'grid.json'), encoding='utf-8')).get('refine') or {}
+        except (OSError, ValueError):
+            rf_ = {}
+        return regs_, rf_
+
+    def lat_now():
+        try:
+            return json.load(open(smp.file, encoding='utf-8')).get('lattice') if smp is not None else None
+        except (OSError, ValueError):
+            return None
+
+    def refine_target(q):
+        """Выделение с подсеткой, в клетке которого точка q (px мозаики): самое глубокое. -> dict или None."""
+        L_ = lat_now()
+        if L_ is None:
+            return None
+        from .snap import mosaic_to_stage
+        u_, v_ = LT.to_uv(L_, mosaic_to_stage(folder, [q]))[0]
+        regs_, rf_ = regions_now()
+        best_ = None
+        for r_ in regs_:
+            n_ = int((rf_.get(r_['uid']) or {}).get('n') or r_.get('sub') or 1)
+            if n_ < 2 or not r_.get('cells'):
+                continue
+            N_ = LT.level(r_)
+            if [int(np.floor(u_ * N_)), int(np.floor(v_ * N_))] in r_['cells'] and (best_ is None or N_ > best_['N']):
+                best_ = dict(uid=r_['uid'], n=n_, N=N_, cells={tuple(c) for c in r_['cells']}, num=r_['num'],
+                             kind='Draft' if r_.get('kind') == 'draft' else 'Selection',
+                             factors=(r_.get('factors') or []) + [n_])
+        return best_
+
+    def write_refine(uid, n, cells):
         gp_ = os.path.join(folder, 'grid.json')
         g.save(px_um)
         d_ = json.load(open(gp_, encoding='utf-8'))
-        d_['areas'] = d_.get('areas', []) + [dict(px=q_)]
+        rf_ = d_.get('refine') or {}
+        rf_[uid] = dict(n=int(n), cells=[list(c) for c in sorted(cells)])
+        d_['refine'] = rf_
         with open(gp_, 'w', encoding='utf-8') as f_:
             json.dump(d_, f_, indent=1)
-        w_ = np.ptp(np.array(q_)[:, 0]) * px_um
-        h_ = np.ptp(np.array(q_)[:, 1]) * px_um
-        st['msg'] = (f"New area {w_:.0f} x {h_:.0f} um: it appears in the microscope window as a selection "
-                     "of a larger objective (D: draw more, Esc: done)")
+
+    def set_refine(n):
+        """Клавиши 2–5 над выделением: его подсетка в n раз плотнее (1 — убрать)."""
+        L_ = lat_now()
+        if L_ is None or st.get('hov') is None:
+            st['msg'] = "The finer grid needs the lattice of the sample: mark the crosses and number two squares (C, N)"
+            return
+        from .snap import mosaic_to_stage
+        q_ = from_view(st['hov'])
+        u_, v_ = LT.to_uv(L_, mosaic_to_stage(folder, [q_]))[0]
+        regs_, rf_ = regions_now()
+        hit_ = [r_ for r_ in regs_ if r_.get('cells') and
+                [int(np.floor(u_ * LT.level(r_))), int(np.floor(v_ * LT.level(r_)))] in r_['cells']]
+        if not hit_:
+            st['msg'] = "Put the mouse over a selection made of cells (paint lithography squares with B first)"
+            return
+        r_ = max(hit_, key=LT.level)
+        old_ = rf_.get(r_['uid']) or {}
+        write_refine(r_['uid'], n, old_.get('cells', []) if int(old_.get('n') or 0) == n else [])
+        kind_ = 'Draft' if r_.get('kind') == 'draft' else 'Selection'
+        st['msg'] = (f"{kind_} {r_['num']}: grid 1/{n} inside it (cells {LT.pitch_text(lat_now(), LT.level(r_) * n)}); "
+                     "B / M paint its cells" if n > 1 else f"{kind_} {r_['num']}: no finer grid")
+
+    def paint_refine(tg_, pts, on, single=False):
+        """Кисть / щелчок по подсетке выделения: клетки уровня N·n внутри него."""
+        L_ = lat_now()
+        from .snap import mosaic_to_stage
+        M_ = tg_['N'] * tg_['n']
+        uv_ = LT.to_uv(L_, mosaic_to_stage(folder, np.asarray(pts, float)))
+        if single:
+            cs_ = {(int(np.floor(uv_[0][0] * M_)), int(np.floor(uv_[0][1] * M_)))}
+        else:
+            from shapely.geometry import Polygon as _Poly, Point as _Pt
+            poly_ = _Poly(uv_ * M_)
+            a0, b0 = np.floor((uv_ * M_).min(0)).astype(int)
+            a1, b1 = np.ceil((uv_ * M_).max(0)).astype(int)
+            cs_ = {(a, b) for a in range(a0, a1 + 1) for b in range(b0, b1 + 1)
+                   if poly_.intersects(_Pt(a + 0.5, b + 0.5).buffer(0.45, 4))}
+        n_ = tg_['n']
+        cs_ = {c for c in cs_ if (c[0] // n_, c[1] // n_) in tg_['cells']}   # строго внутри выделения
+        rf_ = regions_now()[1].get(tg_['uid']) or {}
+        have_ = {tuple(c) for c in rf_.get('cells', [])}
+        have_ = (have_ | cs_) if on else (have_ - cs_)
+        write_refine(tg_['uid'], n_, have_)
+        st['msg'] = (f"Grid 1/{M_} of {tg_['kind']} {tg_['num']}: {len(have_)} cells painted "
+                     f"(they become Drafts in the microscope window)")
+
+    def draw_subgrids(img):
+        """Подсетки выделений (тонкие линии внутри их клеток) и клетки кисти в них (зелёные)."""
+        L_ = lat_now()
+        if L_ is None:
+            return
+        from .snap import stage_to_mosaic
+        regs_, rf_ = regions_now()
+        Hh, Ww = img.shape[:2]
+        for r_ in regs_:
+            n_ = int((rf_.get(r_['uid']) or {}).get('n') or r_.get('sub') or 1)
+            if n_ < 2 or not r_.get('cells'):
+                continue
+            N_ = LT.level(r_)
+            col_ = SM.color(r_['num'] - 1)
+            for a, b in r_['cells']:
+                for t in range(1, n_):
+                    for p0, p1 in ((((a + t / n_) / N_, b / N_), ((a + t / n_) / N_, (b + 1) / N_)),
+                                   ((a / N_, (b + t / n_) / N_), ((a + 1) / N_, (b + t / n_) / N_))):
+                        q_ = stage_to_mosaic(folder, LT.to_stage(L_, [p0, p1]))
+                        v0, v1 = to_view(q_[0]), to_view(q_[1])
+                        if max(v0[0], v1[0]) < 0 or min(v0[0], v1[0]) > Ww or max(v0[1], v1[1]) < 0 or min(v0[1], v1[1]) > Hh:
+                            continue
+                        cv2.line(img, (int(v0[0] * 16), int(v0[1] * 16)), (int(v1[0] * 16), int(v1[1] * 16)),
+                                 SM.dim(col_, 0.8), 1, cv2.LINE_AA, 4)
+            M_ = N_ * n_
+            ov_ = None
+            for a, b in (rf_.get(r_['uid']) or {}).get('cells', []):
+                q_ = stage_to_mosaic(folder, LT.cell_stage(L_, a, b, M_))
+                pv_ = np.array([to_view(p_) for p_ in q_], float)
+                if ov_ is None:
+                    ov_ = img.copy()
+                cv2.fillPoly(ov_, [np.int32(np.round(pv_ * 16))], (90, 200, 90), cv2.LINE_AA, 4)
+            if ov_ is not None:
+                cv2.addWeighted(ov_, 0.35, img, 0.65, 0, dst=img)
 
     def sample_outlines():
         """Выделения образца на этой мозаике: [(кольцо в пикселях мозаики, цвет, подпись, пунктир, ждёт)]."""
@@ -892,15 +1036,11 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
                     fw_, fh_ = r_.get('fw', 0), r_.get('fh', 0)
                     gm_ = _box(min(ax, bx) - fw_ / 2, min(ay, by) - fh_ / 2, max(ax, bx) + fw_ / 2, max(ay, by) + fh_ / 2)
                 ps_ = [gm_] if gm_.geom_type == 'Polygon' else list(getattr(gm_, 'geoms', []))
-                kind_ = {'mask': 'Mask'}.get(r_.get('kind'), 'Sel.')
+                kind_ = {'draft': 'Draft'}.get(r_.get('kind'), 'Sel.')
                 for p_ in ps_:
                     q_ = stage_to_mosaic(folder, np.array(p_.exterior.coords)[:-1])
                     out_.append((q_, SM.color(r_['num'] - 1), f"{kind_} {r_['num']} {r_.get('obj', '')}x"
-                                 if r_.get('kind') != 'mask' else f"Mask {r_['num']}", r_.get('kind') == 'mask', False))
-            gj_ = json.load(open(os.path.join(folder, 'grid.json'), encoding='utf-8')) \
-                if os.path.exists(os.path.join(folder, 'grid.json')) else {}
-            for a_ in gj_.get('areas', []):
-                out_.append((np.array(a_['px'], float), (235, 235, 235), "new area", True, True))
+                                 if r_.get('kind') != 'draft' else f"Draft {r_['num']}", r_.get('kind') == 'draft', False))
         except Exception:
             out_ = []
         st['_so_key'], st['_so'] = key_, out_
@@ -960,7 +1100,14 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
             if isinstance(key, tuple):                      # тест: ('click'|'rclick', x, y[, shift]) или ('drag', ...)
                 kind, *a = key
                 fl = cv2.EVENT_FLAG_SHIFTKEY if (len(a) > 2 and a[-1] == 'shift') else 0
-                if kind in ('click', 'rclick'):
+                if kind[0] == 'q':                          # ('qclick', ...) — точки в пикселях мозаики
+                    kind = kind[1:]
+                    nums_ = [v_ for v_ in a if not isinstance(v_, str)]
+                    a = [int(round(v_)) for xy_ in zip(nums_[0::2], nums_[1::2]) for v_ in to_view(xy_)] + \
+                        (['shift'] if a[-1] == 'shift' else [])
+                if kind == 'move':
+                    mouse(cv2.EVENT_MOUSEMOVE, a[0], a[1], 0)
+                elif kind in ('click', 'rclick'):
                     dn, up = ((cv2.EVENT_LBUTTONDOWN, cv2.EVENT_LBUTTONUP) if kind == 'click' else
                               (cv2.EVENT_RBUTTONDOWN, cv2.EVENT_RBUTTONUP))
                     mouse(dn, a[0], a[1], fl); mouse(up, a[0], a[1], fl)
@@ -1024,7 +1171,10 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
                     st['msg'] = "Two numbers: X Y"; st['dirty'] = True; continue
                 g.save(px_um)
                 st['lab'] = None
-                st['msg'] = f"Square {c} = {g.labels[c]}.   {g.numbering()[2]}"
+                X_, Y_ = g.labels[c]
+                warn_ = ("   [!] Lithography numbers go from 1,1 to 58,58: check this one"
+                         if not (1 <= X_ <= 58 and 1 <= Y_ <= 58) else "")
+                st['msg'] = f"Square {c} = {X_},{Y_}.   {g.numbering()[2]}{warn_}"
             st['dirty'] = True
             continue
         ch = chr(key & 0xFF) if 0 <= key < 256 else ''
@@ -1119,13 +1269,8 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
                 set_straight(not st['straight'])
                 st['msg'] = (f"Level: the picture is turned by {st['rot']:+.2f} deg, the squares stand straight (T: as shot)"
                              if st['straight'] else "Picture as shot, with its tilt (T: level)")
-        elif ch == 'd':                                      # нарисовать участок прямо по картинке
-            if st['mode'] == 'area':
-                st['mode'] = 'look'
-            else:
-                st['mode'] = 'area'
-                st['msg'] = ("Draw an area: drag a rectangle over the flake (zoom in, T levels the picture by the "
-                             "crosses); it becomes a selection of a larger objective")
+        elif ch in '12345' and ch and st.get('lab') is None:   # подсетка выделения под мышью: в n раз плотнее
+            set_refine(int(ch))
         elif ch == 'a' and st['mode'] in ('select', 'paint') and g.ready():
             W_, H_ = sc.size
             g.selected |= g.cells_in([(0, 0), (W_, 0), (W_, H_), (0, H_)], sc.size)

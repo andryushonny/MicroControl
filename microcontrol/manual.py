@@ -564,16 +564,17 @@ def _run(m, fullscreen=False, _keys=None):
     def grid_state(fd_):
         try:
             d_ = json.load(open(os.path.join(fd_, 'grid.json'), encoding='utf-8'))
-            return dict(selected=d_.get('selected', []), brush_detached=d_.get('brush_detached', []))
+            return dict(selected=d_.get('selected', []), refine=d_.get('refine') or {})
         except (OSError, ValueError):
             return {}
 
     def note_brush(reg):
         """Перед операцией над выделением кисти — запомнить квадраты его съёмки (Ctrl+Z их вернёт)."""
-        if reg.get('src'):
-            fd_ = os.path.join(m.sample.folder, reg['src'])
-            gsel0.setdefault(fd_, grid_state(fd_))
-            car.setdefault('noted', set()).add(fd_)
+        if reg.get('src'):                                 # кисть живёт в grid.json последних съёмок
+            from .layers import _latest_grids
+            for _r, fd_, _d in _latest_grids(m):
+                gsel0.setdefault(fd_, grid_state(fd_))
+                car.setdefault('noted', set()).add(fd_)
 
     def noted_done():
         for fd_ in car.pop('noted', set()):
@@ -749,7 +750,7 @@ def _run(m, fullscreen=False, _keys=None):
         rg_ = m._regions[k]
         if rg_.get('kind') == 'group':
             return "A group has no objective"
-        if rg_.get('kind') == 'mask':                      # маску — в участок под стоящий объектив
+        if rg_.get('kind') == 'draft':                      # маску — в участок под стоящий объектив
             from .layers import to_area
             to_area(m, k, m.objective)
             SM.persist(m)
@@ -828,7 +829,7 @@ def _run(m, fullscreen=False, _keys=None):
             c_ = SM.col(m, k_)
             for ring_ in _rings(m, rg_):
                 nav.poly(mp, ring_, c_ if k_ == m._sel else SM.dim(c_, 0.85), 2 if k_ == m._sel else 1,
-                         fill=SM.dim(c_, 0.6) if rg_.get('shape') else None, dashed=rg_.get('kind') == 'mask')
+                         fill=SM.dim(c_, 0.6) if rg_.get('shape') else None, dashed=rg_.get('kind') == 'draft')
             pts_ = np.vstack([nav.to_px(r_) for r_ in _rings(m, rg_)]) if _rings(m, rg_) else None
             if pts_ is not None:
                 boxes_[k_] = (*pts_.min(0), *pts_.max(0))
@@ -847,7 +848,7 @@ def _run(m, fullscreen=False, _keys=None):
                 cv2.circle(mp, (int(cx_), int(cy_)), 2, SM.col(m, k_), -1, cv2.LINE_AA)
                 b_ = (cx_ - 6, cy_ - 6, cx_ + 6, cy_ + 6)
             mine_ = anc_(k_) | {k_}
-            lab_.append((f"Mask {SM.num(m, k_)}" if m._regions[k_].get('kind') == 'mask' else
+            lab_.append((f"Draft {SM.num(m, k_)}" if m._regions[k_].get('kind') == 'draft' else
                          f"{SM.num(m, k_)}  {SM.obj(m, m._regions[k_])}x", b_, SM.col(m, k_),
                          [q_ for k2, q_ in boxes_.items() if k2 not in mine_]))
         nav.labels(mp, lab_, [(inset[0] - mr[0], inset[1] - mr[1], inset[2] - mr[0], inset[3] - mr[1])] if nv['big'] else [])
@@ -903,12 +904,12 @@ def _run(m, fullscreen=False, _keys=None):
                                   lines=[f"{nk_} inside, {mm_}"] + (["hidden on the maps"] if SM.hidden(m, k) else [])))
                 order.append(k)
                 continue
-            if reg.get('kind') == 'mask':                  # маска: черновик кисти, не снимается
+            if reg.get('kind') == 'draft':                  # маска: черновик кисти, не снимается
                 hd_ = SM.hidden(m, k)
-                items.append(dict(title=SM.title(m, k), obj="mask", color=SM.col(m, k), chosen=k in car['multi'],
+                items.append(dict(title=SM.title(m, k), obj="draft", color=SM.col(m, k), chosen=k in car['multi'],
                                   confirm=car['confirm'] == k, depth=depth, hidden=bool(reg.get('hidden')),
-                                  muted=hd_, lines=[mm_ + ", from the brush",
-                                                    "draw an area of a larger objective inside it" if not hd_
+                                  muted=hd_, lines=[mm_ + ", from the brush" + (f", grid 1/{reg['sub']}" if reg.get('sub') else ""),
+                                                    "click draft: pick its objective" if not hd_
                                                     else "hidden on the maps"]))
                 order.append(k)
                 continue
@@ -986,7 +987,12 @@ def _run(m, fullscreen=False, _keys=None):
         return car['step']
 
     def new_area(S0, S1):
-        """Новый участок прямоугольником (настоящие мкм) на текущем объективе."""
+        """Новый участок на текущем объективе. Решётка образца есть — клетками: квадраты литографии или подсетка
+        выделения, в котором тянули (его клетки уровня N·n, строго внутри него); нет — прямоугольником (обзор)."""
+        from .layers import lattice_of
+        L_ = lattice_of(m)
+        if L_ is not None:
+            return new_area_cells(L_, S0, S1)
         from .layers import geometric_parent, new_num, set_geom, box as _box
         from .errors import MicroControlError as _E
         x0_, x1_ = sorted((S0[0], S1[0]))
@@ -998,7 +1004,7 @@ def _run(m, fullscreen=False, _keys=None):
         r_.pop('shape')                                    # прямоугольник: хватает углов A, B
         from .layers import geom as _geom
         g_ = _geom(m, r_)
-        bad = [o['num'] for o in m._regions if o.get('kind') not in ('group', 'mask') and SM.obj(m, o) == m.objective
+        bad = [o['num'] for o in m._regions if o.get('kind') not in ('group', 'draft') and SM.obj(m, o) == m.objective
                and g_.intersection(_geom(m, o)).area > 1e-3 * g_.area]
         if bad:
             return str(_E('E704', f"Selection {', '.join(map(str, bad))} ({m.objective}x) is already there. "
@@ -1011,6 +1017,56 @@ def _run(m, fullscreen=False, _keys=None):
         nx_, ny_ = SM.frames_of(m, m._sel)
         return (f"{SM.title(m, m._sel)} ({m.objective}x): {(x1_ - x0_) / 1000:.2f} x {(y1_ - y0_) / 1000:.2f} mm, "
                 f"{nx_ * ny_} frames. Scan area shoots it")
+
+    def new_area_cells(L_, S0, S1):
+        from . import lattice as LT
+        from .layers import geom as _geom, set_geom, new_num
+        from shapely.geometry import Polygon as _Poly, Point as _Pt
+        x0_, x1_ = sorted((S0[0], S1[0]))
+        y0_, y1_ = sorted((S0[1], S1[1]))
+        c_ = ((x0_ + x1_) / 2, (y0_ + y1_) / 2)
+        par_ = [k_ for k_, r_ in enumerate(m._regions) if r_.get('sub') and r_.get('cells')
+                and _geom(m, r_).contains(_Pt(*c_))]
+        par_k = max(par_, key=lambda k2: LT.level(m._regions[k2]) * m._regions[k2]['sub']) if par_ else None
+        if par_k is not None:
+            pr_ = m._regions[par_k]
+            n_ = pr_['sub']
+            fac = (pr_.get('factors') or []) + [n_]
+            inside = {tuple(c) for c in pr_['cells']}
+        else:
+            fac, inside, n_ = [], None, 1
+        M_ = int(np.prod(fac)) if fac else 1
+        box_ = np.array([(x0_, y0_), (x1_, y0_), (x1_, y1_), (x0_, y1_)])
+        uv_ = LT.to_uv(L_, box_)
+        a0, b0 = np.floor(uv_.min(0) * M_).astype(int) - 1
+        a1, b1 = np.ceil(uv_.max(0) * M_).astype(int) + 1
+        rect_ = _Poly(box_)
+        cells = [(a, b) for a in range(a0, a1 + 1) for b in range(b0, b1 + 1)
+                 if rect_.contains(_Pt(*LT.to_stage(L_, [((a + 0.5) / M_, (b + 0.5) / M_)])[0]))
+                 and (inside is None or (a // n_, b // n_) in inside)]
+        if not cells:
+            return ("Drag over whole cells: " + (f"the 1/{n_} grid of {SM.title(m, par_k)}" if par_k is not None
+                                                  else "lithography squares"))
+        if len(cells) > 4000:
+            return f"Too many cells ({len(cells)}): drag a smaller box"
+        fw_, fh_ = m.frame_size
+        r_ = dict(uid=__import__('uuid').uuid4().hex, num=new_num(m), obj=m.objective, fw=fw_, fh=fh_, pts=[],
+                  thumbs=[], cells=[list(c) for c in sorted(cells)], factors=fac)
+        set_geom(m, r_, LT.cells_geom(L_, cells, M_))
+        g_ = _geom(m, r_)
+        bad = [o['num'] for o in m._regions if o.get('kind') not in ('group', 'draft') and SM.obj(m, o) == m.objective
+               and g_.intersection(_geom(m, o)).area > 1e-3 * g_.area]
+        if bad:
+            return (f"[E704] Selection {', '.join(map(str, bad))} ({m.objective}x) is already there. For an area "
+                    f"inside it put a larger objective (M), then drag again")
+        m._regions.append(r_)
+        from .layers import geometric_parent
+        gp_ = par_k if par_k is not None else geometric_parent(m, r_)
+        r_['parent'] = m._regions[gp_]['uid'] if gp_ is not None else None
+        m._sel = len(m._regions) - 1
+        SM.persist(m)
+        return (f"{SM.title(m, m._sel)} ({m.objective}x): {len(cells)} cell{'s' if len(cells) > 1 else ''} "
+                f"of {'1/' + str(M_) if M_ > 1 else 'lithography squares'}, from {LT.address(*cells[0], fac)}")
 
     def map_go(S):
         """Щелчок по карте: столик едет туда (Z — по точкам фокуса выделения под точкой, если есть)."""
@@ -1028,12 +1084,15 @@ def _run(m, fullscreen=False, _keys=None):
         from . import dialogs as D
         from .drawing import export_sample
         msg_t = time.monotonic()
-        cand = [k_ for k_, r_ in enumerate(m._regions) if r_.get('kind') not in ('group', 'mask') and shot_of(k_)]
+        cand = [k_ for k_, r_ in enumerate(m._regions) if r_.get('kind') not in ('group', 'draft') and shot_of(k_)]
         if not cand:
             msg = "Nothing scanned yet: Scan area first"
             return
-        rows = [f"{SM.title(m, k_):<14} {SM.obj(m, m._regions[k_]):>4}x   scanned {shot_of(k_)}" for k_ in cand]
-        dflt = [m._regions[k_].get('export', True) for k_ in cand]
+        cand += [k_ for k_, r_ in enumerate(m._regions) if r_.get('kind') == 'draft']   # черновики: контур и клетки
+        rows = [f"{SM.title(m, k_):<14} {SM.obj(m, m._regions[k_]):>4}x   " +
+                (f"scanned {shot_of(k_)}" if m._regions[k_].get('kind') != 'draft' else "draft: outline and cells")
+                for k_ in cand]
+        dflt = [m._regions[k_].get('export', m._regions[k_].get('kind') != 'draft') for k_ in cand]
         try:
             got = D.checklist("Export: which areas go into the drawing", rows, dflt,
                               header="Area            Obj.  Scan")
@@ -1043,10 +1102,10 @@ def _run(m, fullscreen=False, _keys=None):
             msg = "Export cancelled"
             return
         for k_, on_ in zip(cand, got):
-            if on_:
+            if on_ == (m._regions[k_].get('kind') != 'draft'):
                 m._regions[k_].pop('export', None)
             else:
-                m._regions[k_]['export'] = False
+                m._regions[k_]['export'] = bool(on_)
         SM.persist(m)
         ks_ = [k_ for k_, on_ in zip(cand, got) if on_]
         if not ks_:
@@ -1054,6 +1113,8 @@ def _run(m, fullscreen=False, _keys=None):
             return
         res = busy("Export: drawing for AutoCAD", lambda: export_sample(m, ks_))
         msg_t = time.monotonic()
+        if 'e' in res and os.environ.get('MC_TEST'):
+            print("Export failed:", res['e'])
         msg = (f"Export failed: {res['e']}" if 'e' in res else
                f"Exported {len(ks_)} area{'s' if len(ks_) > 1 else ''}: {res['r']}"
                + ("" if str(res['r']).endswith('.dwg') else "  (DWG: install ODA File Converter)"))
@@ -1205,7 +1266,7 @@ def _run(m, fullscreen=False, _keys=None):
         from .stitch import stitch as _stitch
         msg_t = time.monotonic()
         ks = [k_ for k_, rg in enumerate(m._regions) if SM.obj(m, rg) == m.objective
-              and rg.get('kind') not in ('group', 'mask')]
+              and rg.get('kind') not in ('group', 'draft')]
         if not ks:
             msg = f"No area for {m.objective}x: drag a rectangle on the map (or switch the objective, M)"
             return
@@ -1428,8 +1489,8 @@ def _run(m, fullscreen=False, _keys=None):
                 if time.monotonic() - car.get('bl_t', -99) > 5:   # люфт столика — из сшивки последних съёмок
                     car['bl_t'] = time.monotonic()
                     m._bl = stage_backlash()
-                from .layers import sync_brush, sync_drawn
-                r_ = "; ".join(x_ for x_ in (sync_brush(m), sync_drawn(m)) if x_) or None
+                from .layers import sync_brush
+                r_ = sync_brush(m)
                 if r_:
                     SM.persist(m)
                     msg, msg_t = r_, time.monotonic()
@@ -1479,11 +1540,11 @@ def _run(m, fullscreen=False, _keys=None):
                 d_ = mdr['d'] if mdr.get('k') == k_ else np.zeros(2)
                 for ring_ in rings(m, rg_):
                     pts = np.int32(np.round(np.array([to_v(S_ + d_) for S_ in ring_], float) * 16))   # 1/16 px
-                    if (rg_.get('src') or rg_.get('shape')) and rg_.get('kind') != 'mask':
+                    if (rg_.get('src') or rg_.get('shape')) and rg_.get('kind') != 'draft':
                         if ov_ is None:
                             ov_ = view[:, :Wl].copy()
                         cv2.fillPoly(ov_, [pts], SM.dim(c_k, 0.5), cv2.LINE_AA, 4)
-                    if rg_.get('kind') == 'mask':                   # маска — пунктиром, без заливки
+                    if rg_.get('kind') == 'draft':                   # маска — пунктиром, без заливки
                         UI.dashed_poly(view[:, :Wl], pts / 16.0, c_k if k_ == m._sel else SM.dim(c_k, 0.9),
                                        2 if k_ == m._sel else 1)
                     else:

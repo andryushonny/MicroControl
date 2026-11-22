@@ -46,7 +46,7 @@ def _stage_layout(folder, P):
         return None
 
 
-KEEP = ('selected_removed', 'brush_detached', 'areas')  # ключи grid.json, которые пишет не только сетка
+KEEP = ('selected_removed', 'refine', 'seeded')         # ключи grid.json, которые пишет не только сетка
 
 class Grid:
     def __init__(self, folder):

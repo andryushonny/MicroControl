@@ -123,6 +123,8 @@ Both windows have a menu on top: **Open** (a sample of any project), **New proje
 
 ## Layers: a map and the details
 
+Once the crosses are marked, the map in manual mode shows the lithography grid as thin semi-transparent red lines — new areas are made of exactly these squares. The selection chosen on the right adds its own finer grid (2–5) inside it.
+
 1. Mark a large selection with a small objective (10x) and scan it: this is the map.
 2. Look at the map (`mc.view`) and find the interesting places.
 3. Put a larger objective in place (`M` in manual mode, or `m.objective = 50`), mark small selections inside the map and scan again — only the 50x selections are shot. The same again with 100x inside the 50x ones.

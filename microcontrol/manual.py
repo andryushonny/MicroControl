@@ -973,6 +973,7 @@ def _run(m, fullscreen=False, _keys=None):
             if ms_.any():
                 mp = cv2.convertScaleAbs(mp, alpha=0.85)
                 cv2.copyTo(base0_, ms_, mp)
+        lattice_lines(mp, w_, h_, m._regions[m._sel] if chosen_ else None)   # сетка, по которой встанут квадраты
         for k_, rg_ in sorted(enumerate(m._regions), key=lambda t: SM.obj(m, t[1])):
             if rg_.get('kind') == 'group' or SM.hidden(m, k_):
                 continue
@@ -1132,6 +1133,50 @@ def _run(m, fullscreen=False, _keys=None):
         car['step'] = 0 if not shot else (1 if not kids else (2 if any(r_ not in shot for r_ in kids) else 3))
         car['step_t'] = time.monotonic()
         return car['step']
+
+    def lattice_lines(mp, w_, h_, rsel):
+        """Сетка решётки образца на карте — тонко, полупрозрачно, красным: по ней встают квадраты новых областей.
+        Выбрано выделение с подсеткой (2-5) — внутри него ещё и она (новая область в нём — из её клеток);
+        черновик из клеток — его клетки."""
+        from .layers import lattice_of, geom as _gm
+        from . import lattice as LT
+        L_ = lattice_of(m)
+        if L_ is None:
+            return
+        cs_ = nav.to_um(np.array([(0, 0), (w_, 0), (0, h_), (w_, h_)], float))
+        uv_ = LT.to_uv(L_, cs_)
+        lo_, hi_ = np.floor(uv_.min(0)).astype(int), np.ceil(uv_.max(0)).astype(int)
+        px_per_cell = float(np.hypot(*(nav.to_px(LT.to_stage(L_, [(1, 0)])[0]) - nav.to_px(LT.to_stage(L_, [(0, 0)])[0]))))
+        ov_ = np.zeros_like(mp)
+
+        def lines(img, M_, a0, a1, b0, b1):
+            for a in range(a0, a1 + 1):
+                p_ = nav.to_px(LT.to_stage(L_, [(a / M_, b0 / M_), (a / M_, b1 / M_)]))
+                cv2.line(img, tuple(np.int32(np.round(p_[0]))), tuple(np.int32(np.round(p_[1]))), (60, 60, 255), 1, cv2.LINE_AA)
+            for b in range(b0, b1 + 1):
+                p_ = nav.to_px(LT.to_stage(L_, [(a0 / M_, b / M_), (a1 / M_, b / M_)]))
+                cv2.line(img, tuple(np.int32(np.round(p_[0]))), tuple(np.int32(np.round(p_[1]))), (60, 60, 255), 1, cv2.LINE_AA)
+        if px_per_cell >= 5 and (hi_ - lo_).max() <= 400:
+            lines(ov_, 1, lo_[0], hi_[0], lo_[1], hi_[1])
+        if rsel is not None and rsel.get('kind') != 'group':
+            fac_ = list(rsel.get('factors') or [])
+            M_ = int(np.prod(fac_ + [rsel['sub']])) if rsel.get('sub') else (LT.level(rsel) if fac_ else 1)
+            if M_ > 1 and px_per_cell / M_ >= 4:
+                fine_ = np.zeros_like(mp)
+                g_ = _gm(m, rsel)
+                b_ = np.array(g_.bounds).reshape(2, 2)
+                uvr_ = LT.to_uv(L_, np.array([b_[0], (b_[1][0], b_[0][1]), b_[1], (b_[0][0], b_[1][1])]))
+                a0, b0 = np.floor(uvr_.min(0) * M_).astype(int)
+                a1, b1 = np.ceil(uvr_.max(0) * M_).astype(int)
+                if max(a1 - a0, b1 - b0) <= 600:
+                    lines(fine_, M_, a0, a1, b0, b1)
+                    mk_ = np.zeros(mp.shape[:2], np.uint8)    # только внутри выделения
+                    for ext_, hs_ in UI.geom_shapes(g_, nav.to_px):
+                        cv2.fillPoly(mk_, [np.int32(np.round(ext_ * 16))], 255, cv2.LINE_8, 4)
+                    cv2.copyTo(fine_, mk_, ov_)
+        on_ = ov_.any(2)
+        if on_.any():
+            mp[on_] = cv2.addWeighted(mp, 0.6, ov_, 0.4, 0)[on_]
 
     def new_area(S0, S1):
         """Новый участок на текущем объективе. Решётка образца есть — клетками: квадраты литографии или подсетка

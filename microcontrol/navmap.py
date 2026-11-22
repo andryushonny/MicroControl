@@ -18,15 +18,26 @@ class NavMap:
         self.size = (0, 0)
         self._base, self._key = None, None
         self._prev = {}                   # папка -> (mtime, пирамида превью [(k, img)], геометрия)
+        self.turn = 0                     # карта повёрнута на 0 / 90 / 180 / 270° против часовой (m.map_turn)
 
     # ------------------------------------------------------------ координаты
+    @property
+    def R(self):
+        """Поворот карты: вектор столика -> вектор на экране (y вниз; +90° — против часовой)."""
+        t = np.radians(self.turn)
+        return np.round(np.array([[np.cos(t), np.sin(t)], [-np.sin(t), np.cos(t)]]), 12)
+
     def to_px(self, S):
         w, h = self.size
-        return (np.asarray(S, float) - self.c) / self.s + (w / 2, h / 2)
+        return ((np.asarray(S, float) - self.c) / self.s) @ self.R.T + (w / 2, h / 2)
 
     def to_um(self, p):
         w, h = self.size
-        return (np.asarray(p, float) - (w / 2, h / 2)) * self.s + self.c
+        return ((np.asarray(p, float) - (w / 2, h / 2)) * self.s) @ self.R + self.c
+
+    def pan(self, c0, dp):
+        """Сдвиг карты мышью на dp пикселей от центра c0 (мкм)."""
+        self.c = np.asarray(c0, float) - self.R.T @ np.asarray(dp, float) * self.s
 
     def fit(self, boxes, w, h, pad=0.12):
         """Вид — чтобы поместились прямоугольники [(x0, y0, x1, y1)] мкм."""
@@ -36,13 +47,15 @@ class NavMap:
         x0, y0 = b[:, 0].min(), b[:, 1].min()
         x1, y1 = b[:, 2].max(), b[:, 3].max()
         self.c = np.array([(x0 + x1) / 2, (y0 + y1) / 2])
+        if self.turn % 180:                                 # повёрнута на 90°: X столика — по вертикали
+            w, h = h, w
         self.s = max((x1 - x0) / max(1, w), (y1 - y0) / max(1, h), 1e-3) * (1 + 2 * pad)
 
     def zoom(self, p, k):
         """Зум к точке p (пиксели карты): k > 1 — ближе."""
         S = self.to_um(p)
         self.s = float(np.clip(self.s / k, 0.05, 500.0))
-        self.c = S - (np.asarray(p, float) - (self.size[0] / 2, self.size[1] / 2)) * self.s
+        self.c = S - self.R.T @ (np.asarray(p, float) - (self.size[0] / 2, self.size[1] / 2)) * self.s
 
     # ------------------------------------------------------------ мозаики
     def _preview(self, folder):
@@ -80,8 +93,8 @@ class NavMap:
             if abs(np.linalg.det(Mi)) ** 0.5 / k_ / self.s <= 1.6:
                 k, img, ok = k_, im_, ok_
         w, h = self.size
-        A = Mi / k / self.s                                 # пиксели превью -> пиксели карты
-        t = (-off - self.c) / self.s + (w / 2, h / 2)
+        A = self.R @ Mi / k / self.s                        # пиксели превью -> пиксели карты
+        t = self.R @ ((-off - self.c) / self.s) + (w / 2, h / 2)
         M = np.c_[A, t]
         pic = cv2.warpAffine(img, M, (w, h), flags=cv2.INTER_LINEAR)
         msk = cv2.warpAffine(ok, M, (w, h), flags=cv2.INTER_NEAREST) > 0
@@ -90,19 +103,20 @@ class NavMap:
     def base(self, scans, w, h):
         """Подложка карты: мозаики scans (папки, сначала меньшее увеличение). Кэш, пока вид не менялся."""
         self.size = (w, h)
-        key = (w, h, tuple(np.round(self.c, 3)), round(self.s, 6),
+        key = (w, h, tuple(np.round(self.c, 3)), round(self.s, 6), self.turn,
                tuple((f, os.path.getmtime(os.path.join(f, 'join', 'preview_all.jpg'))
                       if os.path.exists(os.path.join(f, 'join', 'preview_all.jpg')) else 0) for f in scans))
         if key != self._key:
             canvas = np.full((h, w, 3), 24, np.uint8)
             step = 10 ** np.floor(np.log10(max(1e-3, self.s * 80)))          # сетка мкм — для ориентира
-            S0, S1 = self.to_um((0, 0)), self.to_um((w, h))
+            cs_ = self.to_um(np.array([(0, 0), (w, 0), (0, h), (w, h)], float))
+            S0, S1 = cs_.min(0), cs_.max(0)
             for x in np.arange(np.floor(S0[0] / step) * step, S1[0], step):
-                X = int(self.to_px((x, 0))[0])
-                cv2.line(canvas, (X, 0), (X, h), (34, 34, 38), 1)
+                a_, b_ = self.to_px(np.array([(x, S0[1]), (x, S1[1])]))
+                cv2.line(canvas, tuple(np.int32(a_)), tuple(np.int32(b_)), (34, 34, 38), 1)
             for y in np.arange(np.floor(S0[1] / step) * step, S1[1], step):
-                Y = int(self.to_px((0, y))[1])
-                cv2.line(canvas, (0, Y), (w, Y), (34, 34, 38), 1)
+                a_, b_ = self.to_px(np.array([(S0[0], y), (S1[0], y)]))
+                cv2.line(canvas, tuple(np.int32(a_)), tuple(np.int32(b_)), (34, 34, 38), 1)
             for f in scans:
                 try:
                     self._warp(canvas, f)

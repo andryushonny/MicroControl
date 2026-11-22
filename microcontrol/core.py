@@ -15,7 +15,7 @@ from . import project as P_
 
 AXES = ('x', 'y', 'z')
 ORIENTATION = ('map_flip_x', 'map_flip_y', 'arrows_flip_x', 'arrows_flip_y', 'turn_180', 'swap_xy', 'mirror_x', 'mirror_y', 'reverse_x', 'reverse_y', 'reverse_z',
-               'one_side', 'overshoot')   # помнится для прибора (подъезд с одной стороны — тоже)
+               'one_side', 'overshoot', 'map_turn')   # помнится для прибора (подъезд с одной стороны — тоже)
 WEAK_FOCUS = 1.3      # пик резкости ниже 1.3 × типичной — фокус ненадёжен (мало деталей)
 
 # старые имена (до 0.7.0) -> новые: старое имя даёт ошибку с подсказкой, а не молчит
@@ -215,6 +215,7 @@ class Microscope:
     pixel_size = Setting('float', 0.001, 10, 'um', "Size of one camera pixel on the sample")
     map_flip_x = Setting('bool', doc="Manual: mini map turned over left-right (only the picture of the map)")
     map_flip_y = Setting('bool', doc="Manual: mini map turned over up-down (only the picture of the map)")
+    map_turn = Setting('choice', None, (0, 90, 180, 270), 'deg', "Manual: map of the sample (scans) turned anticlockwise (only the picture of the map)")
     arrows_flip_x = Setting('bool', doc="Manual: left / right arrows the other way (only the keys; pictures and joining do not change)")
     arrows_flip_y = Setting('bool', doc="Manual: up / down arrows the other way (only the keys)")
     turn_180 = Setting('bool', doc="Turn the camera picture by 180 degrees (on the ATR8300 it comes upside down)")
@@ -289,7 +290,7 @@ class Microscope:
         sim = port == 'sim'
         self._fast = sim
         self._cfg.update(objective=objective, light=0, laser=0, laser_max=10.0, exposure=20.0,
-                         map_flip_x=False, map_flip_y=False, arrows_flip_x=False, arrows_flip_y=False, turn_180=False, swap_xy=False, mirror_x=False, mirror_y=False, reverse_x=False, reverse_y=False, reverse_z=False,
+                         map_flip_x=False, map_flip_y=False, map_turn=0, arrows_flip_x=False, arrows_flip_y=False, turn_180=False, swap_xy=False, mirror_x=False, mirror_y=False, reverse_x=False, reverse_y=False, reverse_z=False,
                          motor_step=UM_PER_STEP, max_move=2000.0, max_move_down=2000.0, xy_limit=25000.0, max_jump=3000.0,
                          motor_speed=3000.0,
                          move_pause=0.0 if sim else 0.1, photo_pause=0.0 if sim else 0.1, light_pause=0.0 if sim else 2.0,
@@ -310,6 +311,7 @@ class Microscope:
                 orient.setdefault('map_flip_x', True)  # ATR8300: так мини-карта совпадает с положением на подложке
                 orient.setdefault('map_flip_y', True)  # (по словам пользователя); [ и ] в ручном режиме — поменять
                 orient.setdefault('turn_180', True)    # ATR8300: кадр камеры перевёрнут (отражён по X и Y) — проверено
+                orient.setdefault('map_turn', 90)      # ATR8300: карта образца — на 90° против часовой (по словам пользователя)
             self._cfg.update(orient)
             t, p = self._u2p(self.xy_limit), self._p          # пределы — от точки подключения
             self._lim = {'x': (p['x'] - t, p['x'] + t), 'y': (p['y'] - t, p['y'] + t),

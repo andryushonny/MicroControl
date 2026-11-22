@@ -99,6 +99,36 @@ def seed_grid(folder, g, L):
     return g
 
 
+def inherit_labels(folder, g, L, size):
+    """Сетка этой съёмки без подписей, а у образца решётка с номерами (другая съёмка): номера квадратов —
+    из неё, по 9 квадратам в середине мозаики (все должны дать одну нумерацию, оси — ±1). -> True / False."""
+    from .snap import mosaic_to_stage
+    if not g.ready() or g.labels or not L or not L.get('numbered'):
+        return False
+    v1, v2 = g.cr.vectors()
+    c0 = np.floor(np.linalg.solve(np.c_[v1, v2], np.asarray(size, float) / 2 - g.cr.O)).astype(int)
+    cells = np.array([(c0[0] + a, c0[1] + b) for a in (-1, 0, 1) for b in (-1, 0, 1)])
+    q = np.array([g.cr.point(i + 0.5, j + 0.5) for i, j in cells])
+    uv = to_uv(L, mosaic_to_stage(folder, q))
+    if np.abs(uv - np.floor(uv) - 0.5).max() > 0.3:              # середина квадрата не в середине: ненадёжно
+        return False
+    names = np.floor(uv).astype(int) + 1
+    fit = []
+    for sw in (False, True):
+        for sx in (1, -1):
+            for sy in (1, -1):
+                P = np.array([[0, sx], [sy, 0]] if sw else [[sx, 0], [0, sy]], int)
+                t = names[4] - P @ cells[4]
+                if np.all(cells @ P.T + t == names):
+                    fit.append((P, t))
+    if len(fit) != 1:
+        return False
+    P, t = fit[0]
+    g.labels = {(int(i), int(j)): tuple(int(v) for v in P @ np.array([i, j]) + t)
+                for i, j in (c0, c0 + (1, 0), c0 + (0, 1))}
+    return True
+
+
 def figures(cells):
     """Клетки -> замкнутые фигуры (соседи по стороне), большие первыми."""
     left, out = set(map(tuple, cells)), []

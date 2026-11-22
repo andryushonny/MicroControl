@@ -58,7 +58,7 @@ HELP = ["Shift+Esc: Exit (or close the window)", "P: Hide / show the left panel"
         "Selections are layers: Ctrl+click cards to mark them, then Merge / Minus / Overlap / Group / Ungroup above the list",
         "The eye on a card hides the selection on the maps (and shows it again); Show all above the list",
         "Squares selected in the view (M) become Drafts, one per figure   Shift+drag over a selection: move it",
-        "T: Turn the camera picture by 180 degrees (remembered)",
+        "T: Turn the camera picture by 180 degrees (remembered)   \\: Turn the map by 90 degrees anticlockwise (remembered)",
         "[ / ]: Arrows left-right / up-down the other way; the mini map always follows the arrows (remembered)",
         "O: check with the camera which way the picture moves",
         "Ctrl+Z: undo (selections, focus points, moves: the stage drives back)   Ctrl+Y: redo", "H: Hide this help"]
@@ -927,6 +927,7 @@ def _run(m, fullscreen=False, _keys=None):
         nv['mr'], nv['inset'] = mr, inset
         w_, h_ = mr[2] - mr[0], mr[3] - mr[1]
         cam = camera_box(m, shape)
+        nav.turn = int(getattr(m, 'map_turn', 0) or 0) % 360   # поворот карты (\\: ещё на 90°, помнится)
         if nav.c is None:                                  # первый раз: всё, что есть, и камера
             bx = [SM._rect(m, r_) for r_ in m._regions if r_.get('kind') != 'group']
             bx.append((*cam.min(0), *cam.max(0)))
@@ -2062,7 +2063,7 @@ def _run(m, fullscreen=False, _keys=None):
                     nav.zoom(c_[1:3], 1.25 if c_[3] > 0 else 0.8)
                 elif c_[0] == 'mappan':
                     if nv['pan'] is not None and nv['pan'][2] is not None:
-                        nav.c = nv['pan'][2] - (np.array(c_[1:3], float) - nv['pan'][:2]) * nav.s
+                        nav.pan(nv['pan'][2], np.array(c_[1:3], float) - nv['pan'][:2])
                 elif c_[0] == 'mapclick':
                     S_ = nav.to_um(c_[1:3])
                     hold_ = live.hold() if live is not None else None
@@ -2357,6 +2358,10 @@ def _run(m, fullscreen=False, _keys=None):
                 m._map_win = None
                 msg = (f"Arrows {'left / right' if raw == '[' else 'up / down'} turned the other way, the mini map "
                        f"follows them (remembered; {raw} again: back)")
+            elif raw == '\\':                              # \: карта образца — ещё на 90° против часовой (помнится)
+                m.map_turn = (int(m.map_turn) + 90) % 360
+                nav.c = None                               # вид — заново, чтобы всё поместилось
+                msg = f"Map turned: {m.map_turn} deg anticlockwise (remembered; \\ again: 90 deg more)"
             elif ch == 'b':                                # B: подъезд с одной стороны (люфт), помнится для прибора
                 m.one_side = not m.one_side
                 msg = (f"One-side approach on: X and Y always stop coming from the same side (a move back goes "

@@ -139,9 +139,17 @@ class Grid:
             d.update({k_: old_[k_] for k_ in KEEP if k_ in old_})
             if sorted(map(list, old_.get('selected', []))) != d['selected']:
                 d['brush_t'] = time.time()                  # здесь выбор поменяли: эта съёмка главная для кисти
+            om_, nm_ = np.array(old_.get('marks', []), float), np.array(d['marks'], float)
+            if d['marks'] and (om_.shape != nm_.shape or old_.get('index') != d['index']
+                               or (om_.size and np.abs(om_ - nm_).max() > 0.5)):
+                d['marks_t'] = time.time()                  # кресты отметили заново: решётка образца — по этой сетке
+            elif 'marks_t' in old_:
+                d['marks_t'] = old_['marks_t']
         except (OSError, ValueError):
             if d['selected']:
                 d['brush_t'] = time.time()
+            if d['marks']:
+                d['marks_t'] = time.time()
         with open(gp_, 'w', encoding='utf-8') as f:
             json.dump(d, f, indent=1)
 

@@ -566,8 +566,9 @@ def update_lattice(m):
         if not g.ready() or getattr(g, 'seeded', False) or d.get('seeded'):
             continue
         L = LT.from_grid(f, g)
-        if L and (best is None or (L['numbered'], -obj_of(m, r)) > (best[0]['numbered'], -best[1])):
-            best = (L, obj_of(m, r))
+        key_ = (L['numbered'], float(d.get('marks_t') or 0), -obj_of(m, r)) if L else None
+        if L and (best is None or key_ > best[1]):           # с номерами; затем — где кресты отметили последними
+            best = (L, key_)
     if best is None:
         return False
     old = m.sample.data.get('lattice')

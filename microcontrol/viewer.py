@@ -1100,10 +1100,35 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
         return out_
 
     def lat_now():
+        """Решётка образца для черновиков и подсеток здесь: по сетке ЭТОЙ съёмки, если она размечена (кресты
+        только что отметили — квадраты встают строго по ним), иначе — записанная у образца."""
         try:
-            return json.load(open(smp.file, encoding='utf-8')).get('lattice') if smp is not None else None
+            L_s = json.load(open(smp.file, encoding='utf-8')).get('lattice') if smp is not None else None
         except (OSError, ValueError):
-            return None
+            L_s = None
+        if not g.ready():
+            return L_s
+        v1_, _v2 = g.cr.vectors()
+        key_ = (tuple(np.round(g.cr.O, 3)), tuple(np.round(v1_, 5)), tuple(sorted(g.labels.items())))
+        c_ = st.get('_lat')
+        if c_ is None or c_[0] != key_:
+            if not g.labels and L_s and L_s.get('numbered') and st.get('_inh') != key_:
+                st['_inh'] = key_                           # номера квадратов — от решётки образца (раз на сетку)
+                try:
+                    if LT.inherit_labels(folder, g, L_s, sc.size):
+                        g.save(px_um)
+                        key_ = (key_[0], key_[1], tuple(sorted(g.labels.items())))
+                except Exception:
+                    pass
+            try:
+                L_g = LT.from_grid(folder, g)
+            except Exception:
+                L_g = None
+            st['_lat'] = c_ = (key_, L_g)
+        L_g = c_[1]
+        if L_g is not None and (L_g['numbered'] or not (L_s and L_s.get('numbered'))):
+            return L_g
+        return L_s
 
     def refine_target(q):
         """Выделение с подсеткой, в клетке которого точка q (px мозаики): самое глубокое. -> dict или None."""

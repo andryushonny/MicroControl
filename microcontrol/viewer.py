@@ -77,7 +77,9 @@ class _Scene:
             if ax1 > ax0 and ay1 > ay0:
                 ox, oy = int(round((ax0 / k - x0) * s)), int(round((ay0 / k - y0) * s))   # место выреза в окне
                 dw, dh = max(1, int(round((ax1 - ax0) / k * s))), max(1, int(round((ay1 - ay0) / k * s)))
-                part = cv2.resize(ov[ay0:ay1, ax0:ax1], (dw, dh), interpolation=cv2.INTER_AREA)
+                down_ = dw < ax1 - ax0                         # уменьшение — AREA (без ряби); тянут или
+                part = cv2.resize(ov[ay0:ay1, ax0:ax1], (dw, dh),   # увеличение — LINEAR (в разы быстрее)
+                                  interpolation=cv2.INTER_AREA if down_ and not fast else cv2.INTER_LINEAR)
                 u0, v0 = max(0, -ox), max(0, -oy)
                 u1, v1 = min(dw, Wv - ox), min(dh, Hv - oy)
                 if u1 > u0 and v1 > v0:
@@ -348,6 +350,20 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
     mid = lambda: np.array([st['Wv'] / 2, st['Hv'] / 2])
     to_view = lambda M: mid() + st['s'] * (R() @ (np.asarray(M, float) - (st['cx'], st['cy'])))
     from_view = lambda v: np.array([st['cx'], st['cy']]) + R().T @ ((np.asarray(v, float) - mid()) / st['s'])
+
+    def to_view_arr(M):
+        """to_view для массива точек (..., 2) разом."""
+        M = np.asarray(M, float)
+        return mid() + st['s'] * ((M - (st['cx'], st['cy'])) @ R().T)
+
+    def cell_quads(cells_):
+        """Углы квадратов сетки (N, 4, 2) в окне — одним вычислением, без цикла по квадратам."""
+        v1_, v2_ = g.cr.vectors()
+        C_ = np.asarray(cells_, float).reshape(-1, 2)
+        offs = np.array([(0, 0), (1, 0), (1, 1), (0, 1)], float)
+        ij_ = C_[:, None, :] + offs[None]
+        Mq = g.cr.O + ij_[..., :1] * v1_ + ij_[..., 1:] * v2_
+        return to_view_arr(Mq)
 
     def fit():
         st['s'] = min(st['Wv'] / sc.size[0], st['Hv'] / sc.size[1]) * 0.95
@@ -698,7 +714,7 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
             t = mid() - Rm @ np.array([D / 2, D / 2])
             img = cv2.warpAffine(big, np.float32(np.c_[Rm, t]), (Wv, Hv), flags=cv2.INTER_LINEAR)
         red, green, yellow = (40, 40, 255), SM.sample_color(folder), (0, 220, 255)   # выбранные — цветом выделения
-        base_, void_ = img.copy(), (img <= 22).all(2)                # вне мозаики сетку и заливку не рисуем
+        base_, void_ = img.copy(), cv2.inRange(img, (0, 0, 0), (22, 22, 22))   # вне мозаики сетку не рисуем
         if g.ready():
             lo = np.min([from_view(v) for v in ((0, 0), (Wv, 0), (0, Hv), (Wv, Hv))], 0)
             hi = np.max([from_view(v) for v in ((0, 0), (Wv, 0), (0, Hv), (Wv, Hv))], 0)
@@ -706,22 +722,27 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
             step = min(np.hypot(*v1), np.hypot(*v2)) * st['s']
             lo, hi = np.maximum(lo, 0), np.minimum(hi, sc.size)            # решётка — только над мозаикой
             e_ = 0.25 * min(np.hypot(*v1), np.hypot(*v2))                   # квадрат почти весь над мозаикой
-            cells = [c for c in g.cells_range(lo, hi)                       # (до ~40 тыс. квадратов на экране)
-                     if (lambda q: e_ <= q[0] <= sc.size[0] - e_ and e_ <= q[1] <= sc.size[1] - e_)(
-                         g.cr.point(c[0] + 0.5, c[1] + 0.5))] if step >= 1.5 else []
+            cells = []
+            if step >= 1.5:                                               # (до ~40 тыс. квадратов на экране)
+                cr_ = np.array(list(g.cells_range(lo, hi)), float).reshape(-1, 2)
+                cc_ = g.cr.O + (cr_[:, :1] + 0.5) * v1 + (cr_[:, 1:] + 0.5) * v2   # центры — разом
+                ok_ = (cc_[:, 0] >= e_) & (cc_[:, 0] <= sc.size[0] - e_) & (cc_[:, 1] >= e_) & (cc_[:, 1] <= sc.size[1] - e_)
+                cells = [(int(a), int(b)) for a, b in cr_[ok_]]
+            quads = cell_quads(cells) if cells else np.zeros((0, 4, 2))
             if cells and (g.selected or (st.get('hints', _cfg.AUTO_HINTS) and g.useful)):   # зелёные — выделены,
                 ov = img.copy()                                                   # жёлтые — подсказка
-                for c in cells:
-                    if c in g.selected:
-                        cv2.fillPoly(ov, [np.int32([to_view(q) for q in g.corners(*c)])], green)
-                    elif st.get('hints', _cfg.AUTO_HINTS) and c in g.useful:
-                        cv2.fillPoly(ov, [np.int32([to_view(q) for q in g.corners(*c)])], (0, 215, 255))
+                hint_ = st.get('hints', _cfg.AUTO_HINTS)
+                sel_ = [i_ for i_, c in enumerate(cells) if c in g.selected]
+                use_ = [i_ for i_, c in enumerate(cells) if hint_ and c not in g.selected and c in g.useful]
+                if sel_:
+                    cv2.fillPoly(ov, list(np.int32(quads[sel_])), green)
+                if use_:
+                    cv2.fillPoly(ov, list(np.int32(quads[use_])), (0, 215, 255))
                 img = cv2.addWeighted(ov, 0.35, img, 0.65, 0)
             if step >= 34 and len(cells) <= 3000:           # номер квадрата в уголке: (X, Y) по подписям
                 num = g.numbering()
                 fs = min(0.5, step / 160)
-                for c in cells:
-                    pts = np.array([to_view(q) for q in g.corners(*c)])
+                for c, pts in zip(cells, quads):
                     u, v = pts[np.argmin(pts.sum(1))] + (4, 4 + 14 * fs / 0.5)
                     txt = "{},{}".format(*g.name(*c, num))
                     col = (0, 230, 255) if c in g.labels else ((255, 255, 255) if g.labels else (170, 170, 170))
@@ -731,8 +752,7 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
                     pts = np.array([to_view(q) for q in g.corners(*st['lab'][0])])
                     cv2.polylines(img, [np.int32(pts)], True, (0, 230, 255), 2, cv2.LINE_AA)
             if cells and step >= 7:                         # крупно: контур каждого квадрата над мозаикой
-                polys = [np.int32(np.round([to_view(q) for q in g.corners(*c)])) for c in cells]
-                cv2.polylines(img, polys, True, red, 1, cv2.LINE_AA if step >= 30 else cv2.LINE_8)
+                cv2.polylines(img, list(np.int32(np.round(quads))), True, red, 1, cv2.LINE_AA if step >= 30 else cv2.LINE_8)
             elif cells:                                     # мелко: линии через кресты
                 # сплошные линии без сглаживания (сглаженная линия в 1 px на дробной позиции бледнеет),
                 # совсем мелко — каждая k-я, чтобы не слиться в сплошной красный
@@ -749,7 +769,7 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
                         cv2.line(img, tuple(np.int32(np.round(a_))), tuple(np.int32(np.round(b_))), red, 1, cv2.LINE_8)
             elif g.selected:
                 st['msg'] = st['msg'] if 'zoom in' in st['msg'] else st['msg']
-        img[void_] = base_[void_]
+        img = cv2.copyTo(base_, void_, img)
         H_img, W_img = img.shape[:2]
         for q_, c_, lab_, dash_, new_ in sample_outlines():      # выделения образца на этой картинке
             pv_ = np.array([to_view(p_) for p_ in q_], float)

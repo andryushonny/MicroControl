@@ -423,6 +423,8 @@ class Microscope:
         raise SafetyError('E105', f"{k!r}." + (f" Did you mean {near[0]!r}?" if near else "") + " See m.settings.")
 
     def __getattr__(self, k):
+        if k.startswith('_'):                              # служебное (getattr(m, '_x', None)): без подсказки —
+            raise AttributeError(k)                        # она дорогая, а спрашивают так десятки раз за кадр
         if k in RENAMED:
             raise AttributeError(f"{k!r} is now called {RENAMED[k]!r}: m.{RENAMED[k]}")
         import difflib
@@ -1589,7 +1591,8 @@ class Microscope:
         from .samples import init_areas, obj as _obj, parent as _par
         import uuid as _uuid
         init_areas(self)
-        if area is None and self.area is not None:         # m.area = Area(...) руками (не из выделения) — как area=
+        if area is None and self.area is not None and not getattr(self.area, '_of_selection', False):
+            # m.area = Area(...) руками (не из выделения и не от прошлой съёмки) — как area=
             a_ = self.area
             o_ = self._off
             known = any(abs(min(r['A'][0], r['B'][0]) - o_['x'] - min(a_.x0, a_.x1)) < 1e-6 and
@@ -1611,8 +1614,14 @@ class Microscope:
             regs = [rg for rg in regs_all if _obj(self, rg) == self.objective and rg.get('kind') not in ('group', 'draft')]
             if not regs_all:
                 raise SafetyError('E701', "No selection: mark one in m.manual() (keys 1 and 2) or set m.area.")
+            if not regs and all(rg.get('kind') in ('group', 'draft') for rg in regs_all
+                                if _obj(self, rg) == self.objective):
+                if any(rg.get('kind') == 'draft' for rg in regs_all):
+                    raise SafetyError('E706', "Only drafts here: a draft is a sketch and is not scanned. Click its "
+                                              "'draft' chip (or merge it with a selection) to make it an area for "
+                                              f"{self.objective}x, then scan.")
             if not regs:
-                objs = sorted({_obj(self, rg) for rg in regs_all})
+                objs = sorted({_obj(self, rg) for rg in regs_all if rg.get('kind') not in ('group', 'draft')})
                 raise SafetyError('E706', f"No selection for {self.objective}x; the selections are for "
                                           f"{', '.join(f'{o}x' for o in objs)}. Put that objective in place and set it "
                                           "(m.objective = ..., or M in m.manual()), or mark selections with this one.")
@@ -1628,7 +1637,8 @@ class Microscope:
         off, pf, done = self._off, self._sample.folder, []
         n0 = 0
         for k, reg in enumerate(regs):
-            area_ = Area(reg['A'][0] - off['x'], reg['A'][1] - off['y'], reg['B'][0] - off['x'], reg['B'][1] - off['y'])
+            from .samples import _area
+            area_ = _area(self, reg)                       # края — наружу до целого шага мотора
             pts = [dict(p, tag=str(n0 + i + 1)) for i, p in enumerate(reg['pts'])]
             nums = [n0 + 1, n0 + len(pts)]
             n0 += len(pts)
@@ -1645,6 +1655,7 @@ class Microscope:
                 from .layers import touches_frame
                 fw_, fh_ = self.frame_size
                 keep = (lambda X, Y, r_=reg, w_=fw_, h_=fh_: touches_frame(self, r_, X, Y, w_, h_))
+            area_._of_selection = True                     # m.area после съёмки — не «новая зона руками»
             prog = plan(self, area=area_, focus=focus, overlap=ov, path=path, pts=pts, keep=keep)
             if len(regs) > 1:
                 print(f"Selection {reg['num']} ({k + 1} of {len(regs)}): {area_}")

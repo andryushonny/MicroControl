@@ -22,13 +22,16 @@ class Area:
         """Центры кадров: список (строка, столбец, x, y) в порядке обхода. step — {'x':, 'y':} мкм."""
         nx = max(1, math.ceil((self.x1 - self.x0) / step['x'] - 0.05) + 1)   # допуск на округление
         ny = max(1, math.ceil((self.y1 - self.y0) / step['y'] - 0.05) + 1)
+        if getattr(self, 'n', None):                       # число кадров задано (зона выделения, края — по шагу)
+            nx, ny = self.n
         # кадры ровно от угла до угла: шаг подогнан (не больше заданного), последний кадр — точно в углу B
         sx = (self.x1 - self.x0) / (nx - 1) if nx > 1 else step['x']
         sy = (self.y1 - self.y0) / (ny - 1) if ny > 1 else step['y']
         out = []
         for r in range(ny):
             cols = range(nx) if path == 'rows' or r % 2 == 0 else range(nx - 1, -1, -1)
-            out += [(r, c, self.x0 + c * sx, self.y0 + r * sy) for c in cols]
+            out += [(r, c, self.x0 + c * sx if nx > 1 else (self.x0 + self.x1) / 2,
+                     self.y0 + r * sy if ny > 1 else (self.y0 + self.y1) / 2) for c in cols]
         return out
 
     def size(self, step):

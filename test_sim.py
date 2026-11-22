@@ -963,3 +963,64 @@ tol = 0.6 * m.motor_step / np.hypot(*u)
 assert (uv[:, 0] > -tol).all() and (uv[:, 0] < w_ + tol).all() and (uv[:, 1] > -tol).all() and (uv[:, 1] < h_ + tol).all(), uv
 m.close(); print("Lattice from cross 1,1; drafts of cells; finer grid 2-5 in the viewer, addresses 6,7 > 1,1 > 2,2; "
                  "50x on the 1/3 grid; drawing from cross 1,1, every cell closed on its layer: OK")
+
+
+# ------------------------------------------------------------------ 34. Операции над выделениями и съёмка: кадры накрывают контур целиком, лишних выделений нет
+from microcontrol import layers as LY, samples as SM
+from microcontrol.snap import geometry as _geo
+from shapely.geometry import box as _box
+from shapely.ops import unary_union as _uu
+m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp()); m.focus()
+fw, fh = m.frame_size
+
+def _add(x0, y0, x1, y1, obj=10, kind=None):
+    k_ = m.objective / obj
+    r = dict(uid=os.urandom(8).hex(), num=LY.new_num(m), obj=obj, fw=fw * k_, fh=fh * k_, pts=[], thumbs=[], parent=None)
+    if kind:
+        r['kind'] = kind
+    LY.set_geom(m, r, _box(x0, y0, x1, y1))
+    m._regions.append(r)
+    return len(m._regions) - 1
+
+def _scan_ok(tag):
+    regs = [r for r in m._regions if SM.obj(m, r) == m.objective and r.get('kind') not in ('group', 'draft')]
+    n0 = len(m._regions)
+    m.scan()
+    assert len(m._regions) == n0, (tag, "a selection appeared from nowhere")
+    for f, r in zip(m.last_scans, regs):
+        g_ = _geo(f)
+        T = np.asarray(g_['T'], float) * g_['ms']
+        cov = _uu([_box(x - r['fw'] / 2, y - r['fh'] / 2, x + r['fw'] / 2, y + r['fh'] / 2) for x, y in T])
+        gm = LY.geom(m, r)
+        assert gm.difference(cov).area < 1e-6 * gm.area, (tag, r['num'], gm.difference(cov).area)
+        assert len(T) == int(np.prod(SM.frames_of(m, m._regions.index(r)))), (tag, len(T))
+        mc.stitch(f, verbose=False)
+
+def _reset():
+    m._regions.clear(); m._sel = None
+
+a = _add(0, 0, 2 * fw, 2 * fh); b = _add(2 * fw, 0, 4 * fw, 2 * fh)
+_scan_ok('two'); LY.union(m, [a, b]); _scan_ok('scan, merge, scan')         # раньше — снималась старая зона
+_reset(); a = _add(0, 0, 2 * fw, 2 * fh); b = _add(fw, fh, 3 * fw, 3 * fh); LY.union(m, [a, b]); _scan_ok('merge L')
+_reset(); a = _add(0, 0, 2 * fw, 2 * fh); b = _add(4 * fw, 3 * fh, 5 * fw, 4 * fh); LY.union(m, [a, b]); _scan_ok('merge disjoint')
+_reset(); a = _add(0, 0, 4 * fw, 4 * fh); b = _add(1.5 * fw, 1.5 * fh, 2.5 * fw, 2.5 * fh)
+LY.subtract(m, [a, b]); LY._drop(m, [b]); _scan_ok('minus: hole')
+_reset(); a = _add(0, 0, 4 * fw, 2 * fh); b = _add(1.8 * fw, -fh, 2.2 * fw, 3 * fh)
+LY.subtract(m, [a, b]); LY._drop(m, [b]); _scan_ok('minus: two parts')
+_reset(); a = _add(13, 7, 3 * fw, 3 * fh); b = _add(fw, fh, 4 * fw + 9, 4 * fh); LY.intersect(m, [a, b]); LY._drop(m, [b]); _scan_ok('overlap')
+_reset(); a = _add(0, 0, 2 * fw, 2 * fh); b = _add(3 * fw, 0, 4 * fw, 2 * fh); LY.group(m, [a, b]); _scan_ok('group')
+_reset(); a = _add(0, 0, 2 * fw, 2 * fh, kind='draft'); b = _add(2 * fw, 0, 3 * fw, 2 * fh)
+LY.union(m, [a, b]); assert m._regions[0].get('kind') is None; _scan_ok('draft + selection = selection')
+_reset(); a = _add(0, 0, 2 * fw, 2 * fh, kind='draft')
+try:
+    m.scan(); raise AssertionError("a draft was scanned")
+except mc.SafetyError as e:
+    assert 'draft' in str(e), e
+_reset(); a = _add(0, 0, 2 * fw, 2 * fh); b = _add(2 * fw, 0, 2.5 * fw, 0.5 * fh, obj=50); LY.union(m, [a, b])
+LY.move(m, 0, 30, 20); _scan_ok('10x + 50x, moved')
+_reset()
+try:
+    m.scan(); raise AssertionError("scanned without selections")
+except mc.SafetyError as e:
+    assert 'E701' in str(e), e
+m.close(); print("Merge / minus / overlap / group / draft / move, then scan: frames cover every outline, no stray selections: OK")

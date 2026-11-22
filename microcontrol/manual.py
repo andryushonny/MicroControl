@@ -31,7 +31,7 @@ from .undo import History, undo_key
 from . import focus as F_
 import threading
 from .scan import Area, focus_z
-from .config import scan_overlap
+from .config import scan_overlap, UI_FPS
 from . import samples as SM
 from . import timing as TM
 from . import ui as UI
@@ -1273,7 +1273,9 @@ def _run(m, fullscreen=False, _keys=None):
         ks = [k_ for k_, rg in enumerate(m._regions) if SM.obj(m, rg) == m.objective
               and rg.get('kind') not in ('group', 'draft')]
         if not ks:
-            msg = f"No area for {m.objective}x: drag a rectangle on the map (or switch the objective, M)"
+            msg = (f"Only drafts for {m.objective}x: click a draft's 'draft' chip to make it an area, then Scan area"
+                   if any(r_.get('kind') == 'draft' for r_ in m._regions) else
+                   f"No area for {m.objective}x: drag a rectangle on the map (or switch the objective, M)")
             return
         nfr = sum(int(np.prod(SM.frames_of(m, k_))) for k_ in ks)
         fm_ = 'points' if m._use_fp else 'off'
@@ -1509,7 +1511,8 @@ def _run(m, fullscreen=False, _keys=None):
             h_last = (sg_, new_)
         need = True
         if live is not None:                               # перерисовать: новый кадр, события мыши или раз в 0.3 с
-            need = live.n != last_n or bool(clicks) or time.monotonic() - last_t > 0.3
+            now_ = time.monotonic()                        # не чаще UI_FPS: камере 30 кадров/с не нужно
+            need = bool(clicks) or now_ - last_t > 0.3 or (live.n != last_n and now_ - last_t >= 1.0 / UI_FPS)
         if need:
             img = live.img if live is not None else m.image(0)
             last_n, last_t = (live.n if live is not None else last_n), time.monotonic()
@@ -2191,6 +2194,8 @@ def _run(m, fullscreen=False, _keys=None):
     real_ = [k for k, r in enumerate(regs) if r.get('kind') != 'group']
     k_area = m._sel if m._sel in real_ else (real_[0] if real_ else None)
     m.area = reg_area(regs[k_area]) if k_area is not None else None
+    if m.area is not None:
+        m.area._of_selection = True                         # зона выбранного выделения, не новая
     m._focus_pts = [dict(p_, tag=str(n_)) for n_, k_, p_ in SM.numbered(m) if k_ == (m._sel or 0)] if regs else []
     L.event('MAN-002', f"Manual mode closed at {m.position}. Selections: {len(regs)}.")
     if not regs:

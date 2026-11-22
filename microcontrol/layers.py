@@ -24,7 +24,23 @@ EPS = 0.01                                                   # мкм: точн�
 
 
 # ---------------------------------------------------------------- контур
+_GCACHE = {}                                                 # id(список контура) -> (список, геометрия)
+
+
 def from_json(sh):
+    """Контур из sample.json -> shapely. Кэш по самому списку: set_geom всегда кладёт новый список, поэтому
+    тот же объект — та же геометрия (окно рисует десятки раз в секунду, разбор каждый раз — дорого)."""
+    c = _GCACHE.get(id(sh))
+    if c is not None and c[0] is sh:
+        return c[1]
+    g = _from_json(sh)
+    if len(_GCACHE) > 4000:
+        _GCACHE.clear()
+    _GCACHE[id(sh)] = (sh, g)
+    return g
+
+
+def _from_json(sh):
     polys = [Polygon(p['ext'], p.get('holes') or []) for p in sh or []]
     polys = [p.buffer(0) for p in polys if p.area > 0]
     return unary_union(polys) if polys else Polygon()
@@ -204,6 +220,10 @@ def union(m, ks):
         for c in m._regions:
             if c.get('parent') == r.get('uid'):
                 c['parent'] = t['uid']
+    real = [m._regions[k] for k in ks if not is_mask(m._regions[k])]
+    if is_mask(t) and real:                                  # черновик + настоящий участок = настоящий участок
+        t.pop('kind', None)
+        t.update(obj=real[0].get('obj', m.objective), fw=real[0].get('fw'), fh=real[0].get('fh'))
     _geom_or_cells(m, t, g)
     nums = [m._regions[k]['num'] for k in ks]
     _drop(m, ks[1:])

@@ -82,7 +82,8 @@ def init_areas(m):
     """m._regions (зафиксированные области, настоящие мкм), m._pending (новая: есть угол 1), m._sel (выбранная)."""
     if getattr(m, '_regions', None) is None:
         m._regions = []
-    if not m._regions and getattr(m, 'area', None) is not None:   # зона m.area = Area(...) без выделений — выделение 1
+    if not m._regions and getattr(m, 'area', None) is not None and \
+            not getattr(m.area, '_of_selection', False):      # зона m.area = Area(...) без выделений — выделение 1
         off_ = (m._off['x'], m._off['y'])
         fw_, fh_ = m.frame_size
         m._regions.append(dict(A=(m.area.x0 + off_[0], m.area.y0 + off_[1]),
@@ -202,12 +203,25 @@ def frames_of(m, k):
               for a, f in (('x', 'fw'), ('y', 'fh'))}
     if rg.get('kind') in ('group', 'draft'):                # группа и маска не снимаются
         return 0, 0
+    key = (id(rg.get('shape')), tuple(rg['A']), tuple(rg['B']), rg.get('fw'), rg.get('fh'), m._off['x'], m._off['y'],
+           st['x'], st['y'], m.motor_step, o == m.objective)
+    c = _FCACHE.get(id(rg))
+    if c is not None and c[0] == key and c[1] is rg.get('shape'):   # окно спрашивает каждый кадр — считаем раз
+        return c[2]
     if not rg.get('shape'):
-        return _area(m, rg).size(st)
-    from .layers import touches_frame
-    fw, fh = rg.get('fw', m.frame_size[0]), rg.get('fh', m.frame_size[1])
-    n = sum(touches_frame(m, rg, x + m._off['x'], y + m._off['y'], fw, fh) for _r, _c, x, y in _area(m, rg).grid(st))
-    return n, 1                                            # не прямоугольник: число кадров — первым
+        res = _area(m, rg).size(st)
+    else:
+        from .layers import touches_frame
+        fw, fh = rg.get('fw', m.frame_size[0]), rg.get('fh', m.frame_size[1])
+        n = sum(touches_frame(m, rg, x + m._off['x'], y + m._off['y'], fw, fh) for _r, _c, x, y in _area(m, rg).grid(st))
+        res = (n, 1)                                        # не прямоугольник: число кадров — первым
+    if len(_FCACHE) > 2000:
+        _FCACHE.clear()
+    _FCACHE[id(rg)] = (key, rg.get('shape'), res)
+    return res
+
+
+_FCACHE = {}
 
 
 def tree(m):
@@ -273,9 +287,27 @@ def layer_name(m, k):
 
 
 def _area(m, reg):
+    """Зона съёмки выделения (рабочие мкм): крайние кадры — наружу до целого шага мотора (столик встаёт только
+    на шаги: край контура не теряется), число кадров — как у самой зоны (шаг чуть шире, перекрытие чуть меньше)."""
+    import math
     from .scan import Area
-    w = lambda P: (P[0] - m._off['x'], P[1] - m._off['y'])
-    return Area(*w(reg['A']), *w(reg['B']))
+    from .config import scan_overlap
+    s_ = m.motor_step
+    (ax, bx), (ay, by) = sorted((reg['A'][0], reg['B'][0])), sorted((reg['A'][1], reg['B'][1]))
+    o = obj(m, reg)
+    st = {a: max(1, math.floor(reg.get(f, 1.0) * (1 - scan_overlap(o)) / s_ + 1e-9)) * s_
+          for a, f in (('x', 'fw'), ('y', 'fh'))} if 'fw' in reg else m._frame_step(1 - scan_overlap(o))
+    n = list(Area(ax, ay, bx, by).size(st))
+    ax0, ay0, bx0, by0 = ax, ay, bx, by
+    ax, ay = math.floor(ax / s_ + 1e-6) * s_, math.floor(ay / s_ + 1e-6) * s_
+    bx, by = math.ceil(bx / s_ - 1e-6) * s_, math.ceil(by / s_ - 1e-6) * s_
+    for i_, (lo, hi, lo0, hi0) in enumerate(((ax, bx, ax0, bx0), (ay, by, ay0, by0))):
+        c_ = round((lo + hi) / 2 / s_) * s_                 # один кадр не накроет контур, если центр не на шаге
+        if n[i_] == 1 and hi > lo and abs(c_ - (lo0 + hi0) / 2) > 1e-6 + (hi0 - lo0) * 0:
+            n[i_] = 2
+    a_ = Area(ax - m._off['x'], ay - m._off['y'], bx - m._off['x'], by - m._off['y'])
+    a_.n = tuple(n)
+    return a_
 
 
 def area_at(m, x, y, any_objective=False):

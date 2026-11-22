@@ -38,6 +38,15 @@ class SimWorld:
             cv2.fillPoly(mask, [pts], 1)
             tex[mask > 0] *= np.array([k * 1.05, k * 0.85, k * 0.9], np.float32)
         self.tex = np.clip(tex, 0, 255).astype(np.float32)
+        # мелочь для 50x и 100x (пиксель 0.04 и 0.02 мкм): зерно подложки и наночастицы ~0.1–0.4 мкм.
+        # Без неё в поле 100x (14 мкм) фон гладкий — резкости не за что зацепиться
+        self.micro_um, mn = 0.04, 1024                 # 1024 х 0.04 мкм = 41 мкм, дальше повторяется
+        mic = cv2.GaussianBlur(rng.normal(0, 1, (mn, mn)).astype(np.float32), (0, 0), 1.5)
+        mic = 7 * mic / mic.std()
+        for _ in range(900):                            # частицы 0.1–0.4 мкм: тёмные точки
+            c = tuple(int(v) for v in rng.integers(0, mn, 2))
+            cv2.circle(mic, c, int(rng.integers(2, 6)), float(-rng.uniform(15, 40)), -1, cv2.LINE_AA)
+        self.micro = mic
         self._noise = np.zeros((480, 640, 1), np.float32)   # шум матрицы: новый в каждом кадре
         self.burns = []                                # следы лазера: (x мкм, y мкм, r мкм)
         self._p = {'x': 0.0, 'y': 0.0, 'z': 0.0}       # истинное положение, шаги
@@ -69,7 +78,7 @@ class SimWorld:
         """Настоящий объектив: размер пикселя камеры на образце и апертура (NA)."""
         self.objective = obj
         self.px_um = SENSOR_PIXEL_UM / obj               # мкм на пиксель камеры
-        self.na = {4: 0.1, 10: 0.25, 20: 0.4, 100: 0.9}.get(obj, 0.25)
+        self.na = {4: 0.1, 5: 0.15, 10: 0.25, 20: 0.4, 50: 0.5, 100: 0.9}.get(obj, 0.25)
 
     def handle(self, cmd, data):
         """Ответ виртуального контроллера на команду."""
@@ -164,6 +173,11 @@ class SimWorld:
         mx = np.broadcast_to(np.mod(X / self.tex_um, n)[None], (H, W)).astype(np.float32)
         my = np.broadcast_to(np.mod(Y / self.tex_um, n)[:, None], (H, W)).astype(np.float32)
         img = cv2.remap(self.tex, mx, my, cv2.INTER_LINEAR, borderMode=cv2.BORDER_WRAP)
+        if self.px_um < 0.12:                           # 50x, 100x: мелкие детали поверхности
+            mn = self.micro.shape[0]
+            ux = np.broadcast_to(np.mod(X / self.micro_um, mn)[None], (H, W)).astype(np.float32)
+            uy = np.broadcast_to(np.mod(Y / self.micro_um, mn)[:, None], (H, W)).astype(np.float32)
+            img = img + cv2.remap(self.micro, ux, uy, cv2.INTER_LINEAR, borderMode=cv2.BORDER_WRAP)[..., None]
         for fx, fy, fl, fa, fw in getattr(self, 'flakes', ()):     # чешуйки: светлые полоски (x, y, длина, угол, ширина), мкм
             if abs(fx - x0) > W * self.px_um / 2 + fl or abs(fy - y0) > H * self.px_um / 2 + fl:
                 continue
@@ -194,7 +208,11 @@ class SimWorld:
                 img *= (1 - 0.8 * np.exp(-d2 / (2 * br ** 2)))[..., None]
         zf = self.z_focus + self.tilt[0] * p['x'] + self.tilt[1] * p['y']
         dz_um = abs(p['z'] - zf) * um
-        sigma = 0.5 * self.na * dz_um / self.px_um     # расфокус в пикселях: конус света с апертурой NA
+        # глубина резкости: оптическая (λ/NA² + пиксель) или полшага мотора Z — что больше. Столик встаёт только на
+        # шаги (5.56 мкм), а у 100x оптическая ~0.7 мкм: без этого ближайший к фокусу шаг был бы размыт и фокус
+        # не поймать вовсе. Дальше — конус света с апертурой NA
+        dof_um = max(0.55 / self.na ** 2 + SENSOR_PIXEL_UM / (self.objective * self.na), um)
+        sigma = 0.5 * self.na * max(0.0, dz_um - dof_um / 2) / self.px_um
         if sigma > 0.3:
             img = _blur(img, sigma)
         img *= 1.0 if self.light else 0.15

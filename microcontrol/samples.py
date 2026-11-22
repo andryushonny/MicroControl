@@ -315,7 +315,7 @@ def corner(m, which, img=None):
         k = len(m._regions)
         persist(m)
         return (f"Selection {num(m, k)} ({m.objective}x): corner 1 at X {p.x:.0f}, Y {p.y:.0f} um, focus point "
-                f"{len(numbered(m)) - len(m._pending['pts']) + 1}. Go to the other corner, press 2")
+                f"{len(numbered(m)) - len(m._pending['pts']) + 1}. Go to the other corner, press 2 (C: cancel)")
     if which != 2:
         raise MicroControlError('E703', "Corner is 1 or 2")
     if not m._pending:

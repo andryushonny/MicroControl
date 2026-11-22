@@ -803,6 +803,14 @@ def _run(m, fullscreen=False, _keys=None):
         L.event('MAN-012', r_ + ".")
         return r_ + " (Ctrl+Z: back)"
 
+    def pending_ring():
+        """Прямоугольник новой области: кадры от угла 1 до того, где столик (настоящие мкм), или None."""
+        if not m._pending or SM.obj(m, m._pending) != m.objective:
+            return None
+        rp = m.real_position
+        x0_, y0_, x1_, y1_ = SM.rect(dict(m._pending, B=(rp.x, rp.y)), *m.frame_size)
+        return np.array([(x0_, y0_), (x1_, y0_), (x1_, y1_), (x0_, y1_)], float)
+
     def draw_nav(view, Wl, bh_, shape):
         """Карта образца: в углу кадра (камера крупно) или на всё поле (Tab), камера тогда — в углу."""
         from .layers import rings as _rings
@@ -852,6 +860,9 @@ def _run(m, fullscreen=False, _keys=None):
                          f"{SM.num(m, k_)}  {SM.obj(m, m._regions[k_])}x", b_, SM.col(m, k_),
                          [q_ for k2, q_ in boxes_.items() if k2 not in mine_]))
         nav.labels(mp, lab_, [(inset[0] - mr[0], inset[1] - mr[1], inset[2] - mr[0], inset[3] - mr[1])] if nv['big'] else [])
+        pr_ = pending_ring()
+        if pr_ is not None:                                 # новая область (угол 1 — столик): пунктир её цвета
+            nav.poly(mp, pr_, SM.col(m, len(m._regions)), 2, dashed=True)
         nav.poly(mp, cam, (40, 230, 255), 2)                # камера здесь
         cx_, cy_ = nav.to_px(cam.mean(0))
         cv2.drawMarker(mp, (int(cx_), int(cy_)), (40, 230, 255), cv2.MARKER_CROSS, 10, 1, cv2.LINE_AA)
@@ -928,13 +939,7 @@ def _run(m, fullscreen=False, _keys=None):
                                       fr_, mm_ + (",  brush" if reg.get('src') else "")])
                               if not hd_ else [mm_ + ", hidden on the maps"]))
             order.append(k)
-        if m._pending:
-            k = len(m._regions)
-            items.append(dict(title=f"Selection {SM.num(m, k)}", color=SM.col(m, k), thumbs=m._pending.get('thumbs', []),
-                              go=False, confirm=car['confirm'] == k, obj=f"{SM.obj(m, m._pending)}x",
-                              lines=["corner 1 set", "go to the other corner, press 2", f"focus points {first_num(-1)}"]))
-            order.append(k)
-        car['order'] = order
+        car['order'] = order                               # новая (только угол 1) — в списке после угла 2
         return items
 
     MENU = ["Open", "New project", "New sample", "Info", "Scans", "View", "Help"]
@@ -1552,6 +1557,10 @@ def _run(m, fullscreen=False, _keys=None):
                                       2 if k_ == m._sel else 1, cv2.LINE_AA, 4)
             if ov_ is not None:
                 view[:, :Wl] = cv2.addWeighted(ov_, 0.3, view[:, :Wl], 0.7, 0)
+            pr_ = pending_ring()
+            if pr_ is not None:                             # новая область: от угла 1 до столика, пунктиром
+                UI.dashed_poly(view[:, :Wl], np.array([to_v(S_) for S_ in pr_], float),
+                               SM.col(m, len(m._regions)), 2)
             if rul['on'] and rul['pts']:                    # линейка (точки — на образце: едут вместе с ним)
                 a_ = to_v(rul['pts'][0])
                 if len(rul['pts']) == 2:

@@ -44,6 +44,7 @@ HELP = ["Shift+Esc: Exit (or close the window)", "P: Hide / show the left panel"
         "1 / 2: Corners of a selection, one after another (their Z is kept as focus points); a higher objective may mark inside a lower one",
         "F: Autofocus   K: Keep Z here as a focus point of this selection",
         "Y (or the box): Z follows the focus points of the area: when moving with the arrows and in the scan",
+        "B (or the box): One-side approach against backlash: X and Y always stop coming from the same side (remembered); best at 50x, 100x",
         "Selections (right, as layers 10x > 50x > 100x): click = choose, Go = drive there, x = delete;  , / . = previous / next;  Enter = drive",
         "C: Cancel the new selection / delete the chosen one (Ctrl+Z brings it back)",
         "S: Scan the selections of this objective and stitch them, here in the window (Esc: stop)",
@@ -1864,6 +1865,16 @@ def _run(m, fullscreen=False, _keys=None):
             rects['usefp'] = (x_l - 6, cb[1] - 4, cb[2] + 40 + UI.size(t_, FS)[0], cb[3] + 4)
             right = max(right, rects['usefp'][2], rects['obj'][2] + 60)
             y += LH
+            # флажок: люфт — подъезд всегда с одной стороны (помнится для прибора)
+            os_ = bool(m.one_side)
+            cb = (x_l, y - th0 - 2, x_l + th0 + 4, y + 2)
+            ops.append(('c', cb, os_))
+            t_ = f"One-side approach (backlash, overshoot {m.overshoot} steps)"
+            ops.append(('t', t_, cb[2] + 10, y, FS, UI.TEXT if os_ else UI.DIM, 1))
+            ops.append(('t', "B", cb[2] + 22 + UI.size(t_, FS)[0], y, FS, UI.ACCENT, 1))
+            rects['oneside'] = (x_l - 6, cb[1] - 4, cb[2] + 40 + UI.size(t_, FS)[0], cb[3] + 4)
+            right = max(right, rects['oneside'][2])
+            y += LH
             lt_ = f"Light {'on' if m.light else 'off'}"   # свет и лазер: состояние и клавиши
             ops.append(('t', lt_, x_l, y, FS, UI.TEXT if m.light else UI.DIM, 1))
             ops.append(('t', "L", x_l + UI.size(lt_ + "  ", FS)[0], y, FS, UI.ACCENT, 1))
@@ -2230,6 +2241,9 @@ def _run(m, fullscreen=False, _keys=None):
             if hit and hit[0] == 'usefp':
                 key, edit = ord('y'), None
                 break
+            if hit and hit[0] == 'oneside':
+                key, edit = ord('b'), None
+                break
             if hit and hit[0] == 'panel':                # кнопка «спрятать / показать панель»
                 key, edit = ord('p'), None
                 break
@@ -2343,6 +2357,11 @@ def _run(m, fullscreen=False, _keys=None):
                 m._map_win = None
                 msg = (f"Arrows {'left / right' if raw == '[' else 'up / down'} turned the other way, the mini map "
                        f"follows them (remembered; {raw} again: back)")
+            elif ch == 'b':                                # B: подъезд с одной стороны (люфт), помнится для прибора
+                m.one_side = not m.one_side
+                msg = (f"One-side approach on: X and Y always stop coming from the same side (a move back goes "
+                       f"{m.overshoot} steps past and returns); scans go row by row. Remembered for this microscope"
+                       if m.one_side else "One-side approach off: scans go as a snake (faster, backlash counted by the stitch)")
             elif ch == 'y':
                 m._use_fp = not m._use_fp
                 msg = ("Z follows the focus points: arrows inside an area and every scan frame" if m._use_fp else

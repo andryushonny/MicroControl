@@ -14,7 +14,8 @@ from .stats import timed
 from . import project as P_
 
 AXES = ('x', 'y', 'z')
-ORIENTATION = ('map_flip_x', 'map_flip_y', 'arrows_flip_x', 'arrows_flip_y', 'turn_180', 'swap_xy', 'mirror_x', 'mirror_y', 'reverse_x', 'reverse_y', 'reverse_z')   # помнится для прибора
+ORIENTATION = ('map_flip_x', 'map_flip_y', 'arrows_flip_x', 'arrows_flip_y', 'turn_180', 'swap_xy', 'mirror_x', 'mirror_y', 'reverse_x', 'reverse_y', 'reverse_z',
+               'one_side', 'overshoot')   # помнится для прибора (подъезд с одной стороны — тоже)
 WEAK_FOCUS = 1.3      # пик резкости ниже 1.3 × типичной — фокус ненадёжен (мало деталей)
 
 # старые имена (до 0.7.0) -> новые: старое имя даёт ошибку с подсказкой, а не молчит

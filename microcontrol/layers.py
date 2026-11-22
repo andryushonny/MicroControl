@@ -313,7 +313,7 @@ def sync_brush(m):
     if getattr(m, '_sample', None) is None:
         return None
     changed = []
-    for par in [r for r in m._regions if not is_group(r) and not r.get('src')]:
+    for par in [r for r in m._regions if not is_group(r)]:        # и выделения кисти: снятые — тоже родители
         sc = Selection(m.sample, par).latest
         if not sc:
             continue

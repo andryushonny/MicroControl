@@ -59,9 +59,12 @@ class NavMap:
             return None
         size = g['pos'].max(0) + (g['W'], g['H'])
         k = min(1.0, 4000 / size.max())                    # как в stitch.make_preview
-        pyr = [(k, img)]
+        ok = (img.max(2) > 6).astype(np.uint8) * 255        # где кадры (чёрное вокруг — прозрачно)
+        ok = cv2.erode(ok, np.ones((3, 3), np.uint8))
+        pyr = [(k, img, ok)]
         while max(pyr[-1][1].shape[:2]) > 300:
-            pyr.append((pyr[-1][0] / 2, cv2.pyrDown(pyr[-1][1])))
+            pyr.append((pyr[-1][0] / 2, cv2.pyrDown(pyr[-1][1]), cv2.resize(pyr[-1][2], None, fx=0.5, fy=0.5,
+                                                                               interpolation=cv2.INTER_NEAREST)))
         self._prev[folder] = (mt, pyr, g)
         return pyr, g
 
@@ -72,15 +75,17 @@ class NavMap:
         pyr, g = got
         Mi = np.linalg.inv(g['Mo']) * g['ms']                # пиксели мозаики -> мкм столика
         off = Mi @ (g['c'] + (g['W'] / 2, g['H'] / 2))
-        k, img = pyr[0]
-        for k_, im_ in pyr:                                 # уровень пирамиды ~ масштаб карты
+        k, img, ok = pyr[0]
+        for k_, im_, ok_ in pyr:                            # уровень пирамиды ~ масштаб карты
             if abs(np.linalg.det(Mi)) ** 0.5 / k_ / self.s <= 1.6:
-                k, img = k_, im_
+                k, img, ok = k_, im_, ok_
         w, h = self.size
         A = Mi / k / self.s                                 # пиксели превью -> пиксели карты
         t = (-off - self.c) / self.s + (w / 2, h / 2)
         M = np.c_[A, t]
-        cv2.warpAffine(img, M, (w, h), dst=canvas, flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_TRANSPARENT)
+        pic = cv2.warpAffine(img, M, (w, h), flags=cv2.INTER_LINEAR)
+        msk = cv2.warpAffine(ok, M, (w, h), flags=cv2.INTER_NEAREST) > 0
+        canvas[msk] = pic[msk]
 
     def base(self, scans, w, h):
         """Подложка карты: мозаики scans (папки, сначала меньшее увеличение). Кэш, пока вид не менялся."""

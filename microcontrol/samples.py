@@ -655,12 +655,13 @@ def carousel(H, items, sel, scroll=0, title="Selections", go=True, hover=None, t
                 g[:] = (g * 0.6 + np.array(dim(c, 0.35)) * 0.4).astype(np.uint8)
                 cv2.rectangle(img, (x0, ys[k][0]), (xr, ends[k] + 2), dim(c, 0.8), 1)
     # 3) карточки
+    dmax = max(depth) if depth else 0
     for k, it in enumerate(items):
         y0, y1 = ys[k]
         if y1 <= top or y0 >= H:
             continue
         ix = 6 + IND * depth[k]
-        x1c = W - 7 - 4 * depth[k]                                         # внутри рамки своего слоя
+        x1c = W - 7 - 4 * dmax                                             # правый край — общий: кнопки в один столбец
         th = it.get('thumbs') or []
         c = it['color'] if not it.get('muted') else dim(it['color'], 0.7)
         card = img[max(top, y0):min(H, y1), ix:x1c]

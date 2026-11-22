@@ -26,7 +26,7 @@ from .join import join
 from .stitch import stitch
 from .mask import export, clean
 from .optics import measure_distortion as distortion
-from .viewer import view, hints, train_hints
+from .viewer import view, view_window, hints, train_hints
 from . import layers, snap                            # выделения-слои (контуры, операции), строгая геометрия съёмки
 from .agent import Agent
 from .selections import list_selections as selections, remove_selection, open_selection
@@ -48,7 +48,8 @@ PROJECTS (Project > Sample > Selection > Scan)
   p = mc.Project("k3f9x")              Open an existing project by its id (also Microscope(project="k3f9x"))
   s = p.sample("Chip 1", "about")      A sample of it (one substrate): open or create
   m = mc.Microscope(sample=s)          Work with it (or m.sample = s); its selections come back
-  mc.projects(), mc.all_samples()      What is there;  p.samples, s.selections, s.scans()
+  mc.projects(), mc.all_samples()      What is there, as a table with dates;  p.samples, s.selections, s.scans()
+  mc.view_window(folder)               Open a scan in the viewer in its own window (one window per project)
   s.selections[0].latest.view()        The last scan of a selection; .scans — every version
   Menu in both windows                 Open, New project, New sample, Info, Scans, View, Help
 

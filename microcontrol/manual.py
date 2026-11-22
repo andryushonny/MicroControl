@@ -264,7 +264,7 @@ STEP_HELP = [
     "Step 2: open the overview (double-click it on the map or V), mark 3 crosses (C), paint flakes with the brush (B)",
     "Step 3: put 50x or 100x, choose an area on the right and press Scan area",
     "Step 4: choose an area and press Export: drawing for AutoCAD (DWG + DXF with pictures, crosses and outlines)"]
-BUTTONS = ["Scan area", "New area", "Export", "Settings"]
+BUTTONS = ["New area", "Scan area", "Export", "Settings"]
 
 
 MAP_COLS, MAP_ROWS = 11, 9    # видимое окно мини-карты, кадров
@@ -882,12 +882,13 @@ def _run(m, fullscreen=False, _keys=None):
             fr_ = (f"{nx_} x {ny_} = {nfr_} frames, " if ny_ > 1 or not reg.get('shape') else f"{nfr_} frames, ") + \
                 TM.fmt(TM.estimate(m, nfr_, 'points' if m._use_fp and reg['pts'] else 'off', o_)[0])
             hd_ = SM.hidden(m, k)
+            sh_ = shot_of(k)
             items.append(dict(title=SM.title(m, k), obj=f"{o_}x", color=SM.col(m, k), chosen=k in car['multi'],
                               thumbs=[] if hd_ else reg.get('thumbs', []), confirm=car['confirm'] == k, depth=depth,
                               muted=o_ != m.objective or hd_, hidden=bool(reg.get('hidden')),
-                              lines=([fr_, mm_ + (",  brush" if reg.get('src') else ""),
-                                      f"focus points {first_num(k)}"]
-                                     + ([f"put {o_}x in place to scan it"] if o_ != m.objective else []))
+                              lines=([(f"scanned {sh_}" if sh_ else "not scanned yet") +
+                                      ("" if sh_ or o_ == m.objective else f": put {o_}x in place"),
+                                      fr_, mm_ + (",  brush" if reg.get('src') else "")])
                               if not hd_ else [mm_ + ", hidden on the maps"]))
             order.append(k)
         if m._pending:
@@ -919,6 +920,21 @@ def _run(m, fullscreen=False, _keys=None):
             if sc_ and os.path.exists(os.path.join(sc_.folder, 'join', 'preview_all.jpg')):
                 out.append((sc_.folder, k_))
         return out
+
+    def shot_of(k):
+        """Когда снято выделение k (последняя съёмка, 'дд.мм чч:мм') или None; кэш на секунду."""
+        if time.monotonic() - car.get('shot_t', -9) > 1.0:
+            from .project import Selection
+            car['shot'] = {}
+            for r_ in m._regions:
+                if r_.get('kind') == 'group':
+                    continue
+                sc_ = Selection(m.sample, r_).latest
+                if sc_:
+                    b_ = os.path.basename(sc_.folder)          # 2026-11-22_123831
+                    car['shot'][r_['uid']] = f"{b_[8:10]}.{b_[5:7]} {b_[11:13]}:{b_[13:15]}" if len(b_) >= 15 else b_
+            car['shot_t'] = time.monotonic()
+        return car['shot'].get(m._regions[k].get('uid'))
 
     def step_now():
         """Шаг работы: 0 — ничего не снято, 1 — есть обзор, но нет участков внутри, 2 — участки ждут съёмки,
@@ -1048,12 +1064,21 @@ def _run(m, fullscreen=False, _keys=None):
         try:
             if item == "Open":
                 ss = P_.all_samples(m.folder)
-                rows = [f"{x.project.uid}  {x.title:<44} {len(x.data.get('selections', [])):>3} sel  "
-                        f"{len(P_.all_scans(x.folder)):>3} scans   {x.description}" for x in ss]
+                head_, rows = P_.sample_table(ss)
                 cur = next((i for i, x in enumerate(ss) if x == m.sample), None)
                 r_ = D.choose("Open a sample (project id, project / sample)", rows, cur,
-                              ("Open", "By project id...", "New project...", "New sample..."))
+                              ("Open", "View in a new window", "By project id...", "New project...", "New sample..."),
+                              header=head_)
                 if r_ is None:
+                    return
+                if r_[0] == "View in a new window":                # посмотреть другой проект, не трогая столик
+                    from .viewer import view_window
+                    ls_ = P_.latest_scans(ss[r_[1]].folder)
+                    if ls_:
+                        view_window(ls_[0])
+                        msg = f"{ss[r_[1]].title}: opened in a new window"
+                    else:
+                        msg = f"{ss[r_[1]].title}: nothing scanned yet"
                     return
                 if r_[0] == "Open":
                     m.sample = ss[r_[1]]

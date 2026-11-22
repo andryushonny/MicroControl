@@ -865,3 +865,18 @@ m._sel = 0
 M.run(m, fullscreen=False, _keys=[-1, ('tbar', bx("Export")), -1, -1])   # чертёж одной кнопкой
 assert os.path.exists(os.path.join(f, 'export', 'drawing.dxf')), os.listdir(os.path.join(f, 'export'))
 m.close(); print("Navigator: drag on the map - new area, click - go, Tab, Scan area, Export: OK")
+
+# ------------------------------------------------------------------ 32. Проекты таблицей с датами; просмотр в своём окне
+import time as _t
+pj = mc.Project('Tbl test', 'two chips'); pj.sample('Chip A'); pj.sample('Chip B')
+t_ = repr(mc.projects())
+assert 'Created' in t_ and 'Updated' in t_ and 'Tbl test' in t_ and pj.uid in t_, t_
+assert 'Tbl test / Chip A' in repr(mc.all_samples()) and '<table>' in mc.projects()._repr_html_()
+m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp()); m.focus()
+fw, fh = m.frame_size
+m.area = mc.Area(0, 0, 2 * fw, 2 * fh)
+f = m.scan(); mc.stitch(f, verbose=False); m.close()
+p_ = mc.view_window(f); _t.sleep(6)
+assert p_.poll() is None, p_.returncode                             # своё окно — живёт отдельно
+p_.terminate()
+print("Projects as a table with dates, the viewer in its own window: OK")

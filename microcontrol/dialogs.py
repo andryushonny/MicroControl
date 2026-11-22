@@ -85,19 +85,23 @@ def ask(title, label, value=''):
     return out.get('r')
 
 
-def choose(title, rows, current=None, buttons=("Open",), extra=None):
-    """Список строк -> (кнопка, индекс) или None. extra — подпись сверху."""
+def choose(title, rows, current=None, buttons=("Open",), extra=None, header=None):
+    """Список строк -> (кнопка, индекс) или None. extra — подпись сверху, header — строка заголовков колонок
+    (тем же моноширинным шрифтом, что и список: таблица)."""
     import tkinter as tk
     root = _root()
     w = _win(root, title)
     out = {}
     if extra:
         tk.Label(w, text=extra, justify='left').pack(anchor='w', padx=10, pady=(10, 0))
+    if header:
+        tk.Label(w, text=header, font=('Consolas', 10, 'bold'), anchor='w', justify='left').pack(
+            fill='x', padx=12, pady=(10, 0))
     fr = tk.Frame(w)
-    fr.pack(fill='both', expand=True, padx=10, pady=10)
+    fr.pack(fill='both', expand=True, padx=10, pady=(2 if header else 10, 10))
     sb = tk.Scrollbar(fr)
     sb.pack(side='right', fill='y')
-    lb = tk.Listbox(fr, width=100, height=min(20, max(5, len(rows))), yscrollcommand=sb.set,
+    lb = tk.Listbox(fr, width=min(170, max(100, *(len(r) + 2 for r in rows))) if rows else 100, height=min(20, max(5, len(rows))), yscrollcommand=sb.set,
                     font=('Consolas', 10), activestyle='dotbox')
     for r in rows:
         lb.insert('end', r)

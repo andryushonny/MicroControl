@@ -227,6 +227,23 @@ def view(folder, fullscreen=False, sensitivity=None, _keys=None):
         raise
 
 
+def view_window(folder):
+    """Открыть съёмку в просмотре в НОВОМ окне (отдельный процесс): на каждый проект — своё окно, текущее
+    остаётся открытым. Возвращает процесс."""
+    import subprocess
+    import sys
+    from . import project as P_
+    folder = os.path.abspath(folder)
+    smp = P_.sample_obj(folder)
+    base = smp.project.base if smp else os.path.dirname(folder)
+    pkg = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    env = dict(os.environ, PYTHONPATH=pkg + os.pathsep + os.environ.get('PYTHONPATH', ''))
+    kw = dict(creationflags=getattr(subprocess, 'CREATE_NEW_PROCESS_GROUP', 0)) if os.name == 'nt' else \
+        dict(start_new_session=True)
+    return subprocess.Popen([sys.executable, '-c', f"import microcontrol as mc; mc.view({folder!r})"], cwd=base,
+                            env=env, **kw)
+
+
 def _view(folder, fullscreen=False, sensitivity=None, _keys=None):
     """Открыть сшитый скан (или папку сеанса из нескольких образцов). Справа — карусель образцов:
     щелчок — открыть образец, x — убрать образец (папка уходит в <сеанс>/_removed/), , / . — предыдущий / следующий."""
@@ -331,6 +348,11 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
     menu = dict(hover=None, hits=[])
     from . import project as P_
     smp = P_.sample_obj(folder)                             # образец этой съёмки (если она в проекте)
+    try:                                                    # заголовок окна — проект и образец (окон может быть несколько)
+        cv2.setWindowTitle(WIN, f"{smp.title} [{smp.project.uid}] - MicroControl" if smp else
+                           f"{os.path.basename(folder)} - MicroControl")
+    except cv2.error:
+        pass
 
     def show(img):
         ttl = (smp.title + f"  [{smp.project.uid}]" + (f"  —  {smp.description}" if smp.description else "")) if smp else os.path.basename(folder)
@@ -345,16 +367,20 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
         try:
             if item == "Open":
                 ss = P_.all_samples(base_)
-                rows = [f"{x.title:<44} {len(P_.all_scans(x.folder)):>3} scans   {x.description}" for x in ss]
-                r_ = D.choose("Open a sample (its latest scans)", rows,
-                              next((i for i, x in enumerate(ss) if x == smp), None), ("Open",))
+                head, rows = P_.sample_table(ss)
+                r_ = D.choose("Open a sample (its latest scans): every project in its own window", rows,
+                              next((i for i, x in enumerate(ss) if x == smp), None), ("New window", "Open here"),
+                              header=head)
                 if r_:
                     ls = P_.latest_scans(ss[r_[1]].folder)
-                    if ls:
+                    if not ls:
+                        st['msg'] = f"{ss[r_[1]].title}: nothing scanned yet"
+                    elif r_[0] == "New window":
+                        view_window(ls[0])
+                        st['msg'] = f"{ss[r_[1]].title}: opened in a new window"
+                    else:
                         g.save(px_um)
                         st['switch'] = ls[0]
-                    else:
-                        st['msg'] = f"{ss[r_[1]].title}: nothing scanned yet"
             elif item == "Scans":
                 lst = list_selections(smp.folder if smp else os.path.dirname(folder))
                 rows = repr(lst).split("\n")[2:-1:2]

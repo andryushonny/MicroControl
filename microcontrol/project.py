@@ -238,17 +238,84 @@ class Scan:
         return f"Scan {os.path.basename(self.folder)}"
 
 
+def _date(iso):
+    """'2026-11-22T12:43:10' -> '2026-11-22 12:43'."""
+    return (iso or '')[:16].replace('T', ' ') or '-'
+
+
+def _table(cols, rows):
+    """Таблица строками: cols — заголовки, rows — списки значений; ширина колонок по содержимому."""
+    w = [max(len(str(c)), *(len(str(r[i])) for r in rows)) if rows else len(str(c)) for i, c in enumerate(cols)]
+    line = lambda r: "  ".join(str(v).ljust(w[i]) if i < len(r) - 1 else str(v) for i, v in enumerate(r))
+    return line(cols), [line(r) for r in rows]
+
+
+class _Listing(list):
+    """Список проектов / образцов, который печатается таблицей (и в Jupyter — HTML-таблицей)."""
+    COLS = ()
+
+    def rows(self):
+        return []
+
+    def text(self):
+        head, rows = _table(self.COLS, self.rows())
+        return head, rows
+
+    def __repr__(self):
+        if not self:
+            return "(none yet)"
+        head, rows = self.text()
+        return "\n".join([head, "-" * len(head)] + rows)
+
+    def _repr_html_(self):
+        import html
+        cells = lambda r, tag: "".join(f"<{tag} style='text-align:left;padding:2px 10px'>{html.escape(str(v))}</{tag}>"
+                                       for v in r)
+        return ("<table><tr>" + cells(self.COLS, 'th') + "</tr>" +
+                "".join("<tr>" + cells(r, 'td') + "</tr>" for r in self.rows()) + "</table>")
+
+
+class ProjectList(_Listing):
+    COLS = ("#", "Id", "Project", "Samples", "Selections", "Scans", "Created", "Updated", "Description")
+
+    def rows(self):
+        out = []
+        for i, p in enumerate(self):
+            ss = p.samples
+            out.append([i + 1, p.uid, p.name, len(ss), sum(len(x.data.get('selections', [])) for x in ss),
+                        sum(len(all_scans(x.folder)) for x in ss), _date(p.data.get('created')),
+                        _date(max([p.data.get('updated', '')] + [x.data.get('updated', '') for x in ss])),
+                        p.description])
+        return out
+
+
+class SampleList(_Listing):
+    COLS = ("#", "Id", "Project / sample", "Selections", "Scans", "Created", "Updated", "Description")
+
+    def rows(self):
+        return [[i + 1, s.project.uid, s.title, len(s.data.get('selections', [])), len(all_scans(s.folder)),
+                 _date(s.data.get('created')), _date(s.data.get('updated')), s.description]
+                for i, s in enumerate(self)]
+
+
 def projects(folder='.'):
-    """Все проекты: [Project], новые сверху."""
+    """Все проекты, новые сверху — таблицей: id, имя, образцы, выделения, съёмки, создан, изменён, описание."""
     out = [Project(os.path.basename(os.path.dirname(f)), folder=folder)
            for f in glob.glob(os.path.join(root(folder), '*', Project.FILE))]
-    return sorted(out, key=lambda p: p.data.get('updated', ''), reverse=True)
+    return ProjectList(sorted(out, key=lambda p: p.data.get('updated', ''), reverse=True))
 
 
 def all_samples(folder='.'):
-    """Все образцы всех проектов: [Sample], недавние сверху."""
+    """Все образцы всех проектов, недавние сверху — таблицей (как projects())."""
     out = [s for p in projects(folder) for s in p.samples]
-    return sorted(out, key=lambda s: s.data.get('updated', ''), reverse=True)
+    return SampleList(sorted(out, key=lambda s: s.data.get('updated', ''), reverse=True))
+
+
+def sample_table(samples):
+    """Для диалога Open: (заголовок, строки) — образцы с датами."""
+    sl = samples if isinstance(samples, SampleList) else SampleList(samples)
+    head, rows = _table(sl.COLS[1:], [r[1:] for r in sl.rows()])
+    return head, rows
 
 
 def last(folder='.'):

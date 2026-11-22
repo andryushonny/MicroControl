@@ -47,7 +47,7 @@ Both windows close with **Shift+Esc** or the window's ×. A single `Esc` only ca
 
 `m.manual()` opens the live camera. Move with the arrows (one press = one frame), focus with `E` / `Q` (or `F` — autofocus). Letters do things: `L` light, `I` laser, `W` white balance, `R` ruler, `S` (twice) scan and stitch right in the window, `V` open the result in the viewer.
 
-- **One window, four steps.** The bar on top shows where you are — **1 Overview › 2 Pick areas › 3 Detail › 4 Export** (click a step for what to do) — and the main buttons: **Scan area** (scan + stitch), **New area**, **Export** (drawing for AutoCAD: DWG + DXF of the chosen area), **Settings** (steps, exposure, focus points).
+- **One window, four steps.** The bar on top shows where you are — **1 Overview › 2 Pick areas › 3 Detail › 4 Export** (click a step for what to do) — and the main buttons: **New area**, **Scan area** (scan + stitch), **Export** (drawing for AutoCAD: DWG + DXF of the chosen area), **Settings** (steps, exposure, focus points).
 - **Map** (top right; `Tab` — big map, the camera goes to the corner): everything already shot, at its real place (10x under 50x under 100x), the outlines of the areas and a yellow frame where the camera is now. **Click the map — the stage drives there**; **drag on the map — a new area** on the objective in place; wheel — zoom; right drag — move the map; double-click a shot area — open it in the viewer.
 - **Selection by keys** still works: go to one corner, press `1`, to the opposite one, press `2`.
 - **Focus points:** the height $Z$ at each corner is remembered; `K` adds more points. During the scan every frame gets its own $Z$ from these points, so a tilted sample stays sharp. With the checkbox "Z follows the focus points" the arrows also follow them.
@@ -76,6 +76,8 @@ Both windows close with **Shift+Esc** or the window's ×. A single `Esc` only ca
 `E` in the viewer or `mc.export(folder)` writes `export/` inside the scan folder: a straight PNG of the chosen squares (transparent background), a DXF for AutoCAD in micrometres and a list of the square numbers.
 
 The final result is the drawing `export/drawing.dwg`: every chosen square is its own picture (`export/squares/*.png`, cut exactly along the grid) placed at its real position in micrometres, with the square outlines and numbers on separate layers and an empty `BONDS` layer for drawing bonds. The DWG is written by the free ODA File Converter if it is installed; otherwise there is `drawing.dxf` (AutoCAD: Save As → DWG). Keep the `export/` folder together: pictures in DWG are always separate files. The progress is shown right in the window.
+
+`mc.projects()` and `mc.all_samples()` print a table: id, name, samples, selections, scans, created, updated, description (the Open dialogs show the same). In the viewer, Open → **New window** shows another project in its own window (`mc.view_window(folder)`), the current one stays open.
 
 Squares chosen with the brush become areas by themselves (one per figure, on the next objective) and appear on the map and the live picture in their real shape and size — handy for finding the same places again under a larger objective.
 

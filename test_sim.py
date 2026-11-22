@@ -862,6 +862,6 @@ px_um = json.load(open(os.path.join(f, 'meta.json')))['pixel_size_um']
 g = Grid(f); q0 = np.array([150.0, 120.0]); a_ = 100 / px_um
 g.cr.add(q0); g.cr.add(q0 + (a_, 0)); g.cr.add(q0 + (0, a_)); g.selected |= {(0, 0)}; g.save(px_um)
 m._sel = 0
-M.run(m, fullscreen=False, _keys=[-1, ('tbar', bx("Drawing for AutoCAD")), -1, -1])   # чертёж одной кнопкой
+M.run(m, fullscreen=False, _keys=[-1, ('tbar', bx("Export")), -1, -1])   # чертёж одной кнопкой
 assert os.path.exists(os.path.join(f, 'export', 'drawing.dxf')), os.listdir(os.path.join(f, 'export'))
-m.close(); print("Navigator: drag on the map - new area, click - go, Tab, Scan area, Drawing for AutoCAD: OK")
+m.close(); print("Navigator: drag on the map - new area, click - go, Tab, Scan area, Export: OK")

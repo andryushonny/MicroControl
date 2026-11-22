@@ -53,7 +53,7 @@ HELP = ["Shift+Esc: Exit (or close the window)", "P: Hide / show the left panel"
         "Wheel: zoom   Drag (middle button too): move the zoomed picture   Z: whole frame",
         "Map (top right): click - the stage goes there, drag - a new area on this objective, wheel - zoom, right drag - move",
         "Tab: big map / big camera   Double-click a shot area on the map: open it (crosses, brush, export)",
-        "Buttons on top: Scan area (scan + stitch), New area, Drawing for AutoCAD (DWG + DXF), Settings",
+        "Buttons on top: Scan area (scan + stitch), New area, Export (drawing for AutoCAD: DWG + DXF), Settings",
         "Selections are layers: Ctrl+click cards to mark them, then Merge / Minus / Overlap / Group / Ungroup above the list",
         "The eye on a card hides the selection on the maps (and shows it again); Show all above the list",
         "Squares chosen with the brush in the view become selections (one per figure, next objective)   Shift+drag over a selection: move it",
@@ -258,13 +258,13 @@ def camera_box(m, shape):
     return np.array([P - d * np.linalg.solve(K, np.array(u, float) - c) for u in ((0, 0), (iw, 0), (iw, ih), (0, ih))])
 
 
-STEPS = ["1 Overview", "2 Pick areas", "3 Detail", "4 Drawing"]
+STEPS = ["1 Overview", "2 Pick areas", "3 Detail", "4 Export"]
 STEP_HELP = [
     "Step 1: put a small objective (4x or 10x), drag a rectangle on the map over the chip, then Scan area",
     "Step 2: open the overview (double-click it on the map or V), mark 3 crosses (C), paint flakes with the brush (B)",
     "Step 3: put 50x or 100x, choose an area on the right and press Scan area",
-    "Step 4: choose an area and press Drawing for AutoCAD (DWG + DXF with pictures, crosses and outlines)"]
-BUTTONS = ["Scan area", "New area", "Drawing for AutoCAD", "Settings"]
+    "Step 4: choose an area and press Export: drawing for AutoCAD (DWG + DXF with pictures, crosses and outlines)"]
+BUTTONS = ["Scan area", "New area", "Export", "Settings"]
 
 
 MAP_COLS, MAP_ROWS = 11, 9    # видимое окно мини-карты, кадров
@@ -986,10 +986,10 @@ def _run(m, fullscreen=False, _keys=None):
         if not os.path.exists(os.path.join(sc_.folder, 'grid.json')):
             msg = f"{SM.title(m, k_)}: mark 3 crosses in the view first (double-click it on the map or V, then C)"
             return
-        res = busy("Drawing for AutoCAD", lambda: _export(sc_.folder, dwg=True))
+        res = busy("Export: drawing for AutoCAD", lambda: _export(sc_.folder, dwg=True))
         msg_t = time.monotonic()
-        msg = (f"Drawing failed: {res['e']}" if 'e' in res else
-               f"Drawing saved: {os.path.join(sc_.folder, 'export')}")
+        msg = (f"Export failed: {res['e']}" if 'e' in res else
+               f"Exported (DWG / DXF): {os.path.join(sc_.folder, 'export')}")
 
     def busy(title, fn):
         """Долгое дело в потоке; в окне — полоса прогресса (Progress)."""
@@ -1030,7 +1030,7 @@ def _run(m, fullscreen=False, _keys=None):
         elif what[1] == "New area":
             nv['big'] = m._nav_big = True
             msg = "Drag a rectangle on the map (it takes the objective in place). Click the map: go there"
-        elif what[1] == "Drawing for AutoCAD":
+        elif what[1] == "Export":
             export_drawing()
         elif what[1] == "Settings":
             m._panel_hidden = not getattr(m, '_panel_hidden', False)

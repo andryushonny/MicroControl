@@ -373,6 +373,10 @@ def corner(m, which, img=None):
     if bad:
         raise MicroControlError('E704', f"This selection overlaps Selection {', '.join(map(str, bad))} of the same "
                                         f"objective ({m.objective}x): choose corner 2 so that they do not overlap")
+    from .layers import conflict as _cf
+    bad2_ = _cf(m, new)
+    if bad2_:
+        raise MicroControlError('E704', bad2_)
     m._regions.append(new)
     gp_ = pk_ if pk_ is not None else _geo_parent(m, len(m._regions) - 1)   # лежит в том, где отметили
     new['parent'] = m._regions[gp_]['uid'] if gp_ is not None else None

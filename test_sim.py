@@ -1017,8 +1017,12 @@ try:
     m.scan(); raise AssertionError("a draft was scanned")
 except mc.SafetyError as e:
     assert 'draft' in str(e), e
-_reset(); a = _add(0, 0, 2 * fw, 2 * fh); b = _add(2 * fw, 0, 2.5 * fw, 0.5 * fh, obj=50); LY.union(m, [a, b])
-LY.move(m, 0, 30, 20); _scan_ok('10x + 50x, moved')
+_reset(); a = _add(0, 0, 2 * fw, 2 * fh); b = _add(2 * fw, 0, 2.5 * fw, 0.5 * fh, obj=50)
+try:
+    LY.union(m, [a, b]); raise AssertionError("10x and 50x merged")             # разные слои не сливаются
+except ValueError as e:
+    assert 'one objective' in str(e), e
+LY._drop(m, [b]); LY.move(m, 0, 30, 20); _scan_ok('10x, moved')
 _reset()
 try:
     m.scan(); raise AssertionError("scanned without selections")
@@ -1280,3 +1284,85 @@ g = Grid(f); g.selected |= {(1, 0)}; g.save(px_um)                        # вы
 print(LY.sync_brush(m)); SM.persist(m)
 assert len([r for r in m._regions if r.get('kind') == 'draft']) == 2, m._regions
 m.close(); print("A square at the edge makes a draft (cut to the edge); squares chosen in an older version count: OK")
+
+
+# ------------------------------------------------------------------ 42. Конфликты draft / selection разных уровней: все ограничители и сообщения
+from shapely.geometry import box as _box
+from microcontrol import samples as SM, layers as LY
+from microcontrol.config import OBJECTIVES as _OB
+from microcontrol.mask import Grid
+m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp()); m.focus()
+fw, fh = m.frame_size
+m.area = mc.Area(0, 0, 3 * fw, 2 * fh); f = m.scan(); mc.stitch(f, verbose=False)
+px_um = json.load(open(os.path.join(f, 'meta.json')))['pixel_size_um']
+g = Grid(f); p0 = np.array([150.0, 120.0]); a_ = 100 / px_um
+g.cr.add(p0); g.cr.add(p0 + (a_, 0)); g.cr.add(p0 + (0, a_)); g.labels = {(0, 0): (5, 7), (2, 1): (7, 8)}
+g.selected |= {(1, 0), (2, 0)}; g.save(px_um)
+LY.sync_brush(m); SM.persist(m)
+S1 = m._regions[0]
+kd = next(k for k, r in enumerate(m._regions) if r.get('kind') == 'draft')
+snap_ = lambda: json.dumps([{k: v for k, v in r.items() if k != 'thumbs'} for r in m._regions], sort_keys=True, default=str)
+
+def sel(x0, y0, x1, y1, o, parent=None):
+    r = dict(uid=os.urandom(8).hex(), num=LY.new_num(m), obj=o, fw=fw * 10 / o, fh=fh * 10 / o, pts=[], thumbs=[],
+             parent=parent)
+    LY.set_geom(m, r, _box(x0, y0, x1, y1)); m._regions.append(r); return len(m._regions) - 1
+
+ok, msg = LY.draft_to_selection(m, kd, 10)                                 # a) 10x в съёмке 10x — нельзя
+assert not ok and 'larger objective' in msg and m._regions[kd].get('kind') == 'draft', msg
+gd = LY.geom(m, m._regions[kd]); bx = gd.bounds
+k50 = sel(bx[0] + 5, bx[1] + 5, bx[0] + 40, bx[1] + 30, 50, S1['uid'])    # 50x внутри черновика (снаружи — съёмка 10x)
+ok, msg = LY.draft_to_selection(m, kd, 50)                                 # b) черновик 50x наехал бы на 50x
+assert not ok and 'E704' in msg, msg
+LY._drop(m, [k50])
+ok, msg = LY.draft_to_selection(m, kd, 50)                                 # c) теперь можно
+assert ok and m._regions[kd].get('kind') is None and m._regions[kd]['obj'] == 50, msg
+s0 = snap_()
+gb = LY.geom(m, S1).bounds
+try:                                                                       # d) за край родителя — нельзя, ничего не тронуто
+    LY.move(m, kd, gb[2], 0); raise AssertionError("moved beyond the parent")
+except ValueError as e:
+    assert 'beyond' in str(e), e
+assert snap_() == s0
+k2 = sel(gb[2] - 60, gb[1] + 10, gb[2] - 20, gb[1] + 40, 50, S1['uid'])   # другой 50x рядом
+gk = LY.geom(m, m._regions[k2]).bounds; gk0 = LY.geom(m, m._regions[kd]).bounds
+try:                                                                       # e) наехать на такой же — нельзя
+    LY.move(m, k2, gk0[0] - gk[0] + 5, gk0[1] - gk[1] + 5); raise AssertionError("overlap")
+except ValueError as e:
+    assert 'E704' in str(e), e
+c0 = np.array(LY.geom(m, m._regions[kd]).centroid.coords[0])               # f) родитель едет — дети с ним
+LY.move(m, 0, 7, 3)
+assert np.allclose(np.array(LY.geom(m, m._regions[kd]).centroid.coords[0]) - c0, (7, 3), atol=0.05)
+LY.move(m, 0, -7, -3)
+try:                                                                       # g) 10x + 50x не сливаются
+    LY.union(m, [0, k2]); raise AssertionError("merged across objectives")
+except ValueError as e:
+    assert 'one objective' in str(e), e
+n_ = len(m._regions)                                                       # h) 50x + 50x сливаются
+print(LY.union(m, [kd, k2])); assert len(m._regions) == n_ - 1
+kd = next(k for k, r in enumerate(m._regions) if r.get('obj') == 50 and r.get('kind') is None)
+gk = LY.geom(m, m._regions[kd]).bounds                                     # i) объектив по кругу: пирамидка цела
+k100 = sel(gk[0] + 1, gk[1] + 1, gk[0] + 10, gk[1] + 8, 100, m._regions[kd]['uid'])
+ok, msg = LY.next_objective_of(m, kd, sorted(_OB))
+assert ok and 10 < m._regions[kd]['obj'] < 100, (msg, m._regions[kd]['obj'])
+m.objective = 50; m.focus()                                                # j) углы 1-2 на такой же объектив — E704
+m._regions[kd].update(obj=50, fw=fw / 5, fh=fh / 5)
+c_ = LY.geom(m, m._regions[kd]).centroid.coords[0]
+m.goto(x=c_[0], y=c_[1])
+try:
+    SM.corner(m, 1); raise AssertionError("corner inside the same objective")
+except mc.MicroControlError as e:
+    assert 'E704' in str(e), e
+m.close(); print("Conflicts: draft->selection checks objective and overlap, moves keep the pyramid (children along), "
+                 "no merge across objectives, objective cycling skips what breaks it, corners refuse overlap: OK")
+m = mc.Microscope('sim', objective=50, folder=tempfile.mkdtemp()); m.focus()   # k) 10x внутри 50x — нельзя
+import microcontrol.manual as M
+fw, fh = m.frame_size
+M.run(m, fullscreen=False, _keys=[-1, -1]); nav = m._nav
+M.run(m, fullscreen=False, _keys=[-1, ('maprect', *nav.to_px((0, 0)), *nav.to_px((600, 400))), -1, -1])
+assert len(m._regions) == 1 and m._regions[0]['obj'] == 50
+m.objective = 10; m.focus(); fw, fh = m.frame_size
+M.run(m, fullscreen=False, _keys=[-1, -1]); nav = m._nav
+M.run(m, fullscreen=False, _keys=[-1, ('maprect', *nav.to_px((150, 120)), *nav.to_px((300, 220))), -1, -1])
+assert len(m._regions) == 1, m._regions                                    # маленький 10x внутри 50x не создан
+m.close(); print("A coarser area inside a finer one is refused: OK")

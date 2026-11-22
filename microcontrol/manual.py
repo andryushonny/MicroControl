@@ -751,21 +751,12 @@ def _run(m, fullscreen=False, _keys=None):
         return best[1] if best else getattr(m, '_bl', None)
 
     def draft_to_selection(k):
-        """Черновик -> выделение под объектив, что стоит (оно снимается и идёт в экспорт). Обратного хода нет.
-        Пирамидка: объектив больше, чем у снятого выделения, в котором черновик лежит. -> сообщение."""
-        from .layers import to_area, idx as _idx
-        rs_ = m._regions[k]
-        up_ = rs_
-        while up_ is not None and (up_ is rs_ or up_.get('kind') in ('draft', 'group')):
-            pk_ = _idx(m, up_.get('parent')) if up_.get('parent') else None
-            up_ = m._regions[pk_] if pk_ is not None else None
-        if up_ is not None and SM.obj(m, up_) >= m.objective:
-            return (f"{SM.title(m, k)} lies in a {SM.obj(m, up_)}x scan: put a larger objective (M), then make it "
-                    "a selection")
-        t0_ = SM.title(m, k)
-        to_area(m, k, m.objective)
-        SM.persist(m)
-        return f"{t0_} is now {SM.title(m, k)} ({m.objective}x): it will be scanned and goes into the export"
+        """Черновик -> выделение под объектив, что стоит (снимается, идёт в экспорт). Обратного хода нет."""
+        from .layers import draft_to_selection as _d2s
+        ok_, msg_ = _d2s(m, k, m.objective)
+        if ok_:
+            SM.persist(m)
+        return msg_
 
     def cycle_objective(k):
         """Объектив выделения — следующий из списка (только пока его не снимали: папка съёмок — по объективу)."""
@@ -778,15 +769,11 @@ def _run(m, fullscreen=False, _keys=None):
             return draft_to_selection(k)
         if Selection(m.sample, rg_).latest:
             return f"{SM.title(m, k)} is already scanned with {SM.obj(m, rg_)}x: mark a new selection for another objective"
-        obs = sorted(OBJECTIVES)
-        o_ = obs[(obs.index(SM.obj(m, rg_)) + 1) % len(obs)] if SM.obj(m, rg_) in obs else obs[0]
-        k_ = m.objective / o_
-        rg_.update(obj=o_, fw=m.frame_size[0] * k_, fh=m.frame_size[1] * k_)
-        if rg_.get('shape'):                               # углы A, B — по кадру нового объектива
-            from .layers import geom, set_geom
-            set_geom(m, rg_, geom(m, rg_))
-        SM.persist(m)
-        return f"{SM.title(m, k)}: {o_}x (click the objective again for the next one)"
+        from .layers import next_objective_of
+        ok_, msg_ = next_objective_of(m, k, sorted(OBJECTIVES))
+        if ok_:
+            SM.persist(m)
+        return msg_
 
     def car_tools():
         """Кнопки операций под заголовком — по отмеченным карточкам."""
@@ -1083,6 +1070,10 @@ def _run(m, fullscreen=False, _keys=None):
         if bad:
             return str(_E('E704', f"Selection {', '.join(map(str, bad))} ({m.objective}x) is already there. "
                                   f"For an area inside it put a larger objective (M), then drag again"))
+        from .layers import conflict as _cf
+        bad2_ = _cf(m, r_)
+        if bad2_:
+            return bad2_
         m._regions.append(r_)
         r_['parent'] = m._regions[gp_]['uid'] if gp_ is not None else None
         m._sel = len(m._regions) - 1
@@ -1139,6 +1130,10 @@ def _run(m, fullscreen=False, _keys=None):
         if bad:
             return (f"[E704] Selection {', '.join(map(str, bad))} ({m.objective}x) is already there. For an area "
                     f"inside it put a larger objective (M), then drag again")
+        from .layers import conflict as _cf
+        bad2_ = _cf(m, r_)
+        if bad2_:
+            return bad2_
         m._regions.append(r_)
         r_['parent'] = m._regions[gp_]['uid'] if gp_ is not None else None
         m._sel = len(m._regions) - 1
@@ -1996,11 +1991,14 @@ def _run(m, fullscreen=False, _keys=None):
                         if np.hypot(*d_) > 0.05:
                             from .layers import move
                             note_brush(m._regions[k_])
-                            move(m, k_, float(d_[0]), float(d_[1]))
+                            try:
+                                move(m, k_, float(d_[0]), float(d_[1]))
+                                msg = f"{SM.title(m, k_)} moved by {d_[0]:+.1f}, {d_[1]:+.1f} um (Ctrl+Z: back)"
+                            except ValueError as e_:          # пирамидка: за родителя / на такое же — нельзя
+                                msg = f"Not moved: {e_}"
                             noted_done()
                             SM.persist(m)
-                            msg, msg_t = (f"{SM.title(m, k_)} moved by {d_[0]:+.1f}, {d_[1]:+.1f} um (Ctrl+Z: back)",
-                                          time.monotonic())
+                            msg_t = time.monotonic()
                 continue
             if c_[0] == 'carw':                                     # прокрутка карусели
                 car['scroll'] = car_clamp(car['scroll'] - 60 * np.sign(c_[3]))

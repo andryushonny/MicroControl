@@ -71,15 +71,55 @@ def is_mask(reg):
 is_draft = is_mask
 
 
-def to_area(m, k, o):
-    """Черновик — в обычный участок на объективе o (чтобы снять его)."""
+def to_area(m, k, o, dry=False):
+    """Черновик — в обычный участок на объективе o (чтобы снять его). dry — без записи кисти (проверка на копии)."""
     r = m._regions[k]
     k_ = m.objective / o
-    detach(m, r)
+    if not dry:
+        detach(m, r)
     r.pop('kind', None)
     g = geom(m, r)
     r.update(obj=o, fw=m.frame_size[0] * k_, fh=m.frame_size[1] * k_)
     set_geom(m, r, g)
+
+
+def draft_to_selection(m, k, o):
+    """Черновик k -> выделение под объектив o (снимается и идёт в экспорт); обратного хода нет.
+    Пирамидка проверяется до изменений: объектив больше, чем у снятого сверху, меньше, чем у выделений внутри,
+    внутри родителя, без наезда на выделение того же объектива. -> (получилось ли, сообщение)."""
+    r = m._regions[k]
+    if not is_mask(r):
+        return False, f"Selection {r['num']} is already a selection"
+    bad = _try(m, lambda t_: (to_area(t_, k, o, dry=True), k)[1])
+    if bad:
+        return False, bad + (": put a larger objective (M) first" if "larger objective" in bad else "")
+    to_area(m, k, o)
+    return True, f"Draft {r['num']} is now Selection {r['num']} ({o}x): it will be scanned and goes into the export"
+
+
+def next_objective_of(m, k, objectives):
+    """Не снятое выделение k — на следующий объектив из списка, при котором пирамидка цела. -> (вышло, сообщение)."""
+    from .samples import obj
+    r = m._regions[k]
+    cur = obj(m, r)
+    i0 = objectives.index(cur) if cur in objectives else -1
+
+    def set_o(mm, kk, o_):
+        r2 = mm._regions[kk]
+        g2 = geom(mm, r2)
+        r2.update(obj=o_, fw=m.frame_size[0] * m.objective / o_, fh=m.frame_size[1] * m.objective / o_)
+        if r2.get('shape'):                                     # углы A, B — по кадру нового объектива
+            set_geom(mm, r2, g2)
+        return kk
+    for j in range(1, len(objectives) + 1):
+        o_ = objectives[(i0 + j) % len(objectives)]
+        if o_ == cur:
+            break
+        if not _try(m, lambda t_: set_o(t_, k, o_)):
+            set_o(m, k, o_)
+            return True, f"Selection {r['num']}: {o_}x (click the objective again for the next one)"
+    return False, (f"Selection {r['num']}: no other objective fits here (it must be larger than the area it lies in, "
+                   "smaller than the areas inside it and not overlap the same objective)")
 
 
 def frame(reg, fw=None, fh=None):
@@ -248,7 +288,15 @@ def union(m, ks):
     t = m._regions[ks[0]]
     if is_group(t):
         raise ValueError("Groups are not merged: ungroup first")
+    from .samples import obj
+    objs = {obj(m, m._regions[k]) for k in ks if not is_mask(m._regions[k])}
+    if len(objs) > 1:
+        raise ValueError("Merge selections of one objective (" + ", ".join(f"{o}x" for o in sorted(objs)) +
+                         " are different layers): drafts may join any")
     g = unary_union([geom(m, m._regions[k]) for k in ks])
+    bad = _try(m, lambda t_: _merged_in(t_, ks, g))              # проверка на копии — до всех изменений
+    if bad:
+        raise ValueError(bad + ": not merged")
     cells_op(m, [m._regions[k] for k in ks], lambda a, *o: a.union(*o))
     for k in ks:
         detach(m, m._regions[k])
@@ -331,19 +379,110 @@ def ungroup(m, ks):
     return f"Group {', '.join(map(str, nums))} ungrouped"
 
 
-def move(m, k, dx, dy):
-    """Сдвинуть контур выделения (мкм)."""
+def move(m, k, dx, dy, _top=True):
+    """Сдвинуть контур выделения (мкм) — вместе со всем, что внутри него (пирамидка не рассыпается).
+    Нельзя вылезти за родителя и наехать на выделение того же объектива: тогда ValueError, ничего не сдвинуто."""
+    import copy as _cp
+    if _top:                                                     # сначала проверить на копии: ничего не трогая
+        class _Try:
+            pass
+        t_ = _Try()
+        t_._regions, t_.frame_size, t_.objective = _cp.deepcopy(m._regions), m.frame_size, m.objective
+        t_._sample = None
+
+        def shift(i):
+            rr = t_._regions[i]
+            for j in [j for j, c in enumerate(t_._regions) if c.get('parent') == rr['uid']]:
+                shift(j)
+            if not is_group(rr):
+                rr['shape'] = to_json(affinity.translate(geom(t_, rr), dx, dy))
+        shift(k)
+        bad = conflict(t_, t_._regions[k])
+        if bad:
+            raise ValueError(bad)
     r = m._regions[k]
-    if is_group(r):
-        for c in [i for i, c in enumerate(m._regions) if c.get('parent') == r['uid']]:
-            move(m, c, dx, dy)
-        return
-    g = affinity.translate(geom(m, r), dx, dy)
-    detach(m, r)
-    r.pop('cells', None)                                        # сдвинутое — уже не по сетке
-    r.pop('factors', None)
-    set_geom(m, r, g)
-    r['pts'] = [dict(p, x=p['x'] + dx, y=p['y'] + dy) for p in r.get('pts') or []]
+    for c in [i for i, c in enumerate(m._regions) if c.get('parent') == r['uid']]:
+        move(m, c, dx, dy, _top=False)
+    if not is_group(r):
+        g = affinity.translate(geom(m, r), dx, dy)
+        detach(m, r)
+        r.pop('cells', None)                                    # сдвинутое — уже не по сетке
+        r.pop('factors', None)
+        set_geom(m, r, g)
+        r['pts'] = [dict(p, x=p['x'] + dx, y=p['y'] + dy) for p in r.get('pts') or []]
+
+
+def _try(m, fn):
+    """Сделать fn(копия) на копии выделений и вернуть conflict() того, что fn вернул (индекс), — без изменений."""
+    import copy as _cp
+
+    class _Try:
+        pass
+    t_ = _Try()
+    t_._regions, t_.frame_size, t_.objective, t_._sample = _cp.deepcopy(m._regions), m.frame_size, m.objective, None
+    k = fn(t_)
+    return conflict(t_, t_._regions[k]) if k is not None else None
+
+
+def _merged_in(t_, ks, g):
+    tg = t_._regions[ks[0]]
+    real = [t_._regions[k] for k in ks if not is_mask(t_._regions[k])]
+    if is_mask(tg) and real:
+        tg.pop('kind', None)
+        tg.update(obj=real[0].get('obj'), fw=real[0].get('fw'), fh=real[0].get('fh'))
+    tg['shape'] = to_json(g)
+    for k in sorted(ks[1:], reverse=True):
+        for c in t_._regions:
+            if c.get('parent') == t_._regions[k].get('uid'):
+                c['parent'] = tg['uid']
+        t_._regions.pop(k)
+    return t_._regions.index(tg)
+
+
+def conflict(m, reg):
+    """Какое правило нарушает выделение (сообщение) или None. Правила пирамидки:
+    1) лежит внутри родителя; 2) объектив больше, чем у снятого выделения сверху, и меньше, чем у выделений
+    внутри; 3) не наезжает на другое выделение того же объектива (черновики и группы не в счёт)."""
+    from .samples import obj
+    if is_group(reg):
+        return None
+    g = geom(m, reg)
+    name = f"{'Draft' if is_mask(reg) else 'Selection'} {reg.get('num')}"
+    pk = idx(m, reg.get('parent')) if reg.get('parent') else None
+    if pk is not None and not is_group(m._regions[pk]):
+        par = m._regions[pk]
+        if not geom(m, par).buffer(max(EPS, 0.002 * max(1.0, (g.area ** 0.5)))).contains(g):
+            return f"{name} would go beyond {'Draft' if is_mask(par) else 'Selection'} {par['num']} it lies in"
+    if not is_mask(reg):
+        up = m._regions[pk] if pk is not None else None
+        while up is not None and (is_mask(up) or is_group(up)):
+            q = idx(m, up.get('parent')) if up.get('parent') else None
+            up = m._regions[q] if q is not None else None
+        if up is not None and obj(m, up) >= obj(m, reg):
+            return f"{name} ({obj(m, reg)}x) lies in Selection {up['num']} ({obj(m, up)}x): it needs a larger objective"
+        todo, seen = [reg.get('uid')], set()                    # выделения внутри — только крупнее
+        while todo:
+            u = todo.pop()
+            for c in m._regions:
+                if c.get('parent') == u and c.get('uid') not in seen:
+                    seen.add(c.get('uid'))
+                    if is_mask(c) or is_group(c):
+                        todo.append(c.get('uid'))
+                    elif obj(m, c) <= obj(m, reg):
+                        return (f"{name} ({obj(m, reg)}x) holds Selection {c['num']} ({obj(m, c)}x): "
+                                "the areas inside need a larger objective")
+        for c in m._regions:
+            if c is not reg and not is_mask(c) and not is_group(c) and obj(m, c) == obj(m, reg) and \
+                    geom(m, c).intersection(g).area > 1e-3 * max(g.area, 1e-9):
+                return f"[E704] {name} would overlap Selection {c['num']} of the same objective ({obj(m, reg)}x)"
+        if not g.is_empty:                                      # не внутри выделения крупнее себя
+            pt = g.representative_point()
+            for c in m._regions:
+                if c is not reg and not is_mask(c) and not is_group(c) and obj(m, c) > obj(m, reg) and \
+                        geom(m, c).buffer(EPS).contains(pt) and g.area < geom(m, c).area:
+                    return (f"{name} ({obj(m, reg)}x) would lie inside Selection {c['num']} ({obj(m, c)}x): "
+                            "a smaller area needs a larger objective")
+    return None
 
 
 # ---------------------------------------------------------------- клетки

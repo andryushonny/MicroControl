@@ -86,12 +86,19 @@ def stitch(folder, engine='builtin', max_shift_um=40.0, sigma=None, alpha=0.01, 
     if os.path.exists(gp):                                       # яркость кадров считается заново
         os.remove(gp)
     st.gains = None
-    if flat:                                                     # поле освещения — по сырым кадрам
-        F = flatfield(st, verbose=verbose)
+    dkp = os.path.join(folder, 'join', 'dark.npy')
+    for p_ in (fp, dkp):
+        if os.path.exists(p_):
+            os.remove(p_)
+    if flat:                                                     # поле освещения: снятое кнопкой Flat field, иначе —
+        from .optics import measured_flat                        # по сырым кадрам скана
+        F, Dk = measured_flat(st.meta, W, H)
+        if F is None:
+            F = flatfield(st, verbose=verbose)
+        elif Dk is not None:
+            np.save(dkp, Dk)
         if F is not None:
             np.save(fp, F)
-    elif os.path.exists(fp):
-        os.remove(fp)
     attach(st, folder)                                           # освещение и дисторсия — при чтении кадров
     st._fixed.clear()
     cols = [r.get('col') for r in st.index if r.get('col') not in ('', None)]

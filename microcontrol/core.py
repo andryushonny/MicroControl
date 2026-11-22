@@ -15,7 +15,7 @@ from . import project as P_
 
 AXES = ('x', 'y', 'z')
 ORIENTATION = ('map_flip_x', 'map_flip_y', 'arrows_flip_x', 'arrows_flip_y', 'turn_180', 'swap_xy', 'mirror_x', 'mirror_y', 'reverse_x', 'reverse_y', 'reverse_z',
-               'one_side', 'overshoot', 'map_turn')   # помнится для прибора (подъезд с одной стороны — тоже)
+               'one_side', 'overshoot', 'map_turn', 'mask_pitch')   # помнится для прибора (подъезд с одной стороны — тоже)
 WEAK_FOCUS = 1.3      # пик резкости ниже 1.3 × типичной — фокус ненадёжен (мало деталей)
 
 # старые имена (до 0.7.0) -> новые: старое имя даёт ошибку с подсказкой, а не молчит
@@ -215,6 +215,7 @@ class Microscope:
     pixel_size = Setting('float', 0.001, 10, 'um', "Size of one camera pixel on the sample")
     map_flip_x = Setting('bool', doc="Manual: mini map turned over left-right (only the picture of the map)")
     map_flip_y = Setting('bool', doc="Manual: mini map turned over up-down (only the picture of the map)")
+    mask_pitch = Setting('float', 1, 10000, 'um', "Pitch of the lithography crosses on the mask (its design value): every size in the drawings and the pixel calibration come from it (remembered)")
     map_turn = Setting('choice', None, (0, 90, 180, 270), 'deg', "Manual: map of the sample (scans) turned anticlockwise (only the picture of the map)")
     arrows_flip_x = Setting('bool', doc="Manual: left / right arrows the other way (only the keys; pictures and joining do not change)")
     arrows_flip_y = Setting('bool', doc="Manual: up / down arrows the other way (only the keys)")
@@ -241,7 +242,9 @@ class Microscope:
     overshoot = Setting('int', 1, 500, 'steps', "One-side approach: how far past the target a move back goes (more than the backlash)")
     photo_pause = Setting('float', 0, 10, 's', "Scan: pause before each picture")
     light_pause = Setting('float', 0, 120, 's', "Pause after switching the light on (brightness becomes stable)")
-    focus_method = Setting('choice', None, tuple(F.METHODS), '', "Sharpness measure for autofocus")
+    focus_method = Setting('choice', None, tuple(F.METHODS), '', "Sharpness measure for autofocus (vollath: noise-proof, best for bright field)")
+    af_step = Setting('float', 0, 500, 'um', "Autofocus of THIS objective: step of the first pass (0 = its depth of field, at least one motor step); remembered for each objective")
+    af_range = Setting('float', 0, 2000, 'um', "Autofocus of THIS objective: window each way (0 = 6 depths of field); remembered for each objective")
     focus_range = Setting('float', 1, 2000, 'um', "Autofocus search window, each way")
     focus_step = Setting('float', 1, 500, 'um', "Autofocus step")
     focus_every = Setting('int', 1, 100, 'frames', "Scan: focus points every N frames (focus plane)")
@@ -290,11 +293,11 @@ class Microscope:
         sim = port == 'sim'
         self._fast = sim
         self._cfg.update(objective=objective, light=0, laser=0, laser_max=10.0, exposure=20.0,
-                         map_flip_x=False, map_flip_y=False, map_turn=0, arrows_flip_x=False, arrows_flip_y=False, turn_180=False, swap_xy=False, mirror_x=False, mirror_y=False, reverse_x=False, reverse_y=False, reverse_z=False,
+                         map_flip_x=False, map_flip_y=False, map_turn=0, mask_pitch=100.0, arrows_flip_x=False, arrows_flip_y=False, turn_180=False, swap_xy=False, mirror_x=False, mirror_y=False, reverse_x=False, reverse_y=False, reverse_z=False,
                          motor_step=UM_PER_STEP, max_move=2000.0, max_move_down=2000.0, xy_limit=25000.0, max_jump=3000.0,
                          motor_speed=3000.0,
                          move_pause=0.0 if sim else 0.1, photo_pause=0.0 if sim else 0.1, light_pause=0.0 if sim else 2.0,
-                         focus_method='laplacian', focus_every=5, refocus=False, batch_size=100, save_jpg=True, jpg_scale=0.5,
+                         focus_method='vollath', af_step=0.0, af_range=0.0, focus_every=5, refocus=False, batch_size=100, save_jpg=True, jpg_scale=0.5,
                          frame_format='jpg', frame_scale=1.0, jpg_quality=95, scan_check=True, still_check=True,
                          one_side=False, overshoot=10,
                          log_bytes=True)
@@ -313,6 +316,8 @@ class Microscope:
                 orient.setdefault('turn_180', True)    # ATR8300: кадр камеры перевёрнут (отражён по X и Y) — проверено
                 orient.setdefault('map_turn', 90)      # ATR8300: карта образца — на 90° против часовой (по словам пользователя)
             self._cfg.update(orient)
+            self.references.update({k_: v_ for k_, v_ in (self._mem.data.get('references') or {}).items()
+                                    if v_ and os.path.exists(v_)})   # плоское поле и тёмный кадр — с прошлых сеансов
             t, p = self._u2p(self.xy_limit), self._p          # пределы — от точки подключения
             self._lim = {'x': (p['x'] - t, p['x'] + t), 'y': (p['y'] - t, p['y'] + t),
                          'z': (p['z'] - self._u2p(Z_RANGE), p['z'] + self._u2p(Z_RANGE))}
@@ -447,10 +452,29 @@ class Microscope:
         if log:
             L.event('MOV-005', f"Working distance {v:.0f} um: step up {step:.0f} um.")
 
+    def _af_mem(self):
+        return self._mem.data.setdefault('autofocus', {}) if getattr(self, '_mem', None) is not None else {}
+
+    def _apply_af_step(self, v):
+        self._af_mem().setdefault(str(self.objective), {})['step'] = float(v)   # для этого объектива
+        if getattr(self, '_mem', None) is not None:
+            self._mem.save()
+        L.event('SET-001', f"Autofocus step {v:g} um for {self.objective}x.")
+
+    def _apply_af_range(self, v):
+        self._af_mem().setdefault(str(self.objective), {})['range'] = float(v)
+        if getattr(self, '_mem', None) is not None:
+            self._mem.save()
+        L.event('SET-001', f"Autofocus window ±{v:g} um for {self.objective}x.")
+
     def _apply_objective(self, v):
         prof = OBJECTIVES[v]
-        self._cfg.update(pixel_size=prof['pixel_size'], focus_range=float(prof['focus_range']),
-                         focus_step=float(prof['focus_step']))
+        af_ = self._af_mem().get(str(v), {})                  # шаг и окно автофокуса — свои у объектива
+        from .optics import pixel_cal
+        pc_ = pixel_cal(getattr(self, 'device', None), v)     # пиксель, откалиброванный по крестам
+        self._cfg.update(pixel_size=float(pc_['pixel_um']) if pc_ else prof['pixel_size'], focus_range=float(prof['focus_range']),
+                         focus_step=float(prof['focus_step']), af_step=float(af_.get('step', 0.0)),
+                         af_range=float(af_.get('range', 0.0)))
         self._cfg['objective'] = v
         self._apply_working_distance(float(prof['wd']), log=False)
         self._sync_limits()
@@ -1527,6 +1551,10 @@ class Microscope:
                             datetime.now().strftime(f"{kind}_{self.objective}x_%Y%m%d_%H%M%S.png"))
         imwrite(path, np.clip(img * 256, 0, 65535).astype(np.uint16))   # 16 бит: точность среднего
         self.references[kind] = path
+        self.references[f"{kind}_{self.objective}x"] = path    # своё для объектива: сшивка берёт его
+        if getattr(self, '_mem', None) is not None:          # помнится для прибора между сеансами
+            self._mem.data.setdefault('references', {})[f"{kind}_{self.objective}x"] = path
+            self._mem.save()
         L.event('CAM-003', f"{kind.capitalize()} frame {path}, mean {img.mean():.1f}.")
         return Result(f"{kind.capitalize()} frame saved", File=path, **{"Mean level": round(float(img.mean()), 1)})
 
@@ -1542,9 +1570,22 @@ class Microscope:
         return self._save_ref('dark', img)
 
     def empty_frame(self, frames=16):
-        """Кадр однородного поля: наведите на пустой участок (чистая подложка), усредняются frames кадров.
-        Неравномерность освещения — для коррекции снимков датасета."""
-        return self._save_ref('empty', self._average(frames, "Empty frame"))
+        """Плоское поле (flat field): наведите на чистый пустой участок подложки, свет — как для съёмки;
+        усредняются frames кадров. Неравномерность освещения и пыль на оптике этого объектива — сшивка
+        делит на него каждый кадр (вместе с тёмным кадром: (кадр − тёмный) / (поле − тёмный))."""
+        p0 = self.position                                   # 5 мест со сдвигом в четверть кадра: медиана убирает
+        fw, fh = self.frame_size                             # то, что едет вместе с образцом (соринки, текстура),
+        offs = [(0, 0), (-0.25, -0.25), (0.25, -0.25), (-0.25, 0.25), (0.25, 0.25)]   # пыль на оптике — остаётся
+        imgs = []
+        try:
+            for dx, dy in offs:
+                self.goto(x=p0.x + dx * fw, y=p0.y + dy * fh)
+                imgs.append(self._average(max(2, frames // len(offs)), f"Flat field {len(imgs) + 1} of {len(offs)}"))
+        finally:
+            self.goto(x=p0.x, y=p0.y)
+        return self._save_ref('empty', np.median(np.stack(imgs), axis=0))
+
+    flat_field = empty_frame
 
     # ---------------- фокус ----------------
     @property
@@ -1575,7 +1616,8 @@ class Microscope:
             if wide:
                 r = F.run(self, self.focus_method, self.focus_range, self.focus_step, pr=pr)
             else:
-                r = F.run_physics(self, self.focus_method, center_um=self.expected_z(), pr=pr)
+                r = F.run_af(self, self.focus_method, center_um=self.expected_z(), step_um=self.af_step or None,
+                             range_um=self.af_range or None, pr=pr)
             pr.total = pr.done = max(1, pr.done)
             pr.update(0, f"best Z {r['z_um'] - self._off['z']:.1f} um")
         weak = r['contrast'] < (WEAK_FOCUS if wide else 1.05)
@@ -1585,7 +1627,10 @@ class Microscope:
         res = Result("Focused", Z=f"{r['z_um'] - self._off['z']:.1f} um", Sharpness=round(r['score'], 4 if not wide else 1),
                      Contrast=round(r['contrast'], 2), Frames=r['points'], Time=f"{time.monotonic() - t0:.1f} s")
         if not wide:
-            res.update(**{"Depth of field, um": round(r['dof_um'], 1), "Window, um": f"±{r['half_um']:.0f}, step {r['step_um']:.1f}"})
+            res.update(**{"Depth of field, um": round(r['dof_um'], 1),
+                          "Window, um": f"±{r['half_um']:.0f}, step {r['step_um']:.1f}, fine {r.get('fine_um', r['step_um']):.1f}"})
+            if r.get('width_um'):
+                res["Peak"] = f"width {r['width_um']:.1f} um, at {r['z_fit_um'] - self._off['z']:.1f} um" + ("" if r.get('fit') else " (fit poor)")
             if r['dof_um'] < self.motor_step:
                 res['Limit'] = (f"Z motor step {self.motor_step:.2f} um > depth of field {r['dof_um']:.1f} um: "
                                 f"the stage can stop up to {self.motor_step / 2:.1f} um off the sharpest place")

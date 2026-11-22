@@ -1016,7 +1016,8 @@ m = mc.Microscope(port='auto', objective=10, camera=True, allow_laser=False,
 | `m.check_orientation()` | 用相机检查轴符号 | — |
 | `m.image()`, `m.photo()` | 图像 / 拍照 | `M240` |
 | `m.white_balance()`, `m.dark_frame()`, `m.empty_frame()` | 白平衡、参考图像 | — |
-| `m.prepare()` · `m.calibrate_distortion()` | 扫描前：灯、对焦、曝光、白平衡、稳定停顿 · 物镜的镜头畸变（第 12.5 节） | — |
+| `m.prepare()` · `m.calibrate_distortion()` · `m.flat_field()`、`m.dark_frame()` | 扫描前：灯、对焦、曝光、白平衡、稳定停顿 · 物镜的镜头畸变（第 12.5 节） · 物镜的平场（5 个位置取中值）与暗场帧，供拼接使用 | — |
+| `m.mask_pitch`、`m.af_step`、`m.af_range` | 掩模十字的设计间距（图纸全部尺寸；`F` 按十字标定像素） · 当前物镜的自动对焦步长与窗口（按物镜记住） | — |
 | `m.manual()` | 手动模式 | — |
 | `m.plan()`, `m.scan()` | 扫描程序 / 执行 | `G29`, `M240` |
 | `m.gcode(program)` | 执行 G 代码 | — |

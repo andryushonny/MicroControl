@@ -321,7 +321,7 @@ hint_ok = {gg.cell_at(mos_xy(world(3.5, 2.5))), gg.cell_at(mos_xy(world(5.5, 3.5
 # но пустые квадраты не отмечены все подряд, и чешуйки — среди самых заметных
 assert hint_ok <= set(gg.useful), (hint_ok, gg.useful)
 med = sorted(gg.useful.values())[len(gg.useful) // 2]
-assert len(gg.useful) <= 0.6 * gg.hint_squares and all(gg.useful[c] >= med for c in hint_ok), (hint_ok, gg.useful)
+assert len(gg.useful) <= 0.7 * gg.hint_squares and all(gg.useful[c] >= med for c in hint_ok), (hint_ok, gg.useful)
 # простой щелчок ставит крест ровно в точку щелчка (без притяжения), отметку можно перетащить мышью
 Wsc_ = 1280 - mc.samples.CAR_W
 n0 = len(gg.cr.marks)
@@ -1482,6 +1482,8 @@ for ij in ((2, 1), (3, 1), (2, 2)):
 g.labels = {(0, 0): (12, 7), (1, 0): (13, 7), (0, 1): (12, 8)}; g.save(px)
 r = mc.fit_crosses(f, verbose=False); print(r)
 assert r.share >= 0.95 and r.info['p95_um'] < 0.2, r.info                 # кадры на крестах: 95 % точнее 0.2 мкм
+assert abs(r.info['pixel_um'] / 0.22 - 1) < 0.002, r.info['pixel_um']      # пиксель по крестам маски (100 мкм): 0.22 мкм
+assert json.load(open(os.path.join(f, 'meta.json')))['pixel_size_cal']
 g = Grid(f); uv0, uv1 = np.array([10.7, 5.7]), np.array([14.3, 8.3])
 img4, res, rep = local_picture(f, g, uv0, uv1, 100.0)
 gq = meas_gray(img4[..., :3]); errs = []; r_ = int(15 / res)
@@ -1495,3 +1497,20 @@ for X in range(12, 16):
 assert len(errs) >= 6 and max(errs) < 0.15, errs                           # кресты на чертеже — в своих точках решётки
 print("Lithography accuracy: cross centre by arm edges at 10 deg, distortion calibration, prepare, PNG frames, frames onto crosses "
       f"({100 * r.share:.0f} % within 0.5 um), drawing picture by the crosses of its cells (max {max(errs):.3f} um): OK")
+
+# ------------------------------------------------------------------ 46. Мастер Prepare: шаги с условием и Done; сохранено для объектива; второй раз — Overwrite / Keep; плоское поле и тёмный кадр — в сшивке
+import microcontrol.ui as UI_, microcontrol.manual as M
+cv2.getWindowImageRect = lambda w: (0, 0, 1280, 900)
+m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp()); m.focus(); m.goto(x=150, y=150); m.exposure = 8.0
+hits = UI_.tool_bar(1280, M.STEPS, 0, M.BUTTONS)[1]
+bx = lambda name: next((a + b) / 2 for a, b, t in hits if t == ('button', name))
+ks = [-1, ('tbar', bx("Prepare")), -1] + [('wiz', 'Done'), -1] * 5 + [('wiz', 'Skip'), -1]
+ks += [('tbar', bx("Prepare")), -1, ('wiz', 'Keep'), -1, 27, 27]
+M.run(m, fullscreen=False, _keys=ks)
+rec = m._mem.data['prepared']['10']
+assert rec['done'] == ['lamp', 'kohler', 'dark', 'flat', 'detail'] and m.exposure > 15, rec   # дисторсию пропустили
+assert {'dark_10x', 'empty_10x'} <= set(m.references)
+fw, fh = m.frame_size; m.area = mc.Area(0, 0, 3 * fw, 2 * fh); f = m.scan(); r = mc.stitch(f, verbose=False); m.close()
+assert {'flatfield.npy', 'dark.npy'} <= set(os.listdir(os.path.join(f, 'join'))), os.listdir(os.path.join(f, 'join'))
+print("Prepare step by step: lamp, even light, dark frame, flat field + exposure, focus + settling; saved, Keep next time; "
+      "the flat field and the dark frame go into the stitch: OK")

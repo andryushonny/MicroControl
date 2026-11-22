@@ -50,7 +50,7 @@ HELP = ["Shift+Esc: Exit (or close the window)", "P: Hide / show the left panel"
         "S: Scan the selections of this objective and stitch them, here in the window (Esc: stop)",
         "V: Open the last scan in the view (crosses, squares, export); closing it brings you back here",
         "L: Light on / off   I: Laser on / off   W: White balance (aim at an empty place)   Space: Picture",
-        "A: Prepare here before a scan: lamp steady, focus, exposure (crosses ~80 % bright, no overexposure), white balance, stage settling pause",
+        "A (or Prepare): step by step before a scan: lamp, even light, dark frame, flat field + white balance + exposure, focus + settling, distortion; saved for the objective",
         "D: Distortion of this objective: 3 x 3 overlapping pictures around details (crosses, a flake edge); remembered, used for every scan",
         "R: Ruler: click two points (distance, um)   0: Zero here   Shift+0: Real coordinates",
         "Wheel: zoom   Drag (middle button too): move the zoomed picture   Z: whole frame",
@@ -354,6 +354,41 @@ STEP_HELP = [
     "Step 3: put 50x or 100x, choose an area on the right and press Scan area",
     "Step 4: press Export, tick the areas: one drawing for AutoCAD (DWG + DXF with pictures, outlines, crosses)"]
 BUTTONS = ["Prepare", "New area", "Scan area", "Export", "Settings"]
+PREP_STEPS = [                                        # мастер Prepare: шаг, что сделать руками, что делает программа
+    ('lamp', "Lamp and room", [
+        "Light on (L) for at least 20 minutes before a large scan: the lamp and the stage warm up and stop drifting.",
+        "Room light off or curtains closed, nobody leaning on the table.",
+        "Done: the program checks for 3 s that the brightness does not change.",
+        "How often: every session."]),
+    ('kohler', "Even light (Koehler)", [
+        "Close the field diaphragm of the illuminator until its edge is seen, make the edge sharp and centred, then open it "
+        "just past the edge of the picture.",
+        "Aperture diaphragm: from fully open close it until the cross edges get more contrast, before the picture darkens "
+        "(about 70-80 %).",
+        "No diaphragms on the illuminator: just press Done.",
+        "How often: every session and after changing the objective."]),
+    ('dark', "Dark frame", [
+        "Keep the objective over the sample; switch off the room light or cover the stage so no outside light gets in.",
+        "Done: the microscope light goes off by itself, 16 pictures are averaged (the camera's own signal and hot "
+        "pixels), the light goes back on.",
+        "How often: once per objective (it depends on the exposure), again when the exposure changes a lot or after "
+        "a month."]),
+    ('flat', "Flat field, white balance, exposure", [
+        "Drive (arrows, map) to a clean EMPTY place of the substrate: no crosses, flakes or dust. Focus on it (F).",
+        "Done: exposure is set (brightest ~80 %, no overexposure), white balance, then the stage visits 5 places a "
+        "quarter frame apart and the flat field is averaged (uneven light, vignetting, dust on the optics).",
+        "How often: for EACH objective; again after moving or changing the lamp, the diaphragms, or cleaning the optics. "
+        "For lithography: every session."]),
+    ('detail', "Focus and stage settling", [
+        "Drive to a cross or a flake edge (details for the focus).",
+        "Done: autofocus, then the stage moves and the pictures are compared until it stops shaking: that time becomes "
+        "the pause before each picture.",
+        "How often: every session."]),
+    ('distortion', "Lens distortion", [
+        "Stay at the cross or flake edge (details all around are good).",
+        "Done: 3 x 3 pictures with 50 % overlap; the lens distortion of this objective is measured and used for every scan.",
+        "How often: ONCE per objective; again only if the camera or the objective was taken off. Skip if done already."]),
+]
 
 
 MAP_COLS, MAP_ROWS = 11, 9    # видимое окно мини-карты, кадров
@@ -595,7 +630,13 @@ def step_limit(m, ax):
     return m.max_move if ax in 'xy' else m.max_move_z
 
 
-FIELDS = ('x', 'y', 'z', 'exp', 'obj')             # порядок полей (Tab)
+FIELDS = ('x', 'y', 'z', 'exp', 'obj', 'afs', 'afr')   # порядок полей (Tab); afs, afr — автофокус этого объектива
+
+
+def af_auto(m):
+    """Шаг и окно автофокуса объектива: заданные (m.af_step, m.af_range) или от глубины резкости (0 = авто)."""
+    dof = m.depth_of_field
+    return (m.af_step or round(max(dof, m.motor_step), 1)), (m.af_range or round(max(6 * dof, 3 * max(dof, m.motor_step)), 0))
 
 
 def draw_fields(view, steps, edit, scale, top, m=None):
@@ -604,13 +645,15 @@ def draw_fields(view, steps, edit, scale, top, m=None):
     y = top
     cur = dict(steps)
     if m is not None:
-        cur.update(exp=m.exposure, obj=m.objective)
+        cur.update(exp=m.exposure, obj=m.objective, afs=af_auto(m)[0], afr=af_auto(m)[1])
     for ax in (FIELDS if m is not None else 'xyz'):
         val = (edit[1] + "_") if (edit and edit[0] == ax) else f"{cur[ax]:g}"
         if ax == 'exp':
             txt = f"Exposure [ {val:>6} ] ms"
         elif ax == 'obj':
             txt = f"Objective[ {val:>6} ] x   (4, 10, 20, 100; M: next)"
+        elif ax in ('afs', 'afr'):
+            txt = f"{'AF step ' if ax == 'afs' else 'AF window'}[ {val:>6} ] um"
         else:
             txt = f"Step {ax.upper()}  [ {val:>6} ] um" + ("   Shift: x5" if ax == 'z' else "")
         (tw, th), _ = cv2.getTextSize(txt, cv2.FONT_HERSHEY_SIMPLEX, scale, 1)
@@ -712,6 +755,17 @@ def _run(m, fullscreen=False, _keys=None):
         return r_ is not None and r_[0] <= x <= r_[2] and r_[1] <= y <= r_[3]
 
     def on_mouse(ev, x, y, flags, *_):
+        if wiz.get('rects'):                               # кнопки мастера Prepare — раньше всего остального
+            hit_ = next((k2 for k2, r2 in wiz['rects'].items() if r2[0] <= x <= r2[2] and r2[1] <= y <= r2[3]), None)
+            if ev == cv2.EVENT_MOUSEMOVE:
+                wiz['hover'] = (x, y - UI.MENU_H - UI.TOOL_H)
+            if hit_ is not None:
+                if ev == cv2.EVENT_LBUTTONDOWN:
+                    wiz['click'] = hit_
+                return
+        on_mouse_(ev, x, y, flags)
+
+    def on_mouse_(ev, x, y, flags, *_):
         # тянуть любой кнопкой по картинке (левой — не по полям) — сдвиг увеличенной картинки; колесо, + / - — зум
         if y < UI.MENU_H and not zm['pan'] and nv['press'] is None:     # строка меню
             menu['hover'] = x if ev == cv2.EVENT_MOUSEMOVE else menu['hover']
@@ -1373,13 +1427,133 @@ def _run(m, fullscreen=False, _keys=None):
             msg = "   ".join(f"{k_}: {v_}" for k_, v_ in list(res_['r'].items()))
         msg_t = time.monotonic()
 
+    def ask_ready(title, lines):
+        """Условие посреди окна и кнопки Done / Cancel (Enter / Esc). -> True, если Done."""
+        if keys is not None:                               # тесты: сразу «Готово»
+            return True
+        ev_ = {}
+
+        def cb(ev, x, y, flags, *_):
+            if ev == cv2.EVENT_MOUSEMOVE:
+                ev_['hover'] = (x, y)
+            elif ev == cv2.EVENT_LBUTTONDOWN:
+                ev_['click'] = (x, y)
+        cv2.setMouseCallback(WIN, cb)
+        try:
+            while True:
+                base_ = np.vstack([menu_img(W), view])
+                base_ = (base_.astype(np.float32) * 0.55).astype(np.uint8)
+                rects_ = UI.confirm_panel(base_, title, lines, ("Done", "Cancel"), ev_.get('hover'))
+                cv2.imshow(WIN, base_)
+                k_ = cv2.waitKeyEx(30)
+                if k_ in (13, 10):
+                    return True
+                if k_ == 27 or cv2.getWindowProperty(WIN, cv2.WND_PROP_VISIBLE) < 1:
+                    return False
+                c_ = ev_.pop('click', None)
+                if c_:
+                    for nm_, r_ in rects_.items():
+                        if r_[0] <= c_[0] <= r_[2] and r_[1] <= c_[1] <= r_[3]:
+                            return nm_ == "Done"
+        finally:
+            cv2.setMouseCallback(WIN, on_mouse)
+
+    wiz = {}                                              # мастер Prepare: шаги по очереди, окно живёт
+
+    def prep_mem():
+        return m._mem.data.setdefault('prepared', {}) if getattr(m, '_mem', None) is not None else \
+            m.__dict__.setdefault('_prepared', {})
+
+    def prepare_start():
+        """Prepare: шаги по очереди (PREP_STEPS). Уже готово для этого объектива — спросить: заново или оставить."""
+        nonlocal msg, msg_t
+        old_ = prep_mem().get(str(m.objective))
+        wiz.clear()
+        dev_ = (getattr(m, 'device', None) or {}).get('Serial', 'this microscope')
+        if old_:
+            wiz.update(i=-1, log=[], old=old_, title=f"Already prepared: {dev_}, {m.objective}x",
+                       lines=[f"Saved {old_.get('time', '?')}: " + ", ".join(old_.get('done', [])) + ".",
+                              f"Exposure {old_.get('exposure', '-')} ms, pause before a picture {old_.get('move_pause', '-')} s.",
+                              "Overwrite: go through the steps again. Keep: use the saved ones."],
+                       buttons=("Overwrite", "Keep"))
+        else:
+            wiz.update(i=0, log=[], done=[])
+            wiz_step()
+
+    def wiz_step():
+        k_, t_, l_ = PREP_STEPS[wiz['i']]
+        wiz.update(title=f"Prepare {m.objective}x - step {wiz['i'] + 1} of {len(PREP_STEPS)}: {t_}", lines=l_,
+                   buttons=("Done", "Skip", "Cancel"), key=k_)
+
+    def wiz_finish():
+        nonlocal msg, msg_t
+        rec = dict(time=time.strftime('%d.%m.%Y %H:%M'), done=wiz.get('done', []), exposure=m.exposure,
+                   move_pause=m.move_pause, log=wiz.get('log', []))
+        prep_mem()[str(m.objective)] = rec
+        if getattr(m, '_mem', None) is not None:
+            m._mem.save()
+        msg, msg_t = f"Prepared {m.objective}x: " + ("; ".join(wiz.get('log', [])) or "nothing measured"), time.monotonic()
+        wiz.clear()
+
+    def wiz_action(name):
+        """Кнопка мастера: Done — сделать шаг, Skip — дальше, Cancel — выйти; Overwrite / Keep — для старых данных."""
+        nonlocal msg, msg_t
+        if name == "Cancel":
+            wiz.clear()
+            msg, msg_t = "Prepare cancelled", time.monotonic()
+            return
+        if name == "Keep":
+            old_ = wiz['old']
+            try:
+                m.exposure = float(old_.get('exposure', m.exposure))
+                m.move_pause = float(old_.get('move_pause', m.move_pause))
+            except MicroControlError:
+                pass
+            wiz.clear()
+            msg, msg_t = (f"Kept the preparation of {old_.get('time')}: exposure {m.exposure:g} ms, "
+                          f"pause {m.move_pause:g} s, dark frame and flat field as saved"), time.monotonic()
+            return
+        if name == "Overwrite":
+            wiz.update(i=0, log=[], done=[])
+            wiz_step()
+            return
+        k_ = wiz.get('key')
+        if name == "Done":
+            from . import prepare as PP
+            jobs = {'lamp': lambda: f"lamp: {PP.light_drift(m):.1f} % in 3 s",
+                    'kohler': lambda: "light by Koehler",
+                    'dark': lambda: f"dark frame (level {m.dark_frame().get('Mean level')})",
+                    'flat': lambda: (lambda e: (m.white_balance(), f"exposure {e[0]:.2f} ms ({100 * e[1]:.0f} %), white balance, "
+                                     f"flat field (level {m.empty_frame().get('Mean level')})")[1])(PP.auto_exposure(m)),
+                    'detail': lambda: (m.focus(), (lambda t: (setattr(m, 'move_pause', round(max(0.05, 1.3 * t), 2)),
+                                                              f"focus, pause {round(max(0.05, 1.3 * t), 2)} s")[1])(PP.settle_time(m)))[1],
+                    'distortion': lambda: (lambda r: f"distortion {r.info['corner_px']:.2f} px at the edge")(m.calibrate_distortion())}
+            if live is not None:
+                live.paused = True
+            try:
+                res_ = busy(wiz['title'], jobs[k_])
+            finally:
+                if live is not None:
+                    live.paused = False
+            if 'e' in res_:
+                msg, msg_t = f"{k_}: {res_['e']} - fix it and press Done again, or Skip", time.monotonic()
+                return
+            wiz['log'].append(res_['r'])
+            wiz['done'].append(k_)
+            msg, msg_t = res_['r'], time.monotonic()
+        wiz['i'] += 1
+        if wiz['i'] >= len(PREP_STEPS):
+            wiz_finish()
+        else:
+            wiz_step()
+
     def tbar_do(what):
         nonlocal msg, msg_t
         msg_t = time.monotonic()
         if what[0] == 'step':
             msg = STEP_HELP[what[1]]
         elif what[1] == "Prepare":
-            prepare_here()
+            prepare_start()
         elif what[1] == "Scan area":
             scan_here()
         elif what[1] == "New area":
@@ -1613,12 +1787,23 @@ def _run(m, fullscreen=False, _keys=None):
             return
         if live is not None:
             live.paused = True
+        err_ = None
         try:
             _view(f_, fullscreen=fullscreen, _keys=keys)          # в тестах — те же нажатия
+        except Exception as e:                             # просмотр закрылся с ошибкой — окно микроскопа живёт
+            err_ = e
         finally:
             if live is not None:
                 live.paused = False
-        msg = "Back in manual mode"
+        if keys is None:
+            try:
+                gone_ = cv2.getWindowProperty(WIN, cv2.WND_PROP_VISIBLE) < 1
+            except cv2.error:
+                gone_ = True
+            if gone_:                                      # крестик просмотра закрыл и это окно — открыть снова
+                open_window(WIN, fullscreen)
+                cv2.setMouseCallback(WIN, on_mouse)
+        msg = "Back in manual mode" if err_ is None else f"The view closed: {type(err_).__name__}: {err_} (details in the log)"
 
     def go_region(k):
         nonlocal msg
@@ -1650,6 +1835,15 @@ def _run(m, fullscreen=False, _keys=None):
                 else:
                     m.exposure = v
                 msg = f"Exposure {m.exposure:g} ms"
+            except MicroControlError as e:
+                msg = str(e)
+            return
+        if ax in ('afs', 'afr'):                           # автофокус этого объектива (0 — авто)
+            try:
+                setattr(m, 'af_step' if ax == 'afs' else 'af_range', float(buf))
+                a_, r_ = af_auto(m)
+                msg = (f"Autofocus {m.objective}x: step {a_:g} um, window ±{r_:g} um (remembered for this objective; 0 = auto). "
+                       f"Z motor step {m.motor_step:.2f} um, depth of field {m.depth_of_field:.1f} um")
             except MicroControlError as e:
                 msg = str(e)
             return
@@ -1917,11 +2111,12 @@ def _run(m, fullscreen=False, _keys=None):
             y += 12
             ops.append(('l', y))
             y += LH + 2
-            cur_ = dict(steps, exp=m.exposure, obj=m.objective)
+            cur_ = dict(steps, exp=m.exposure, obj=m.objective, afs=af_auto(m)[0], afr=af_auto(m)[1])
             for ax_ in FIELDS:
-                lab_ = {'exp': "Exposure", 'obj': "Objective"}.get(ax_, f"Step {ax_.upper()}")
+                lab_ = {'exp': "Exposure", 'obj': "Objective", 'afs': "AF step", 'afr': "AF window ±"}.get(ax_, f"Step {ax_.upper()}")
                 unit_ = {'exp': "ms", 'obj': "x"}.get(ax_, "um")
-                hint_ = {'z': "Shift: x5", 'obj': "M: next"}.get(ax_, "")
+                hint_ = {'z': "Shift: x5", 'obj': "M: next", 'afs': f"{m.objective}x" + ("" if m.af_step else ", auto"),
+                         'afr': f"{m.objective}x" + ("" if m.af_range else ", auto")}.get(ax_, "")
                 act = bool(edit and edit[0] == ax_)
                 val = (edit[1] + "_") if act else f"{cur_[ax_]:g}"
                 bx = (x_l + lw, y - th0 - 6, x_l + lw + vw, y + 6)
@@ -2103,6 +2298,11 @@ def _run(m, fullscreen=False, _keys=None):
                     yl_ = th_[3] - 1 if tg_[1] else th_[1] + 1
                     cv2.line(pan_, (th_[0], yl_), (th_[2], yl_), (90, 220, 90) if ok_ else (80, 80, 230), 3)
             view[:, W - SM.CAR_W:] = pan_
+            if wiz.get('title'):                           # мастер Prepare: условие шага и кнопки (окно живёт)
+                wr_ = UI.confirm_panel(view, wiz['title'], wiz['lines'], wiz['buttons'], wiz.get('hover'),
+                                       W=W - SM.CAR_W, low=True)
+                oy_ = UI.MENU_H + UI.TOOL_H
+                wiz['rects'] = {k2: (r2[0], r2[1] + oy_, r2[2], r2[3] + oy_) for k2, r2 in wr_.items()}
             cv2.imshow(WIN, np.vstack([menu_img(W), view]))
             if n == 1:                                    # окно уже на экране: значок программы (Windows)
                 set_icon(WIN)
@@ -2113,8 +2313,13 @@ def _run(m, fullscreen=False, _keys=None):
                 on_mouse(*key[1:]); key = -1
             elif isinstance(key, tuple) and key[0] == 'call':  # тест: сделать что-то, как кнопкой
                 key[1](); key = -1
+            elif isinstance(key, tuple) and key[0] == 'wiz':   # тест: кнопка мастера Prepare
+                wiz['click'] = key[1]; key = -1
             elif isinstance(key, tuple):                  # тест: щелчок мышью (x, y)
                 clicks.append(key); key = -1
+        if wiz.get('click'):                              # кнопка мастера Prepare
+            wiz_action(wiz.pop('click'))
+            continue
         while clicks:                                     # щелчок по полю — ввод значения; по картинке — направляющие
             c_ = clicks.pop(0)
             if c_[0] == 'wheel':                                    # зум к курсору
@@ -2372,7 +2577,7 @@ def _run(m, fullscreen=False, _keys=None):
                 edit = (edit[0], edit[1] + chr(key))
             elif edit[0] == 'lab' and key in (32, 44, 45) and len(edit[1]) < 12:   # пробел, запятая, минус
                 edit = (edit[0], edit[1] + (' ' if key in (32, 44) else '-'))
-            elif key in (46, 44) and edit[0] == 'exp' and '.' not in edit[1]:   # дробная экспозиция: . или ,
+            elif key in (46, 44) and edit[0] in ('exp', 'afs') and '.' not in edit[1]:   # дробное: . или ,
                 edit = (edit[0], edit[1] + '.')
             elif key == 8:
                 edit = (edit[0], edit[1][:-1])
@@ -2508,8 +2713,10 @@ def _run(m, fullscreen=False, _keys=None):
                 else:
                     m.offset_clear()
                     msg = "Offset removed: real coordinates"
-            elif ch == 'a' or ch == 'd':                   # A: подготовка; D: дисторсия объектива
-                prepare_here('prepare' if ch == 'a' else 'distortion')
+            elif ch == 'a':                                # A: мастер подготовки (как кнопка Prepare)
+                prepare_start()
+            elif ch == 'd':                                # D: дисторсия объектива
+                prepare_here('distortion')
             elif ch == 'w':                                # баланс белого (навести на пустое место)
                 m.white_balance()
                 msg = "White balance done"

@@ -1015,7 +1015,8 @@ Read `m.photo_pause`, change `m.photo_pause = 0.5`, table of all parameters `m.s
 | `m.check_orientation()` | check the axis signs with the camera | — |
 | `m.image()`, `m.photo()` | frame / picture | `M240` |
 | `m.white_balance()`, `m.dark_frame()`, `m.empty_frame()` | white balance, reference frames | — |
-| `m.prepare()` · `m.calibrate_distortion()` | before a scan: lamp, focus, exposure, white balance, settling pause · lens distortion of the objective (section 12.5) | — |
+| `m.prepare()` · `m.calibrate_distortion()` · `m.flat_field()`, `m.dark_frame()` | before a scan: lamp, focus, exposure, white balance, settling pause · lens distortion of the objective (section 12.5) · flat field (5 places, median) and dark frame of the objective, used by the stitch | — |
+| `m.mask_pitch`, `m.af_step`, `m.af_range` | design pitch of the mask crosses (all drawing sizes; pixel calibration by `F`) · autofocus step and window of the current objective (remembered for each) | — |
 | `m.manual()` | manual mode | — |
 | `m.plan()`, `m.scan()` | scan program / execution | `G29`, `M240` |
 | `m.gcode(program)` | run G-code | — |

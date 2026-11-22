@@ -236,7 +236,7 @@ def view(folder, fullscreen=False, sensitivity=None, _keys=None):
         import traceback
         L.event('VIEW-999', "The window stopped with an error:\n" + traceback.format_exc(), 40)
         try:
-            cv2.destroyAllWindows()
+            cv2.destroyWindow(WIN)                          # только своё окно: окно микроскопа остаётся
         except Exception:
             pass
         raise
@@ -564,8 +564,9 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
             if len(st['ruler']) < 2:
                 return ""
             a, b = st['ruler']
-        d = (np.asarray(b, float) - np.asarray(a, float)) * px_um
-        return f"{np.hypot(*d):.2f} um   (dx {d[0]:+.2f}, dy {d[1]:+.2f})"
+        pc_ = sc.st.meta.get('pixel_size_cal')                # пиксель, откалиброванный по крестам (F)
+        d = (np.asarray(b, float) - np.asarray(a, float)) * (pc_ or px_um)
+        return f"{np.hypot(*d):.2f} um   (dx {d[0]:+.2f}, dy {d[1]:+.2f})" + ("" if pc_ else "  (pixel not calibrated: F)")
 
     def unseed():
         """Сетку поставили по решётке образца, а человек сам правит кресты или номера: номера, подставленные

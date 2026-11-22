@@ -830,7 +830,8 @@ def export(folder, fmt='png', scale=1.0, cells=False, dxf=True, max_mb=2000, mar
     path = os.path.join(out, 'selection.' + ('jpg' if jpg else 'png'))
     save_image(path, canvas, [cv2.IMWRITE_JPEG_QUALITY, 95] if jpg else [cv2.IMWRITE_PNG_COMPRESSION, 6],
                "Export: saving")
-    pitch = (a * px_um, b * px_um)
+    mp_ = float(fr.st.meta.get('mask_pitch') or 0)
+    pitch = (mp_, mp_) if mp_ else (a * px_um, b * px_um)   # шаг маски (точно), иначе по пикселю
     info = dict(squares=[list(c) for c in sel], names=[list(g.name(i, j, num)) for i, j in sel],
                 numbering=num[2], pitch_um=list(pitch), turn_deg=g.cr.angle(),
                 image=os.path.basename(path), image_px=[Wc, Hc], scale=scale,

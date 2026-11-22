@@ -250,7 +250,7 @@ class _Recorder:
                          focus=dict(metric=m.focus_method, range_um=m.focus_range, step_um=m.focus_step,
                                     every_frames=m.focus_every, refocus=m.refocus),
                          photo_pause_s=m.photo_pause, move_pause_s=m.move_pause, speed_um_s=m.motor_speed, references=dict(m.references),
-                         offset_um=dict(m._off), device=dict(getattr(m, 'device', {}) or {}), distortion=_dist_of(m),
+                         offset_um=dict(m._off), device=dict(getattr(m, 'device', {}) or {}), distortion=_dist_of(m), mask_pitch=float(getattr(m, 'mask_pitch', 100.0)),
                          frames_planned=n, status='running', log=L.path(),
                          crosses=m._crosses.to_dict() if getattr(m, '_crosses', None) is not None and m._crosses.marks else None,
                          **(extra or {}))

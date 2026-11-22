@@ -99,7 +99,9 @@ The drawing is used to write a circuit over the flakes, so every picture in it i
 | Cross centre | template + **edges of the arms**: two straight lines through the middles of the arms, their crossing is the centre (≈0.1 px, also when the chip is turned; digits next to the cross are ignored) |
 | Lens distortion | `D` in the microscope window (`m.calibrate_distortion()`): 3×3 pictures with 50 % overlap around any details; matched pieces of the overlaps give $k_1, k_2, p_1, p_2$ without crosses and without trusting the stage. Remembered for the objective, used for every scan |
 | Frames | full camera resolution, JPG 95 by default; `m.frame_format = 'png'` — lossless. Crosses and seams are measured in the green channel (sharpest, no colour fringes) |
-| Before a scan | button **Prepare** or `A` (`m.prepare()`): lamp steady, autofocus, exposure (brightest details ≈80 %, no overexposure), white balance on an empty place, pause for the stage to settle |
+| Before a scan | button **Prepare** (or `A`): a step-by-step guide over the live picture — each step says what to set or where to drive, then **Done** / Skip / Cancel: lamp and room → even light (Köhler) → **dark frame** → empty place: exposure (brightest ≈80 %, no overexposure), white balance, **flat field** (5 places, median: vignetting and dust on the optics) → a detail: autofocus, settling pause → lens distortion (once per objective). Each step says how often to repeat it. Saved for the microscope and objective; next time it asks: **Overwrite** or **Keep** (with the date). The stitch uses this flat field and dark frame. Python: `m.prepare()`, `m.flat_field()`, `m.dark_frame()` |
+| Scale | `m.mask_pitch = 100` — the design pitch of the crosses on the mask: the drawing takes every size from it. `F` also measures the real pixel size by the crosses (and X/Y stretch, skew) and saves it for the objective: the ruler and the next scans use it |
+| Autofocus | contrast (normalised variance) to find the peak, Vollath F4 for the exact pass, a Gaussian fitted to the sharpness curve; step and window are set for each objective in Settings (`AF step`, `AF window`, 0 = from the depth of field). Note: one Z motor step is 5.56 µm — more than the depth of field at 50x / 100x |
 | Backlash | `B` — one-side approach (remembered). The stitch does not trust the stage anyway; this keeps the frames where they are expected and the camera overlay exact |
 
 For the circuit itself, outline the flakes at 50x / 100x: at 10x the optics blur edges by about 1 µm.
@@ -264,7 +266,7 @@ Arrows move; letters do things. As much as possible is done right in the window.
 | `S` | scan the selections of this objective and stitch them, in the window (`Esc` — stop) |
 | `V` | open the last scan in the viewer; closing it brings you back |
 | `L` · `I` · `W` | light on / off · laser on / off · white balance |
-| `A` · `D` | prepare here before a scan (lamp, focus, exposure, white balance, settling) · distortion of this objective |
+| `A` · `D` | Prepare step by step (as the button) · distortion of this objective |
 | `B` · `\` | one-side approach against backlash · turn the map 90° anticlockwise (both remembered) |
 | `R` | ruler: two clicks — the distance |
 | `Space` | take a picture |

@@ -175,6 +175,41 @@ def progress_panel(img, title, stage, frac, text="", passed=0.0, left=None, foot
         x0 + 22, y0 + 176, 0.45, DIM, 1)
 
 
+def confirm_panel(img, title, lines, buttons=("Done", "Cancel"), hover=None, W=None, low=False):
+    """Окно-условие посреди картинки: заголовок, строки, кнопки снизу. -> {подпись: (x0, y0, x1, y1)}.
+    W — ширина области (слева), low — ниже середины (камера в центре видна)."""
+    H, W = img.shape[0], (W or img.shape[1])
+    pw = min(720, W - 60)
+    wrapped = []
+    for ln in lines:                                       # перенос по ширине
+        words, cur = ln.split(), ""
+        for w_ in words:
+            t_ = (cur + " " + w_).strip()
+            if size(t_, 0.52)[0] > pw - 48 and cur:
+                wrapped.append(cur)
+                cur = w_
+            else:
+                cur = t_
+        wrapped.append(cur)
+    ph = 70 + 26 * len(wrapped) + 70
+    x0, y0 = int((W - pw) / 2), int((H - ph) * (0.88 if low else 0.5))
+    panel(img, x0, y0, x0 + pw, y0 + ph, 0.95, LINE)
+    put(img, title, x0 + 24, y0 + 40, 0.72, ACCENT, 2)
+    for i, ln in enumerate(wrapped):
+        put(img, ln, x0 + 24, y0 + 76 + 26 * i, 0.52, TEXT, 1)
+    rects, bx = {}, x0 + pw - 24
+    for b in reversed(buttons):
+        tw = size(b, 0.55)[0]
+        r = (bx - tw - 36, y0 + ph - 52, bx, y0 + ph - 18)
+        on = hover is not None and r[0] <= hover[0] <= r[2] and r[1] <= hover[1] <= r[3]
+        cv2.rectangle(img, r[:2], r[2:], (70, 150, 70) if b == buttons[0] else ((84, 84, 92) if on else (60, 60, 66)), -1)
+        cv2.rectangle(img, r[:2], r[2:], (120, 200, 120) if b == buttons[0] else (110, 110, 118), 1)
+        put(img, b, r[0] + 18, r[3] - 10, 0.55, TEXT, 1)
+        rects[b] = r
+        bx = r[0] - 12
+    return rects
+
+
 MENU_H = 30
 
 

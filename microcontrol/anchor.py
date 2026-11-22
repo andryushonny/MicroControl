@@ -247,13 +247,23 @@ def anchor(folder, save=True, fit_dist=True, verbose=True, preview=True):
     share = float((e1[used] * px <= TOL_UM).mean()) if used.any() else 0.0
     share0 = float((e0 * px <= TOL_UM).mean())
     pitch_px = float(np.hypot(*an))
+    mp = float(st.meta.get('mask_pitch') or 100.0)            # шаг крестов маски (проектный), мкм
+    px_cal = mp / pitch_px                                    # настоящий размер пикселя этого объектива
+    Qc = (Pn[K] + U)[used]                                    # кресты на мозаике: свободная (аффинная) решётка —
+    Ac = np.linalg.lstsq(np.c_[np.ones(used.sum()), IJ[used]], Qc, rcond=None)[0]   # нет ли сжатия по одной оси
+    a1, a2 = Ac[1], Ac[2]
+    aspect = float(np.hypot(*a1) / np.hypot(*a2) - 1) if used.sum() >= 6 else None
+    skew = float(np.degrees(np.arccos(np.clip(a1 @ a2 / (np.hypot(*a1) * np.hypot(*a2)), -1, 1))) - 90) \
+        if used.sum() >= 6 else None
+    span = np.ptp(IJ[used], axis=0) if used.any() else np.zeros(2)
     info = dict(crosses=int(len(obs)), used=int(used.sum()), frames_with_crosses=int(len(np.unique(K))),
                 frames=n, within_um=TOL_UM, share=round(share, 4), share_before=round(share0, 4),
                 p95_um=round(float(np.quantile(e1[used], 0.95)) * px, 3) if used.any() else None,
                 p95_um_before=round(float(np.quantile(e0, 0.95)) * px, 3),
                 rms_px=round(float(np.sqrt((e1[used] ** 2).mean())), 3) if used.any() else None,
                 seam_px=round(float(np.median(seam_res)), 3) if len(seam_res) else None,
-                pitch_px=round(pitch_px, 3), distortion=D, corner_px=round(corner, 2), fitted=bool(fit_th))
+                pitch_px=round(pitch_px, 3), distortion=D, corner_px=round(corner, 2), fitted=bool(fit_th),
+                mask_pitch_um=mp, pixel_um=round(px_cal, 6), pixel_um_was=px, aspect=aspect, skew_deg=skew)
     if save:
         out = os.path.join(folder, 'join')
         Pabs_n = Pn + P0
@@ -286,6 +296,25 @@ def anchor(folder, save=True, fit_dist=True, verbose=True, preview=True):
         g.save(px)
         if preview:
             make_preview(folder, Pabs_n, verbose=False)
+        good_ = used.sum() >= 8 and min(span) >= 2                # масштаб — по крестам минимум через 2 шага
+        sc_ = dict(pixel_um=px_cal, mask_pitch_um=mp, pixel_um_table=px, crosses=int(used.sum()), aspect=aspect,
+                   skew_deg=skew, objective=st.meta.get('objective'), good=bool(good_),
+                   time=__import__('time').strftime('%Y-%m-%d %H:%M'))
+        with open(os.path.join(out, 'scale.json'), 'w', encoding='utf-8') as f:
+            json.dump(sc_, f, indent=1)
+        mj = os.path.join(folder, 'meta.json')                # линейка и размеры в просмотре — по нему
+        try:
+            md_ = json.load(open(mj, encoding='utf-8'))
+            md_['pixel_size_cal'] = px_cal if good_ else md_.get('pixel_size_cal')
+            json.dump(md_, open(mj, 'w', encoding='utf-8'), ensure_ascii=False, indent=1, default=str)
+        except (OSError, ValueError):
+            pass
+        if good_:                                             # для объектива этого прибора: следующие сканы
+            from .optics import _pix_path
+            pp = _pix_path(st.meta.get('device'), st.meta.get('objective'))
+            if pp:
+                os.makedirs(os.path.dirname(pp), exist_ok=True)
+                json.dump(sc_, open(pp, 'w', encoding='utf-8'), indent=1)
     L.event('STI-005', f"{folder}: crosses {info}")
     r = Result("Stitched on the crosses",
                **{"Crosses": f"{info['used']} used of {info['crosses']} found, in {info['frames_with_crosses']} of {n} frames",
@@ -294,7 +323,9 @@ def anchor(folder, save=True, fit_dist=True, verbose=True, preview=True):
                   "Seam error, px": info['seam_px'] if info['seam_px'] is not None else '-',
                   "Distortion at the edge, px": f"{dist_corner(D0, W, H):.2f} -> {corner:.2f}"
                   + ("" if fit_th else " (kept: too few crosses)"),
-                  "Grid pitch, um": round(pitch_px * px, 3)})
+                  "Pixel, um": f"{px:.5f} -> {px_cal:.5f} (crosses {mp:g} um apart"
+                  + (f"; X/Y {100 * aspect:+.2f} %, skew {skew:+.3f} deg)" if aspect is not None else ")")
+                  + ("" if (used.sum() >= 8 and min(span) >= 2) else "  - too few crosses to save it")})
     r.theta, r.share, r.info = th, share, info
     return r
 

@@ -108,7 +108,7 @@ def export_sample(m, ks=None, out=None, dwg=True, verbose=True):
     if L is None or not L.get('numbered'):
         raise ValueError("The drawing needs the lattice with real numbers: in the viewer mark the crosses (C) and "
                          "number two squares in different rows and columns (N)")
-    P = L['pitch']
+    P = float(getattr(m, 'mask_pitch', 0) or 100.0)          # шаг крестов маски: все размеры чертежа — от него
     from .mask import Grid as _G
     try:
         lab_ = list(_G(L['src']).labels.values())

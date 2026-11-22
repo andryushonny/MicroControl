@@ -164,6 +164,49 @@ def _dist_path(meta):
     return os.path.join(HOME, 'devices', f"distortion_{safe}_{meta['objective']}x.json")
 
 
+def _pix_path(device, objective):
+    serial = str((device or {}).get('Serial', 'unknown'))
+    if serial.upper().startswith('SIM') or not objective:
+        return None
+    safe = ''.join(ch if ch.isalnum() else '_' for ch in serial)
+    return os.path.join(HOME, 'devices', f"pixel_{safe}_{objective}x.json")
+
+
+def pixel_cal(device, objective):
+    """Размер пикселя объектива, откалиброванный по крестам маски (anchor: шаг маски / шаг решётки в px),
+    или None."""
+    p = _pix_path(device, objective)
+    if p and os.path.exists(p):
+        try:
+            return json.load(open(p, encoding='utf-8'))
+        except (OSError, ValueError):
+            return None
+    return None
+
+
+def measured_flat(meta, W, H):
+    """Плоское поле и тёмный кадр, снятые кнопками Flat field / Dark frame для объектива скана (meta['references']):
+    -> (F — поле (кадр − тёмный), среднее каждого цвета = 1; D — тёмный кадр) под размер кадра скана, или (None, None)."""
+    refs = meta.get('references') or {}
+    obj = meta.get('objective')
+    fp, dp = refs.get(f"empty_{obj}x"), refs.get(f"dark_{obj}x")
+    if not fp or not os.path.exists(fp):
+        return None, None
+    rd = lambda p: cv2.imread(p, cv2.IMREAD_UNCHANGED).astype(np.float32) / 256.0
+    E = rd(fp)
+    Dk = rd(dp) if dp and os.path.exists(dp) else None
+    if Dk is not None and Dk.shape != E.shape:
+        Dk = None
+    F = E - Dk if Dk is not None else E.copy()
+    F = cv2.GaussianBlur(F, (0, 0), 1.0)                   # шум усреднённого кадра — прочь, пыль и виньетка остаются
+    F = np.maximum(F, 1e-3)
+    F /= F.reshape(-1, F.shape[2]).mean(0) if F.ndim == 3 else F.mean()
+    F = cv2.resize(F, (W, H), interpolation=cv2.INTER_AREA)
+    if Dk is not None:
+        Dk = cv2.resize(Dk, (W, H), interpolation=cv2.INTER_AREA)
+    return F.astype(np.float32), (Dk.astype(np.float32) if Dk is not None else None)
+
+
 def load_dist(folder, meta):
     """Дисторсия скана {k1, k2, p1, p2}: join/distortion.json в папке скана (сшивка по крестам), иначе
     калибровка объектива на момент съёмки (meta), иначе измеренная для этого микроскопа и объектива; нет — нули."""
@@ -198,6 +241,8 @@ def attach(st, folder):
     F = None
     if os.path.exists(fp):
         F = cv2.resize(np.load(fp), (W, H), interpolation=cv2.INTER_LINEAR)
+    dkp = os.path.join(folder, 'join', 'dark.npy')
+    Dk = cv2.resize(np.load(dkp), (W, H), interpolation=cv2.INTER_LINEAR) if os.path.exists(dkp) and F is not None else None
     D = load_dist(folder, st.meta)
     maps = undistort_maps(W, H, D) if dist_corner(D, W, H) >= 0.2 else None
     gp = os.path.join(folder, 'join', 'gains.npy')
@@ -215,7 +260,10 @@ def attach(st, folder):
                 f = F if F.ndim == 2 else F.mean(2)
             else:
                 f = F if F.ndim == 3 else F[..., None]
-            out = np.clip(img.astype(np.float32) / f, 0, 255).astype(np.uint8)
+            src = img.astype(np.float32)
+            if Dk is not None:                                     # тёмный кадр: шум и горячие пиксели матрицы
+                src = src - (Dk if Dk.ndim == src.ndim else (Dk.mean(2) if src.ndim == 2 else Dk[..., None]))
+            out = np.clip(src / f, 0, 255).astype(np.uint8)
         if maps is not None:
             out = cv2.remap(out, maps[0], maps[1], cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
         return out

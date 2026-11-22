@@ -6,7 +6,7 @@ from . import log as L
 
 
 def _prep(img, roi=0.5, down=2):
-    g = img if img.ndim == 2 else cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    g = img if img.ndim == 2 else img[..., 1]                   # зелёный канал: резче всего, без цветной каймы
     h, w = g.shape
     dh, dw = int(h * (1 - roi) / 2), int(w * (1 - roi) / 2)
     g = g[dh:h - dh, dw:w - dw]
@@ -15,13 +15,24 @@ def _prep(img, roi=0.5, down=2):
     return g.astype(np.float32)
 
 
+def _vollath(g):
+    """Vollath F4: автокорреляция со сдвигом 1 минус со сдвигом 2 (по обеим осям). Шум пикселей почти не
+    даёт вклада (он не коррелирует ни на 1, ни на 2), детали дают — лучший выбор для светлого поля
+    (Groen 1985; Sun, Duthaler, Nelson 2004)."""
+    g = g - float(g.mean())                                     # без среднего: иначе разность огромных чисел
+    x = float(np.mean(g[:, :-1] * g[:, 1:]) - np.mean(g[:, :-2] * g[:, 2:]))
+    y = float(np.mean(g[:-1] * g[1:]) - np.mean(g[:-2] * g[2:]))
+    return max(x + y, 1e-12)
+
+
+def _normvar(g):     return float(g.var() / max(float(g.mean()), 1.0) ** 2)
 def _laplacian(g):  return float(cv2.Laplacian(g, cv2.CV_32F).var())
 def _tenengrad(g):  return float(np.mean(cv2.Sobel(g, cv2.CV_32F, 1, 0) ** 2 + cv2.Sobel(g, cv2.CV_32F, 0, 1) ** 2))
 def _brenner(g):    return float(np.mean((g[:, 2:] - g[:, :-2]) ** 2))
 def _variance(g):   return float(g.var() / max(g.mean(), 1.0))
 
 
-METHODS = {'laplacian': _laplacian, 'tenengrad': _tenengrad,
+METHODS = {'vollath': _vollath, 'normvar': _normvar, 'laplacian': _laplacian, 'tenengrad': _tenengrad,
            'brenner': _brenner, 'variance': _variance}
 
 
@@ -90,12 +101,12 @@ def depth_of_field(na, mag, wavelength=0.55, sensor_px=2.2, n=1.0):
     return wavelength * n / na ** 2 + n * sensor_px / (mag * na)
 
 
-def _score(m, method, roi, frames=2):
+def _score(m, method, roi, frames=2, down=2):
     """Резкость, усреднённая по нескольким кадрам; кадр слегка сглажен (шум матрицы не считается деталью)."""
     v = 0.0
     for _ in range(frames):
         img = m.image()
-        g = _prep(img, roi, 2)
+        g = _prep(img, roi, down)
         g = cv2.GaussianBlur(g, (0, 0), 1.0)
         f = method if callable(method) else METHODS[method]
         v += f(g) / max(float(g.mean()) ** 2, 1.0)           # не зависит от яркости и экспозиции
@@ -156,3 +167,118 @@ def run_physics(m, method, center_um=None, half_um=None, step_um=None, roi=0.5, 
     return dict(z_um=zt * upp, z_fit_um=zbest * upp, score=float(max(vals)), points=len(curve),
                 contrast=contrast, dof_um=dof, step_um=s * upp, half_um=H * upp,
                 curve=[(z * upp, v) for z, v in curve])
+
+
+# ------------------------------------------------------------------ автофокус: скобка, точный проход, подгонка
+def fit_peak(zs, vs):
+    """Пик кривой резкости: около фокуса она близка к гауссиане, ln f — к параболе. МНК по точкам выше
+    половины максимума (не меньше 3, с весом f). -> (z пика, σ, хорошая ли подгонка)."""
+    zs, vs = np.asarray(zs, float), np.asarray(vs, float)
+    i = int(np.argmax(vs))
+    base = float(np.min(vs))
+    use = np.flatnonzero(vs - base >= 0.5 * (vs[i] - base))
+    if len(use) < 3:                                          # узкий пик: три точки вокруг максимума
+        use = np.arange(max(0, i - 1), min(len(vs), i + 2))
+    if len(use) < 3:
+        return float(zs[i]), None, False
+    z, f = zs[use], np.maximum(vs[use] - 0.9 * base, 1e-12)
+    zc = z.mean()
+    A = np.c_[np.ones(len(z)), z - zc, (z - zc) ** 2] * f[:, None]
+    a, b, c = np.linalg.lstsq(A, np.log(f) * f, rcond=None)[0]
+    if c >= 0:
+        return float(zs[i]), None, False
+    mu = zc - b / (2 * c)
+    ok = z.min() - 0.5 * np.ptp(z) <= mu <= z.max() + 0.5 * np.ptp(z)
+    return (float(mu) if ok else float(zs[i])), float(np.sqrt(-1 / (2 * c))), bool(ok)
+
+
+def run_af(m, method, center_um=None, step_um=None, range_um=None, roi=0.5, pr=None):
+    """Автофокус в три шага, всё — подходом снизу (люфт выбирается одинаково):
+    1) скобка: окно ±range вокруг ожидаемого Z, шаг step (грубо, уменьшенный кадр — пик шире); пик на краю —
+       окно сдвигается; кривая плоская — окно и шаг ×3, затем широкий поиск (focus_range прибора);
+    2) точно: ±1.5 шага вокруг лучшей точки, через один шаг мотора (или треть глубины резкости, если она больше);
+    3) подгонка: ln(резкость) — парабола (гауссиана) по точкам выше половины пика; столик — в ближайший к пику
+       шаг мотора; проверка: там резкость не хуже 85 % лучшей измеренной, иначе — лучшая измеренная точка.
+    step, range — для объектива (m.af_step, m.af_range), по умолчанию от глубины резкости."""
+    upp = m.motor_step
+    zlo, zhi = m._lim['z']
+    dof = m.depth_of_field
+    sc = max(1, int(round((step_um or max(dof, upp)) / upp)))
+    H = max(3 * sc, int(round((range_um or 6 * dof) / upp)))
+    sf = max(1, int(round(dof / 3 / upp)))
+    c = int(round((center_um / upp) if center_um is not None else m._p['z']))
+    curve = []
+
+    coarse = 'normvar'                                        # грубо — контраст: пик широкий, виден издалека;
+                                                              # точно — выбранная мера (по деталям)
+    def sweep(zs, down, label, meth=None):
+        try:
+            m._go({'z': max(zlo, zs[0] - 2 * max(1, zs[1] - zs[0] if len(zs) > 1 else 1))})   # подход снизу
+        except LimitError:
+            pass
+        vals = []
+        if pr:
+            pr.total = pr.done + len(zs) + 1
+        for z in zs:
+            try:
+                m._go({'z': z})
+            except LimitError:
+                break
+            v = _score(m, meth or method, roi, 2, down)
+            vals.append(v)
+            curve.append((z, v))
+            if pr:
+                pr.update(1, f"{label}: Z {z * upp:.1f} um, sharpness {v:.3g}")
+            if len(vals) >= 4 and v < 0.5 * max(vals) and vals[-2] < 0.6 * max(vals) and \
+                    int(np.argmax(vals)) < len(vals) - 2:
+                break                                        # пик пройден
+        return zs[:len(vals)], vals
+
+    tries, wide_done, sc0, H0 = 0, False, sc, H
+    while True:
+        lo, hi = max(zlo, c - H), min(zhi, c + H)
+        zs, vals = sweep(list(range(lo, hi + 1, sc)), 4, "bracket", coarse)
+        if not vals:
+            raise FocusError('E601', "The Z window is empty. Check m.z_max and m.z_min.")
+        i = int(np.argmax(vals))
+        med = float(np.median(vals))
+        mad = float(np.median(np.abs(np.asarray(vals) - med))) + 1e-30
+        flat = max(vals) < 2.0 * med or (max(vals) - med) < 8 * mad      # пика нет: только шум (мера без шумового пола)
+        if flat and tries == 0:                               # далеко от фокуса: шире и крупнее
+            H, sc, tries = 3 * H, 3 * sc, 1
+            L.event('AF-004', f"No focus peak within the window: wider (±{H * upp:.0f} um, step {sc * upp:.0f} um).", 20)
+            continue
+        if flat and not wide_done:
+            L.event('AF-004', "No focus peak: wide search.", 20)
+            m._go({'z': c})
+            r = run(m, coarse, m.focus_range, m.focus_step, roi, pr=pr)
+            c, H, sc, tries = int(round(r['z_um'] / upp)), max(3 * sc0, H0), sc0, 2
+            wide_done = True
+            continue                                          # широкий поиск нашёл место: скобка ещё раз там
+        if flat:                                              # и там пика нет: в лучшую точку, слабый фокус
+            break
+        if (i == 0 or i == len(zs) - 1) and tries < 3 and len(zs) > 2 and not (zs[i] in (zlo, zhi)):
+            c = zs[i] + (H if i == len(zs) - 1 else -H)       # пик на краю: окно туда
+            tries += 1
+            L.event('AF-004', f"Focus peak at the edge of the window, the window moves to Z {c * upp:.0f} um.", 20)
+            continue
+        break
+    zb = zs[i]
+    contrast = float(max(vals) / max(min(vals), 1e-12))
+    fz, fv = sweep(list(range(max(zlo, zb - int(1.5 * sc)), min(zhi, zb + int(1.5 * sc)) + 1, sf)), 2, "fine")
+    if len(fz) < 3:
+        fz, fv = zs, vals
+    mu, sig, ok = fit_peak(fz, fv)
+    zt = int(round(mu))
+    m._go({'z': max(zlo, zt - 2 * sf)})                       # к пику — снизу
+    m._go({'z': zt})
+    v_end = _score(m, method, roi, 2, 2)
+    best_i = int(np.argmax(fv))
+    if v_end < 0.85 * fv[best_i] and fz[best_i] != zt:        # подгонка подвела: в лучшую измеренную точку
+        zt = fz[best_i]
+        m._go({'z': max(zlo, zt - 2 * sf)})
+        m._go({'z': zt})
+        v_end = _score(m, method, roi, 2, 2)
+    return dict(z_um=zt * upp, z_fit_um=mu * upp, score=float(v_end), points=len(curve), contrast=contrast,
+                dof_um=dof, step_um=sc * upp, half_um=H * upp, fine_um=sf * upp, fit=ok,
+                width_um=(2.355 * sig * upp) if sig else None, curve=[(z * upp, v) for z, v in curve])

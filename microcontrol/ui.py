@@ -178,6 +178,40 @@ def progress_panel(img, title, stage, frac, text="", passed=0.0, left=None, foot
 MENU_H = 30
 
 
+TOOL_H = 36                  # строка шагов и главных кнопок под меню
+
+
+def tool_bar(W, steps, current, buttons, hover=None):
+    """Под меню: шаги работы (1 Overview > 2 Pick areas > ...; текущий подсвечен) и большие кнопки справа.
+    Возвращает (картинка TOOL_H x W, [(x0, x1, ('step', i) | ('button', подпись))])."""
+    img = np.full((TOOL_H, W, 3), (28, 28, 32), np.uint8)
+    cv2.line(img, (0, TOOL_H - 1), (W, TOOL_H - 1), (62, 62, 70), 1)
+    hits, x = [], 10
+    for i, st in enumerate(steps):
+        tw = size(st, 0.46)[0]
+        x0, x1 = x, x + tw + 16
+        on = i == current
+        hv = hover is not None and x0 <= hover <= x1
+        cv2.rectangle(img, (x0, 6), (x1, TOOL_H - 7), (120, 80, 30) if on else ((58, 58, 66) if hv else (40, 40, 46)), -1)
+        put(img, st, x0 + 8, TOOL_H - 13, 0.46, (255, 235, 200) if on else TEXT, 1)
+        hits.append((x0, x1, ('step', i)))
+        x = x1 + 4
+        if i < len(steps) - 1:
+            put(img, ">", x + 1, TOOL_H - 13, 0.46, DIM, 1)
+            x += 16
+    xr = W - 10
+    for b in reversed(buttons):
+        tw = size(b, 0.48)[0]
+        x0, x1 = xr - tw - 20, xr
+        hv = hover is not None and x0 <= hover <= x1
+        cv2.rectangle(img, (x0, 5), (x1, TOOL_H - 6), (78, 80, 92) if hv else (52, 54, 62), -1)
+        cv2.rectangle(img, (x0, 5), (x1, TOOL_H - 6), ACCENT if hv else (90, 92, 104), 1)
+        put(img, b, x0 + 10, TOOL_H - 13, 0.48, (245, 245, 245), 1)
+        hits.append((x0, x1, ('button', b)))
+        xr = x0 - 8
+    return img, hits
+
+
 def menu_bar(W, title, items, hover=None, active=None):
     """Строка меню сверху окна: слева — открытый проект, дальше пункты (New, Open, ...). hover — x мыши
     в строке (подсветка). Возвращает (картинка MENU_H x W, [(x0, x1, пункт)])."""

@@ -51,6 +51,9 @@ HELP = ["Shift+Esc: Exit (or close the window)", "P: Hide / show the left panel"
         "L: Light on / off   I: Laser on / off   W: White balance (aim at an empty place)   Space: Picture",
         "R: Ruler: click two points (distance, um)   0: Zero here   Shift+0: Real coordinates",
         "Wheel: zoom   Drag (middle button too): move the zoomed picture   Z: whole frame",
+        "Map (top right): click - the stage goes there, drag - a new area on this objective, wheel - zoom, right drag - move",
+        "Tab: big map / big camera   Double-click a shot area on the map: open it (crosses, brush, export)",
+        "Buttons on top: Scan area (scan + stitch), New area, Drawing for AutoCAD (DWG + DXF), Settings",
         "Selections are layers: Ctrl+click cards to mark them, then Merge / Minus / Overlap / Group / Ungroup above the list",
         "The eye on a card hides the selection on the maps (and shows it again); Show all above the list",
         "Squares chosen with the brush in the view become selections (one per figure, next objective)   Shift+drag over a selection: move it",
@@ -240,6 +243,28 @@ def live_map(m, shape, W, H, zoom=1.0, zc=None, rot=0.0):
     to = lambda S: tuple(i2v(c + K @ ((P - np.asarray(S)) / d)))
     back = lambda q: P - d * np.linalg.solve(K, v2i(q) - c)
     return to, back, i2v, v2i, c, k, zc
+
+
+def camera_box(m, shape):
+    """Углы живого кадра на столике (настоящие мкм, с учётом люфта) — рамка «камера здесь» на карте."""
+    ih, iw = shape[:2]
+    K, d = m._pixels_per_step(), m.motor_step
+    P = np.array([m._p['x'], m._p['y']], float)
+    B = getattr(m, '_bl', None)
+    if B is not None:
+        P = P + np.asarray(B, float) @ np.array([m._dir.get('x', 0), m._dir.get('y', 0)], float)
+    P = P * d
+    c = np.array([iw / 2, ih / 2])
+    return np.array([P - d * np.linalg.solve(K, np.array(u, float) - c) for u in ((0, 0), (iw, 0), (iw, ih), (0, ih))])
+
+
+STEPS = ["1 Overview", "2 Pick areas", "3 Detail", "4 Drawing"]
+STEP_HELP = [
+    "Step 1: put a small objective (4x or 10x), drag a rectangle on the map over the chip, then Scan area",
+    "Step 2: open the overview (double-click it on the map or V), mark 3 crosses (C), paint flakes with the brush (B)",
+    "Step 3: put 50x or 100x, choose an area on the right and press Scan area",
+    "Step 4: choose an area and press Drawing for AutoCAD (DWG + DXF with pictures, crosses and outlines)"]
+BUTTONS = ["Scan area", "New area", "Drawing for AutoCAD", "Settings"]
 
 
 MAP_COLS, MAP_ROWS = 11, 9    # видимое окно мини-карты, кадров
@@ -530,7 +555,7 @@ def _run(m, fullscreen=False, _keys=None):
     if fullscreen:
         SW, SH = screen_size()
     L.event('MAN-001', f"Manual mode at {m.position}.")
-    show_help, msg, msg_t, sharp, n = False, "H: Help.  Tab or click a field to edit it", time.monotonic(), 0.0, 0
+    show_help, msg, msg_t, sharp, n = False, "Click the map to go there, drag on it for a new area. Tab: big map. H: all keys", time.monotonic(), 0.0, 0
     SM.init_areas(m)                                     # области образцов (настоящие мкм)
     car = dict(scroll=0, hits=[], confirm=None, t=0.0, multi=[], tools=[])   # карусель справа; multi — отмеченные
     mdr = dict(on=False)                                 # Shift + тянуть: сдвиг выделения (индекс, начало, сдвиг)
@@ -581,17 +606,57 @@ def _run(m, fullscreen=False, _keys=None):
     def on_field(x, y):
         return any(x0 <= x <= x1 and y0 <= y <= y1 for (x0, y0, x1, y1) in rects.values())
 
-    menu = dict(hover=None, hits=[])                     # строка меню сверху: проект, образец, Open, New ...
+    menu = dict(hover=None, hits=[], thits=[], thover=None)   # меню; под ним — шаги и большие кнопки
+    from .navmap import NavMap
+    if getattr(m, '_nav', None) is None:
+        m._nav = NavMap()
+        m._panel_hidden = True                           # настройки — по кнопке Settings
+    nav = m._nav
+    nv = dict(big=getattr(m, '_nav_big', False), mr=None, inset=None, press=None, drag=None, pan=None)
+
+    def in_rect(r_, x, y):
+        return r_ is not None and r_[0] <= x <= r_[2] and r_[1] <= y <= r_[3]
 
     def on_mouse(ev, x, y, flags, *_):
         # тянуть любой кнопкой по картинке (левой — не по полям) — сдвиг увеличенной картинки; колесо, + / - — зум
-        if y < UI.MENU_H and not zm['pan']:                 # строка меню
+        if y < UI.MENU_H and not zm['pan'] and nv['press'] is None:     # строка меню
             menu['hover'] = x if ev == cv2.EVENT_MOUSEMOVE else menu['hover']
             if ev == cv2.EVENT_LBUTTONDOWN:
                 clicks.append(('menu', x))
             return
         menu['hover'] = None
-        y -= UI.MENU_H
+        if y < UI.MENU_H + UI.TOOL_H and not zm['pan'] and nv['press'] is None:   # шаги и кнопки
+            menu['thover'] = x if ev == cv2.EVENT_MOUSEMOVE else menu['thover']
+            if ev == cv2.EVENT_LBUTTONDOWN:
+                clicks.append(('tbar', x))
+            return
+        menu['thover'] = None
+        y -= UI.MENU_H + UI.TOOL_H
+        if nv['press'] is not None or nv['pan'] is not None or \
+                (in_rect(nv['mr'], x, y) and not in_rect(nv['inset'], x, y) and not zm['pan'] and not mdr['on']):
+            mx_, my_ = x - nv['mr'][0], y - nv['mr'][1]                # карта (как в стратегиях: щёлкнул — поехал)
+            if ev == cv2.EVENT_LBUTTONDBLCLK:
+                clicks.append(('mapdbl', mx_, my_))
+            elif ev == cv2.EVENT_LBUTTONDOWN:
+                nv['press'] = (mx_, my_)
+            elif ev == cv2.EVENT_MOUSEMOVE and nv['press'] is not None and flags & cv2.EVENT_FLAG_LBUTTON:
+                if abs(mx_ - nv['press'][0]) + abs(my_ - nv['press'][1]) > 6:
+                    nv['drag'] = (*nv['press'], mx_, my_)
+            elif ev == cv2.EVENT_LBUTTONUP and nv['press'] is not None:
+                clicks.append(('maprect', *nv['drag']) if nv['drag'] else ('mapclick', *nv['press']))
+                nv['press'], nv['drag'] = None, None
+            elif ev in (cv2.EVENT_RBUTTONDOWN, cv2.EVENT_MBUTTONDOWN):
+                nv['pan'] = (mx_, my_, None if nav.c is None else nav.c.copy())
+            elif ev == cv2.EVENT_MOUSEMOVE and nv['pan'] is not None:
+                clicks.append(('mappan', mx_, my_))
+            elif ev in (cv2.EVENT_RBUTTONUP, cv2.EVENT_MBUTTONUP):
+                nv['pan'] = None
+            elif ev == cv2.EVENT_MOUSEWHEEL:
+                clicks.append(('mapwheel', mx_, my_, wheel_delta(flags)))
+            return
+        if in_rect(nv['inset'], x, y) and nv['big'] and ev == cv2.EVENT_LBUTTONDOWN:   # камера в углу — крупно
+            clicks.append(('swap',))
+            return
         if ev == cv2.EVENT_MOUSEMOVE:
             hover[0], hover[1] = (x, y), time.monotonic()
         if car.get('press') is not None:                 # тянут карточку или полосу прокрутки карусели
@@ -732,6 +797,59 @@ def _run(m, fullscreen=False, _keys=None):
         L.event('MAN-012', r_ + ".")
         return r_ + " (Ctrl+Z: back)"
 
+    def draw_nav(view, Wl, bh_, shape):
+        """Карта образца: в углу кадра (камера крупно) или на всё поле (Tab), камера тогда — в углу."""
+        from .layers import rings as _rings
+        mw_, mh_ = min(400, Wl // 2), min(290, H // 2)
+        inset = (Wl - mw_ - 10, 10, Wl - 10, 10 + mh_)
+        mr = (0, 0, Wl, H - bh_) if nv['big'] else inset
+        nv['mr'], nv['inset'] = mr, inset
+        w_, h_ = mr[2] - mr[0], mr[3] - mr[1]
+        cam = camera_box(m, shape)
+        if nav.c is None:                                  # первый раз: всё, что есть, и камера
+            bx = [SM._rect(m, r_) for r_ in m._regions if r_.get('kind') != 'group']
+            bx.append((*cam.min(0), *cam.max(0)))
+            if len(bx) == 1:
+                c_ = cam.mean(0)
+                fw_ = max(m.frame_size)
+                bx = [(c_[0] - 4 * fw_, c_[1] - 3 * fw_, c_[0] + 4 * fw_, c_[1] + 3 * fw_)]
+            nav.fit(bx, w_, h_)
+        camsmall = cv2.resize(view[:mh_ * 0 + H - bh_, :Wl], (mw_, int(mw_ * (H - bh_) / Wl))) if nv['big'] else None
+        mp = nav.base([f_ for f_, _k in latest_scans()], w_, h_)
+        for k_, rg_ in sorted(enumerate(m._regions), key=lambda t: SM.obj(m, t[1])):
+            if rg_.get('kind') == 'group' or SM.hidden(m, k_):
+                continue
+            c_ = SM.col(m, k_)
+            for ring_ in _rings(m, rg_):
+                nav.poly(mp, ring_, c_ if k_ == m._sel else SM.dim(c_, 0.85), 2 if k_ == m._sel else 1,
+                         fill=SM.dim(c_, 0.6) if rg_.get('shape') else None)
+            x0_, y0_, x1_, y1_ = SM._rect(m, rg_)
+            nav.label(mp, f"{SM.num(m, k_)}  {SM.obj(m, rg_)}x", (x0_, y0_), c_)
+        nav.poly(mp, cam, (40, 230, 255), 2)                # камера здесь
+        cx_, cy_ = nav.to_px(cam.mean(0))
+        cv2.drawMarker(mp, (int(cx_), int(cy_)), (40, 230, 255), cv2.MARKER_CROSS, 10, 1, cv2.LINE_AA)
+        if nv['drag']:                                      # новый участок: прямоугольник мышью
+            a_, b_, c2_, d2_ = nv['drag']
+            cv2.rectangle(mp, (int(a_), int(b_)), (int(c2_), int(d2_)), (255, 255, 255), 1, cv2.LINE_AA)
+            S0_, S1_ = nav.to_um((a_, b_)), nav.to_um((c2_, d2_))
+            cv2.putText(mp, f"{abs(S1_[0] - S0_[0]) / 1000:.2f} x {abs(S1_[1] - S0_[1]) / 1000:.2f} mm, {m.objective}x",
+                        (int(min(a_, c2_)), int(max(b_, d2_)) + 16), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1,
+                        cv2.LINE_AA)
+        nav.scale_bar(mp)
+        hint_ = ("Map: click - go there, drag - new area, wheel - zoom, right drag - move, double-click - open, Tab - camera"
+                 if nv['big'] else "Map (Tab: bigger)  click - go, drag - new area")
+        cv2.putText(mp, hint_, (8, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (20, 20, 20), 3, cv2.LINE_AA)
+        cv2.putText(mp, hint_, (8, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (225, 225, 225), 1, cv2.LINE_AA)
+        view[mr[1]:mr[3], mr[0]:mr[2]] = mp
+        cv2.rectangle(view, (mr[0], mr[1]), (mr[2] - 1, mr[3] - 1), (90, 92, 104), 1)
+        if camsmall is not None:                            # камера — в углу
+            x0_, y0_ = inset[0], inset[1]
+            hc_ = min(camsmall.shape[0], H - bh_ - y0_)
+            view[y0_:y0_ + hc_, x0_:x0_ + mw_] = camsmall[:hc_]
+            cv2.rectangle(view, (x0_, y0_), (x0_ + mw_ - 1, y0_ + hc_ - 1), (40, 230, 255), 1)
+            UI.put(view, "Camera (Tab or click: bigger)", x0_ + 8, y0_ + 18, 0.42, UI.TEXT, 1)
+            nv['inset'] = (x0_, y0_, x0_ + mw_, y0_ + hc_)
+
     def car_clamp(v):
         return int(max(0, min(car.get('content', 0) - H + 20, v)))
 
@@ -787,7 +905,137 @@ def _run(m, fullscreen=False, _keys=None):
         sm_ = m.sample
         img_, menu['hits'] = UI.menu_bar(W_, f"{sm_.title}  [{sm_.project.uid}]" + (f"  —  {sm_.description}" if sm_.description else ""),
                                          MENU, menu['hover'])
-        return img_
+        tb_, menu['thits'] = UI.tool_bar(W_, STEPS, step_now(), BUTTONS, menu['thover'])
+        return np.vstack([img_, tb_])
+
+    def latest_scans():
+        """Последние сшитые съёмки видимых выделений: [(папка, индекс выделения)], сначала меньшее увеличение."""
+        from .project import Selection
+        out = []
+        for k_, rg_ in sorted(enumerate(m._regions), key=lambda t: SM.obj(m, t[1])):
+            if rg_.get('kind') == 'group' or SM.hidden(m, k_):
+                continue
+            sc_ = Selection(m.sample, rg_).latest
+            if sc_ and os.path.exists(os.path.join(sc_.folder, 'join', 'preview_all.jpg')):
+                out.append((sc_.folder, k_))
+        return out
+
+    def step_now():
+        """Шаг работы: 0 — ничего не снято, 1 — есть обзор, но нет участков внутри, 2 — участки ждут съёмки,
+        3 — всё снято (чертёж)."""
+        if time.monotonic() - car.get('step_t', -9) < 1.0:
+            return car.get('step', 0)
+        from .project import Selection
+        real_ = [r_ for r_ in m._regions if r_.get('kind') != 'group']
+        shot = [r_ for r_ in real_ if Selection(m.sample, r_).latest]
+        kids = [r_ for r_ in real_ if r_.get('parent')]
+        car['step'] = 0 if not shot else (1 if not kids else (2 if any(r_ not in shot for r_ in kids) else 3))
+        car['step_t'] = time.monotonic()
+        return car['step']
+
+    def new_area(S0, S1):
+        """Новый участок прямоугольником (настоящие мкм) на текущем объективе."""
+        from .layers import geometric_parent, new_num, set_geom, box as _box
+        from .errors import MicroControlError as _E
+        x0_, x1_ = sorted((S0[0], S1[0]))
+        y0_, y1_ = sorted((S0[1], S1[1]))
+        fw_, fh_ = m.frame_size
+        r_ = dict(uid=__import__('uuid').uuid4().hex, num=new_num(m), obj=m.objective, fw=fw_, fh=fh_, pts=[],
+                  thumbs=[])
+        set_geom(m, r_, _box(x0_, y0_, max(x1_, x0_ + 1), max(y1_, y0_ + 1)))
+        r_.pop('shape')                                    # прямоугольник: хватает углов A, B
+        from .layers import geom as _geom
+        g_ = _geom(m, r_)
+        bad = [o['num'] for o in m._regions if o.get('kind') != 'group' and SM.obj(m, o) == m.objective
+               and g_.intersection(_geom(m, o)).area > 1e-3 * g_.area]
+        if bad:
+            return str(_E('E704', f"It overlaps Selection {', '.join(map(str, bad))} of the same objective "
+                                  f"({m.objective}x): draw it beside, or merge them later"))
+        m._regions.append(r_)
+        gp_ = geometric_parent(m, r_)
+        r_['parent'] = m._regions[gp_]['uid'] if gp_ is not None else None
+        m._sel = len(m._regions) - 1
+        SM.persist(m)
+        nx_, ny_ = SM.frames_of(m, m._sel)
+        return (f"{SM.title(m, m._sel)} ({m.objective}x): {(x1_ - x0_) / 1000:.2f} x {(y1_ - y0_) / 1000:.2f} mm, "
+                f"{nx_ * ny_} frames. Scan area shoots it")
+
+    def map_go(S):
+        """Щелчок по карте: столик едет туда (Z — по точкам фокуса выделения под точкой, если есть)."""
+        from .scan import focus_z
+        k_ = SM.area_at(m, S[0], S[1])
+        rg_ = m._regions[k_] if k_ is not None else None
+        z_ = focus_z(rg_['pts'], S[0], S[1]) - m._off['z'] if rg_ and rg_.get('pts') and SM.obj(m, rg_) == m.objective else None
+        SM.drive_to(m, float(S[0]), float(S[1]), z_)
+        return f"At X {S[0] - m._off['x']:.0f}, Y {S[1] - m._off['y']:.0f} um"
+
+    def export_drawing():
+        """Чертёж для AutoCAD: выбранное выделение (его последняя съёмка) -> DWG / DXF с картинками."""
+        nonlocal msg, msg_t
+        from .project import Selection
+        from .mask import export as _export
+        msg_t = time.monotonic()
+        k_ = m._sel
+        if k_ is None or k_ >= len(m._regions) or m._regions[k_].get('kind') == 'group':
+            msg = "Choose an area on the right first"
+            return
+        sc_ = Selection(m.sample, m._regions[k_]).latest
+        if not sc_:
+            msg = f"{SM.title(m, k_)} is not scanned yet: Scan area first"
+            return
+        if not os.path.exists(os.path.join(sc_.folder, 'grid.json')):
+            msg = f"{SM.title(m, k_)}: mark 3 crosses in the view first (double-click it on the map or V, then C)"
+            return
+        res = busy("Drawing for AutoCAD", lambda: _export(sc_.folder, dwg=True))
+        msg_t = time.monotonic()
+        msg = (f"Drawing failed: {res['e']}" if 'e' in res else
+               f"Drawing saved: {os.path.join(sc_.folder, 'export')}")
+
+    def busy(title, fn):
+        """Долгое дело в потоке; в окне — полоса прогресса (Progress)."""
+        import threading
+        from .util import Progress
+        prog, res, t0 = dict(title=title, f=0.0, text="starting", eta=None), {}, time.monotonic()
+        Progress.hook = lambda t, f, txt, el, eta: prog.update(title=t, f=f, text=txt, eta=eta)
+
+        def work():
+            try:
+                res['r'] = fn()
+            except Exception as e:
+                res['e'] = e
+        th = threading.Thread(target=work, daemon=True)
+        th.start()
+        try:
+            while th.is_alive():
+                Wl_ = W - SM.CAR_W
+                pic = (view[:, :Wl_].astype(np.float32) * 0.6).astype(np.uint8) if view is not None else \
+                    np.zeros((H, Wl_, 3), np.uint8)
+                UI.progress_panel(pic, title, prog['title'], prog['f'], prog['text'], time.monotonic() - t0, prog['eta'], "")
+                fr_ = view.copy()
+                fr_[:, :Wl_] = pic
+                cv2.imshow(WIN, np.vstack([menu_img(W), fr_]))
+                cv2.waitKey(60 if keys is None else 1)
+        finally:
+            Progress.hook = None
+            th.join()
+        return res
+
+    def tbar_do(what):
+        nonlocal msg, msg_t
+        msg_t = time.monotonic()
+        if what[0] == 'step':
+            msg = STEP_HELP[what[1]]
+        elif what[1] == "Scan area":
+            scan_here()
+        elif what[1] == "New area":
+            nv['big'] = m._nav_big = True
+            msg = "Drag a rectangle on the map (it takes the objective in place). Click the map: go there"
+        elif what[1] == "Drawing for AutoCAD":
+            export_drawing()
+        elif what[1] == "Settings":
+            m._panel_hidden = not getattr(m, '_panel_hidden', False)
+            if nv['big'] and not m._panel_hidden:
+                nv['big'] = m._nav_big = False
 
     def menu_do(item):
         """Пункт меню: открыть / создать проект и образец, сведения, съёмки, просмотр, подсказка."""
@@ -882,7 +1130,7 @@ def _run(m, fullscreen=False, _keys=None):
         msg_t = time.monotonic()
         ks = [k_ for k_, rg in enumerate(m._regions) if SM.obj(m, rg) == m.objective]
         if not ks:
-            msg = f"No selection for {m.objective}x: mark one with 1 and 2 (or switch the objective, M)"
+            msg = f"No area for {m.objective}x: drag a rectangle on the map (or switch the objective, M)"
             return
         nfr = sum(int(np.prod(SM.frames_of(m, k_))) for k_ in ks)
         fm_ = 'points' if m._use_fp else 'off'
@@ -1132,8 +1380,8 @@ def _run(m, fullscreen=False, _keys=None):
             if n % 4 == 0:                                     # резкость по тому же кадру (не дёргаем камеру ещё раз)
                 sharp = round(F_.sharpness(img, m.focus_method), 1)
             n += 1
-            W, H = (SW, SH) if fullscreen else window_size(WIN, (W, H + UI.MENU_H))
-            H -= UI.MENU_H                                     # сверху — строка меню
+            W, H = (SW, SH) if fullscreen else window_size(WIN, (W, H + UI.MENU_H + UI.TOOL_H))
+            H -= UI.MENU_H + UI.TOOL_H                         # сверху — меню и строка шагов
             rot = 0.0
             Wl = W - SM.CAR_W                                  # картинка — слева от карусели, по центру
             to_v, back_v, i2v, v2i, cimg, kz, zm['c'] = live_map(m, img.shape, Wl, H, zm['z'], zm['c'], rot)
@@ -1349,15 +1597,9 @@ def _run(m, fullscreen=False, _keys=None):
             bh_ = th0 + 20
             UI.panel(view, 0, H - bh_, Wl, H, 0.82)
             UI.facts(view, [t_.strip() for t_ in line.split("    ") if t_.strip()] + ["H: keys"], 14, H - 10, FS)
+            draw_nav(view, Wl, bh_, img.shape)
             if msg and time.monotonic() - msg_t < 5:
                 UI.toast(view, msg, Wl / 2, H - bh_ - 20, FS, 'err' if msg.startswith('[E') else 'ok', Wl - 60)
-            from .layers import rings as _rings
-            others = [(tuple(np.r_[work(SM._rect(m, rg)[:2]), work(SM._rect(m, rg)[2:])]), SM.col(m, k_),
-                       f"{SM.obj(m, rg)}x" if SM.obj(m, rg) != m.objective else "",
-                       [r_ - (m._off['x'], m._off['y']) for r_ in _rings(m, rg)] if rg.get('shape') else None)
-                      for k_, rg in sorted(enumerate(m._regions), key=lambda t: SM.obj(m, t[1]))
-                      if k_ != zk and rg.get('kind') != 'group' and not SM.hidden(m, k_)]
-            minimap(view, m, A, B, zcolor=SM.col(m, zk) if zk is not None else None, others=others, right=SM.CAR_W)
             items = car_items()
             selk_ = len(m._regions) if m._pending else m._sel
             sel_ = car['order'].index(selk_) if selk_ in car['order'] else None
@@ -1397,6 +1639,48 @@ def _run(m, fullscreen=False, _keys=None):
                 Wl_ = W - SM.CAR_W
                 k2 = min(Wl_ / img.shape[1], H / img.shape[0]) * zm['z']
                 zm['c'] = pix - (np.array(c_[1:3], float) - (Wl_ / 2, H / 2)) / k2
+                continue
+            if c_[0] == 'tbar':                                     # шаги и большие кнопки
+                it_ = next((t_ for x0_, x1_, t_ in menu['thits'] if x0_ <= c_[1] <= x1_), None)
+                if it_:
+                    tbar_do(it_)
+                continue
+            if c_[0] == 'swap':                                     # карта <-> камера
+                nv['big'] = m._nav_big = not nv['big']
+                continue
+            if c_[0] in ('mapclick', 'maprect', 'mappan', 'mapwheel', 'mapdbl'):   # карта
+                if nv['mr'] is None or nav.c is None:
+                    continue
+                if c_[0] == 'mapwheel':
+                    nav.zoom(c_[1:3], 1.25 if c_[3] > 0 else 0.8)
+                elif c_[0] == 'mappan':
+                    if nv['pan'] is not None and nv['pan'][2] is not None:
+                        nav.c = nv['pan'][2] - (np.array(c_[1:3], float) - nv['pan'][:2]) * nav.s
+                elif c_[0] == 'mapclick':
+                    S_ = nav.to_um(c_[1:3])
+                    hold_ = live.hold() if live is not None else None
+                    try:
+                        if hold_:
+                            hold_.__enter__()
+                        msg = map_go(S_)
+                    except MicroControlError as e:
+                        msg = str(e)
+                    finally:
+                        if hold_:
+                            hold_.__exit__(None, None, None)
+                elif c_[0] == 'maprect':
+                    msg = new_area(nav.to_um(c_[1:3]), nav.to_um(c_[3:5]))
+                elif c_[0] == 'mapdbl':                             # открыть снятый участок под точкой
+                    S_ = nav.to_um(c_[1:3])
+                    from .layers import contains as _contains
+                    hit_ = [k_ for f_, k_ in latest_scans() if _contains(m, m._regions[k_], S_[0], S_[1])]
+                    if hit_:
+                        m._sel = max(hit_, key=lambda k2: SM.obj(m, m._regions[k2]))
+                        m._view_pick = None
+                        open_view()
+                    else:
+                        msg = "Nothing shot here yet"
+                msg_t = time.monotonic()
                 continue
             if c_[0] == 'menu':                                     # строка меню
                 it_ = next((t_ for x0_, x1_, t_ in menu['hits'] if x0_ <= c_[1] <= x1_), None)
@@ -1582,7 +1866,10 @@ def _run(m, fullscreen=False, _keys=None):
                 h_last = (h_sig(), h_snap())
             msg_t = time.monotonic()
             continue
-        if key == 9:                                      # Tab: следующее поле (X -> Y -> Z -> выход из ввода)
+        if key == 9 and not edit:                         # Tab: карта <-> камера крупно
+            nv['big'] = m._nav_big = not nv['big']
+            continue
+        if key == 9:                                      # Tab в поле ввода: следующее поле (X -> Y -> Z -> выход)
             if edit:
                 commit(edit)
             order = [None, *FIELDS]

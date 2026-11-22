@@ -835,3 +835,33 @@ assert SM.hidden(m, 0) and m.sample.data['selections'][0].get('hidden'), m._regi
 M.run(m, fullscreen=False, _keys=[-1, ('car', 1280 - SM.CAR_W + 30, 54), -1, -1])   # Show all над списком
 assert not SM.hidden(m, 0) and not m.sample.data['selections'][0].get('hidden')
 m.close(); print("Hide / show a selection (eye), Show all: OK")
+
+# ------------------------------------------------------------------ 31. Навигатор: карта — щелчок едет, тянуть — новый участок; Tab; кнопки сверху; чертёж
+import microcontrol.manual as M
+import microcontrol.ui as UI_
+from microcontrol import samples as SM
+from microcontrol.mask import Grid
+m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp()); m.focus()
+fw, fh = m.frame_size
+M.run(m, fullscreen=False, _keys=[-1, -1])                          # карта встала по камере
+nav = m._nav
+p0, p1 = nav.to_px((0, 0)), nav.to_px((3 * fw, 2 * fh))
+M.run(m, fullscreen=False, _keys=[-1, ('maprect', *p0, *p1), -1, -1])   # тянуть по карте — новый участок 10x
+assert len(m._regions) == 1 and m._regions[0]['obj'] == 10, m._regions
+x0_, y0_, x1_, y1_ = SM._rect(m, m._regions[0])
+assert abs(x0_ - 0) < 2 and abs(x1_ - 3 * fw) < 2 and abs(y1_ - 2 * fh) < 2, (x0_, y0_, x1_, y1_)
+tgt = (1.5 * fw, 1.0 * fh)
+M.run(m, fullscreen=False, _keys=[-1, ('mapclick', *nav.to_px(tgt)), -1, -1])   # щелчок — столик едет туда
+assert abs(m.real_position.x - tgt[0]) < 2 * m.motor_step and abs(m.real_position.y - tgt[1]) < 2 * m.motor_step
+hits = UI_.tool_bar(1280, M.STEPS, 0, M.BUTTONS)[1]
+bx = lambda name: next((a + b) / 2 for a, b, t in hits if t == ('button', name))
+M.run(m, fullscreen=False, _keys=[-1, 9, -1, ('tbar', bx("Scan area")), -1, -1])   # Tab — карта крупно; Scan area
+assert m._nav_big and m.last_scan and os.path.exists(os.path.join(m.last_scan, 'join', 'preview_all.jpg'))
+f = m.last_scan
+px_um = json.load(open(os.path.join(f, 'meta.json')))['pixel_size_um']
+g = Grid(f); q0 = np.array([150.0, 120.0]); a_ = 100 / px_um
+g.cr.add(q0); g.cr.add(q0 + (a_, 0)); g.cr.add(q0 + (0, a_)); g.selected |= {(0, 0)}; g.save(px_um)
+m._sel = 0
+M.run(m, fullscreen=False, _keys=[-1, ('tbar', bx("Drawing for AutoCAD")), -1, -1])   # чертёж одной кнопкой
+assert os.path.exists(os.path.join(f, 'export', 'drawing.dxf')), os.listdir(os.path.join(f, 'export'))
+m.close(); print("Navigator: drag on the map - new area, click - go, Tab, Scan area, Drawing for AutoCAD: OK")

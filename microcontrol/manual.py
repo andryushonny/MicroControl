@@ -863,12 +863,14 @@ def _run(m, fullscreen=False, _keys=None):
         mp = nav.base([f_ for f_, _k in latest_scans()], w_, h_)
         boxes_ = {}
         from .layers import geom as _gm
+        base0_ = mp.copy()
+        chosen_ = m._sel is not None and m._sel < len(m._regions) and not SM.hidden(m, m._sel)
         clear_map = []                                      # выделения — чистые (там смотрят), вокруг — темнее
-        for k_, rg_ in enumerate(m._regions):
+        for k_, rg_ in ([] if chosen_ else enumerate(m._regions)):   # выбрано одно — только оно (ниже)
             if rg_.get('kind') != 'group' and not SM.hidden(m, k_):
                 clear_map += UI.geom_shapes(_gm(m, rg_), nav.to_px)
         UI.tint_outside(mp, clear_map, (30, 30, 30), 0.45)
-        for k_, rg_ in enumerate(m._regions):                # пирамидка: внутри выделения — всё, кроме его детей
+        for k_, rg_ in ([] if chosen_ else enumerate(m._regions)):   # пирамидка: внутри — всё, кроме детей
             if rg_.get('kind') == 'group' or SM.hidden(m, k_):
                 continue
             kids_ = [r2 for k2, r2 in enumerate(m._regions) if r2.get('parent') == rg_.get('uid')
@@ -883,6 +885,15 @@ def _run(m, fullscreen=False, _keys=None):
                     cv2.fillPoly(mk_, [np.int32(np.round(ext_ * 16))], 0, cv2.LINE_8, 4)
             tn_ = cv2.addWeighted(mp, 0.75, np.full_like(mp, SM.col(m, k_)), 0.25, 0)
             cv2.copyTo(tn_, mk_, mp)
+        if chosen_:
+            ms_ = np.zeros(mp.shape[:2], np.uint8)          # выбранное: внутри — как есть, снаружи — на 15 % темнее
+            for ext_, hs_ in UI.geom_shapes(_gm(m, m._regions[m._sel]), nav.to_px):
+                cv2.fillPoly(ms_, [np.int32(np.round(ext_ * 16))], 255, cv2.LINE_8, 4)
+                for h_ in hs_:
+                    cv2.fillPoly(ms_, [np.int32(np.round(h_ * 16))], 0, cv2.LINE_8, 4)
+            if ms_.any():
+                mp = cv2.convertScaleAbs(mp, alpha=0.85)
+                cv2.copyTo(base0_, ms_, mp)
         for k_, rg_ in sorted(enumerate(m._regions), key=lambda t: SM.obj(m, t[1])):
             if rg_.get('kind') == 'group' or SM.hidden(m, k_):
                 continue
@@ -1619,9 +1630,19 @@ def _run(m, fullscreen=False, _keys=None):
                     continue
                 d_ = mdr['d'] if mdr.get('k') == k_ else np.zeros(2)
                 clear_cam += UI.geom_shapes(_gq(m, rg_), lambda A_: np.array([to_v(S_ + d_) for S_ in A_], float))
+            if m._sel is not None and m._sel < len(m._regions) and not SM.hidden(m, m._sel):
+                d_ = mdr['d'] if mdr.get('k') == m._sel else np.zeros(2)   # выбранное: внутри — как есть,
+                cs_ = UI.geom_shapes(_gq(m, m._regions[m._sel]),             # снаружи — на 15 % темнее
+                                     lambda A_: np.array([to_v(S_ + d_) for S_ in A_], float))
+                if cs_:
+                    clear_cam, cam_a = cs_, 0.15
+                else:
+                    cam_a = 0.35
+            else:
+                cam_a = 0.35
             if clear_cam:
                 sub_ = view[:, :Wl].copy()
-                UI.tint_outside(sub_, clear_cam, (40, 40, 40), 0.35)
+                UI.tint_outside(sub_, clear_cam, (0, 0, 0) if cam_a < 0.3 else (40, 40, 40), cam_a)
                 view[:, :Wl] = sub_
             for k_, rg_ in enumerate(m._regions):
                 if rg_.get('kind') == 'group' or SM.hidden(m, k_):

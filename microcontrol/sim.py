@@ -137,14 +137,17 @@ class SimWorld:
         W, H = W or getattr(self, 'size', (640, 480))[0], H or getattr(self, 'size', (640, 480))[1]
         img = np.ascontiguousarray(self._frame(H, W).transpose(1, 0, 2)) if getattr(self, 'swap', False) \
             else self._frame(W, H)
-        k1 = getattr(self, 'dist_k1', 0.0)                    # дисторсия объектива (бочка < 0 < подушка)
-        if k1:
+        D = dict(getattr(self, 'dist', None) or {})           # дисторсия объектива: k1 (бочка < 0 < подушка),
+        if getattr(self, 'dist_k1', 0.0):                     # k2, p1, p2 — как в optics.py
+            D['k1'] = self.dist_k1
+        if any(D.values()):
+            from .optics import dist_shift
             h, w = img.shape[:2]
             c, R = np.array([w / 2, h / 2], np.float32), float(np.hypot(w / 2, h / 2))
             y, x = np.mgrid[0:h, 0:w].astype(np.float32)
-            dx, dy = x - c[0], y - c[1]
-            sc = 1 - k1 * (dx * dx + dy * dy) / R ** 2          # снятый пиксель -> точка ровного кадра
-            img = cv2.remap(img, c[0] + dx * sc, c[1] + dy * sc, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)
+            d = dist_shift(np.c_[(x - c[0]).ravel(), (y - c[1]).ravel()], D, R).astype(np.float32)
+            img = cv2.remap(img, x - d[:, 0].reshape(h, w), y - d[:, 1].reshape(h, w), cv2.INTER_LINEAR,
+                            borderMode=cv2.BORDER_REFLECT)   # снятый пиксель -> точка ровного кадра
         vg = getattr(self, 'vignette', 0.0)                    # виньетирование: края темнее
         if vg:
             h, w = img.shape[:2]

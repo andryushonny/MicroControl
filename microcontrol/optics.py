@@ -4,10 +4,12 @@
 по яркости. Поле освещения F(x, y) — медиана по многим кадрам (детали образца у разных кадров разные
 и в медиане пропадают), сглаженная и нормированная на среднее; исправленный кадр I' = I / F.
 
-Дисторсия (радиальная, один коэффициент). Точка кадра на расстоянии r от центра смещена:
-    x_d = c + (x_u - c)·(1 + k1·ρ²),   ρ = r / R,  R — половина диагонали кадра.
-Смещение в углу кадра = k1·R, px. k1 измеряется по крестам (решётка с точным шагом — линейка):
-mc.distortion(folder) после разметки крестов в mc.view. Значение хранится для объектива и применяется
+Дисторсия. Точка ровного кадра u (от центра c: v = u - c, ρ² = |v|²/R², R — половина диагонали) в снятом
+кадре стоит в u + Δ(v):
+    Δ = k1·v·ρ² + k2·v·ρ⁴                                   — радиальная (бочка < 0 < подушка),
+    Δx += (p1·2xy + p2·(3x² + y²)) / R,  Δy += (p1·(x² + 3y²) + p2·2xy) / R   — тангенциальная (децентровка).
+k1..p2 находятся по крестам (решётка с точным шагом — линейка) вместе с положениями кадров: сшивка по
+крестам (anchor.py) после разметки крестов в mc.view. Значение хранится для объектива и применяется
 при сшивке и выводе.
 
 Поправки подключаются к ScanData автоматически (attach), если в папке скана есть join/flatfield.npy
@@ -124,25 +126,64 @@ def _dist_path(meta):
     return os.path.join(HOME, 'devices', f"distortion_{safe}_{meta['objective']}x.json")
 
 
-def load_k1(folder, meta):
-    """k1 для скана: join/distortion.json в папке скана, иначе измеренный для этого микроскопа и объектива."""
+DIST_KEYS = ('k1', 'k2', 'p1', 'p2')
+
+
+def dist_basis(v, R):
+    """Смещения от единичных k1, k2, p1, p2 в точках v (от центра кадра, px): массив (n, 2, 4)."""
+    v = np.atleast_2d(np.asarray(v, float))
+    x, y = v[:, 0], v[:, 1]
+    q = (x * x + y * y) / (R * R)
+    return np.stack([v * q[:, None], v * (q * q)[:, None],
+                     np.c_[2 * x * y, x * x + 3 * y * y] / R, np.c_[3 * x * x + y * y, 2 * x * y] / R], -1)
+
+
+def dist_vec(D):
+    return np.array([float((D or {}).get(k, 0.0)) for k in DIST_KEYS])
+
+
+def dist_shift(v, D, R):
+    """Δ(v): где точка ровного кадра оказывается в снятом (минус где она должна быть), px."""
+    return dist_basis(v, R) @ dist_vec(D)
+
+
+def dist_corner(D, W, H):
+    """Наибольшее смещение по краю кадра, px (насколько дисторсия заметна)."""
+    t = np.linspace(-1, 1, 9)
+    e = np.r_[np.c_[t * W / 2, np.full(9, -H / 2)], np.c_[t * W / 2, np.full(9, H / 2)],
+              np.c_[np.full(9, -W / 2), t * H / 2], np.c_[np.full(9, W / 2), t * H / 2]]
+    return float(np.hypot(*dist_shift(e, D, float(np.hypot(W / 2, H / 2))).T).max())
+
+
+def _dist_path(meta):
+    """Файл дисторсии для микроскопа (по серийному номеру) и объектива; у симулятора — нет."""
+    serial = str((meta.get('device') or {}).get('Serial', 'unknown'))
+    if serial.upper().startswith('SIM') or not meta.get('objective'):
+        return None
+    safe = ''.join(ch if ch.isalnum() else '_' for ch in serial)
+    return os.path.join(HOME, 'devices', f"distortion_{safe}_{meta['objective']}x.json")
+
+
+def load_dist(folder, meta):
+    """Дисторсия скана {k1, k2, p1, p2}: join/distortion.json в папке скана, иначе измеренная для этого
+    микроскопа и объектива; нет — нули."""
     for p in (os.path.join(folder, 'join', 'distortion.json'), _dist_path(meta)):
         if p and os.path.exists(p):
             with open(p, encoding='utf-8') as f:
                 d = json.load(f)
             if d.get('apply', True):
-                return float(d['k1'])
-    return 0.0
+                return {k: float(d.get(k, 0.0)) for k in DIST_KEYS}
+    return {k: 0.0 for k in DIST_KEYS}
 
 
-def undistort_maps(W, H, k1):
+def undistort_maps(W, H, D):
     """Карты cv2.remap: для пикселя выпрямленного кадра — где он в снятом кадре."""
     c = np.array([W / 2, H / 2], np.float32)
     R = float(np.hypot(W / 2, H / 2))
     y, x = np.mgrid[0:H, 0:W].astype(np.float32)
-    dx, dy = x - c[0], y - c[1]
-    s = 1 + k1 * (dx * dx + dy * dy) / (R * R)
-    return (c[0] + dx * s).astype(np.float32), (c[1] + dy * s).astype(np.float32)
+    v = np.c_[(x - c[0]).ravel(), (y - c[1]).ravel()]
+    d = dist_shift(v, D, R).astype(np.float32)
+    return (x + d[:, 0].reshape(H, W)).astype(np.float32), (y + d[:, 1].reshape(H, W)).astype(np.float32)
 
 
 # ------------------------------------------------------------------ подключение к ScanData
@@ -153,8 +194,8 @@ def attach(st, folder):
     F = None
     if os.path.exists(fp):
         F = cv2.resize(np.load(fp), (W, H), interpolation=cv2.INTER_LINEAR)
-    k1 = load_k1(folder, st.meta)
-    maps = undistort_maps(W, H, k1) if abs(k1) * np.hypot(W / 2, H / 2) >= 0.3 else None
+    D = load_dist(folder, st.meta)
+    maps = undistort_maps(W, H, D) if dist_corner(D, W, H) >= 0.2 else None
     gp = os.path.join(folder, 'join', 'gains.npy')
     st.gains = np.load(gp) if os.path.exists(gp) else None     # яркость кадров, выровненная по перекрытиям
     if st.gains is not None and len(st.gains) != len(st):
@@ -176,89 +217,16 @@ def attach(st, folder):
         return out
 
     st.fix = fix
-    st.fix_info = dict(flatfield=F is not None, k1=k1 if maps is not None else 0.0, gains=st.gains is not None)
+    st.fix_info = dict(flatfield=F is not None, dist=D if maps is not None else None,
+                       corner_px=dist_corner(D, W, H) if maps is not None else 0.0, gains=st.gains is not None)
     return st
 
 
-@timed_fn('Distortion measurement')
 def measure_distortion(folder, save=True):
-    """Дисторсия по крестам. Нужны: mc.stitch(folder) и решётка крестов из mc.view (G).
-    В каждом кадре кресты ищутся около мест, где их ставит решётка (центр — по симметрии креста);
-    отклонения за вычетом среднего по кадру (сдвиг кадра) сравниваются с моделью k1·(u - c)·ρ²."""
-    from .mask import Grid, snap_cross
-    from .storage import ScanData
-    from .stitch import load_positions
-    from .util import Result
-    g = Grid(folder)
-    if not g.ready():
-        raise ValueError("Mark the crosses first: mc.view(folder), key C.")
-    st = ScanData(folder)
-    st.fix = None                                             # мерить по невыпрямленным кадрам
-    H, W = st.shape[:2]
-    P = load_positions(folder, st)
-    P = P - P.min(0)
-    px = st.meta.get('pixel_size_um') or 1.0
-    r = int(min(150, max(8, 15.0 / px)))
-    c = np.array([W / 2, H / 2])
-    Rd = float(np.hypot(W / 2, H / 2))
-    E, X = [], []
-    from .util import Progress
-    pr = Progress(len(st), "Distortion", unit='frames')
-    for k in range(len(st)):
-        pr.update(1, f"crosses found: {len(E)}")
-        lo, hi = P[k] + r * 2, P[k] + (W, H) - r * 2
-        pts = [(i, j) for i, j in g.cells_range(lo, hi)
-               if np.all(g.cr.point(i, j) >= lo) and np.all(g.cr.point(i, j) <= hi)]
-        if len(pts) < 2:
-            continue
-        img = None
-        d_, u_ = [], []
-        for i, j in pts:
-            u = g.cr.point(i, j) - P[k]
-            x0, y0 = int(round(u[0])) - 2 * r, int(round(u[1])) - 2 * r
-            if img is None:
-                img = st.frame(k)
-                img = img if img.ndim == 2 else cv2.cvtColor(np.ascontiguousarray(img), cv2.COLOR_BGR2GRAY)
-            win = img[y0:y0 + 4 * r + 1, x0:x0 + 4 * r + 1]
-            if win.shape != (4 * r + 1, 4 * r + 1):
-                continue
-            d, resp = snap_cross(win, r, arm=g.arm)
-            if resp < 0.1:
-                continue
-            d_.append(np.array([x0 + 2 * r, y0 + 2 * r]) + d - u)      # где крест в кадре - где по решётке
-            u_.append(u)
-        if len(d_) < 2:
-            continue
-        d_, u_ = np.array(d_), np.array(u_)
-        v = u_ - c
-        f = v * (np.sum(v ** 2, 1) / Rd ** 2)[:, None]            # смещение при k1 = 1 (кубическое)
-        E.append(d_ - d_.mean(0))
-        X.append(np.stack([v - v.mean(0), np.c_[-v[:, 1], v[:, 0]] - np.c_[-v[:, 1], v[:, 0]].mean(0),
-                           f - f.mean(0)], -1))             # масштаб и поворот решётки — отдельно от дисторсии
-    pr.close()
-    st.close()
-    if not E:
-        raise ValueError("No frame with 2 or more crosses found.")
-    E, X = np.vstack(E), np.vstack(X)                           # E: (n, 2); X: (n, 2, 3)
-    coef = np.linalg.lstsq(X.reshape(-1, 3), E.reshape(-1), rcond=None)[0]
-    k1 = float(coef[2])
-    lin = X[..., :2] @ coef[:2]
-    before = float(np.sqrt(((E - lin) ** 2).sum(1).mean()))
-    after = float(np.sqrt(((E - X @ coef) ** 2).sum(1).mean()))
-    corner = k1 * Rd
-    worth = abs(corner) >= 0.5 and after < 0.8 * before
-    d = dict(k1=k1, corner_px=corner, crosses=int(len(E)), rms_before_px=before, rms_after_px=after,
-             frame_px=[W, H], apply=bool(worth))
-    if save:
-        os.makedirs(os.path.join(folder, 'join'), exist_ok=True)
-        gp = _dist_path(st.meta) if worth else None
-        for p in (os.path.join(folder, 'join', 'distortion.json'),) + ((gp,) if gp else ()):
-            os.makedirs(os.path.dirname(p), exist_ok=True)
-            with open(p, 'w', encoding='utf-8') as f:
-                json.dump(d, f, indent=1)
-    return Result("Distortion measured", **{"Shift in the corner, px": round(corner, 2), "k1": f"{k1:.2e}",
-                  "Crosses": len(E), "Crosses off, px rms": f"{before:.2f} -> {after:.2f}",
-                  "Used": "yes: run mc.stitch(folder) again" if worth else "no: too small to matter"})
+    """Дисторсия объектива по крестам — это сшивка по крестам (anchor.anchor): положения кадров, решётка
+    и k1, k2, p1, p2 подбираются вместе. Нужны: mc.stitch(folder) и кресты, отмеченные в mc.view (C)."""
+    from .anchor import anchor
+    return anchor(folder, save=save)
 
 
 # ------------------------------------------------------------------ многополосное смешивание

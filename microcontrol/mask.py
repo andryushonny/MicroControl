@@ -145,20 +145,65 @@ class Grid:
         with open(gp_, 'w', encoding='utf-8') as f:
             json.dump(d, f, indent=1)
 
-    def refine(self, render, size, px_um, min_resp=0.1):
+    def snap_to_crosses(self, render, size, px_um, min_resp=0.1, render_s=None):
+        """Сетка поставлена не по этим кадрам (по решётке образца через координаты столика): сдвинуть её на
+        настоящие кресты этой мозаики. Каждый крест, куда попадает решётка, ищется по симметрии; сдвиг — медиана.
+        4 и больше крестов — затем refine по всем. -> (найдено крестов, сдвиг px или None)."""
+        if not self.ready():
+            return 0, None
+        # окно ±30 мкм: сетка, перенесённая с другого объектива, может промахнуться на 10-15 мкм;
+        # на 50x/100x крест крупнее перебора плеч (ARMS) — участок берётся уменьшенным в k раз
+        k = min(1.0, 4.0 * px_um) if render_s is not None else 1.0
+        r = int(min(150, max(8, 30.0 * k / px_um)))
+        R0 = 10.0 / px_um                                     # узел не ближе 10 мкм к краю (окно может выйти за край)
+        ds = []
+        for i, j in self.cells_range((0, 0), size):
+            q = self.cr.point(i, j)
+            if not (R0 <= q[0] <= size[0] - R0 and R0 <= q[1] <= size[1] - R0):
+                continue
+            reg = render_s(q[0], q[1], k, 4 * r + 1, 4 * r + 1) if render_s is not None else \
+                render(q[0], q[1], 4 * r + 1, 4 * r + 1)
+            gq = cv2.cvtColor(reg, cv2.COLOR_BGR2GRAY) if reg.ndim == 3 else reg
+            if gq.std() < 2:
+                continue
+            d, resp = snap_cross(gq, r, arm=None if k < 1 else self.arm)
+            if resp >= min_resp and np.any(d):
+                ds.append(np.asarray(d, float) / k)
+            if len(ds) >= 60:
+                break
+        if not ds:
+            return 0, None
+        d = np.median(np.array(ds), axis=0)
+        self.cr.marks = [np.asarray(p, float) + d for p in self.cr.marks]
+        self.cr._fit()
+        self.refined = None
+        if len(ds) >= 4 and k >= 1:
+            self.refine(render, size, px_um, min_resp)
+        return len(ds), d
+
+    def refine(self, render, size, px_um, min_resp=0.1, render_s=None, progress=None):
         """Уточнить решётку по ВСЕМ крестам мозаики: в каждом узле, куда попадает решётка, центр креста
         ищется по симметрии; затем O, v1, v2 — МНК по всем найденным (выбросы > 3σ отбрасываются).
         render(cx, cy, w, h) -> кусок мозаики в масштабе 1. Ошибка ручных отметок перестаёт копиться
-        вдоль решётки. Возвращает (число крестов, СКО отклонения от решётки, px)."""
+        вдоль решётки. render_s(cx, cy, s, w, h) — то же в масштабе s: на 50x/100x крест крупнее перебора
+        плеч, участок берётся уменьшенным. progress(доля 0..1, подпись) — для полосы в окне.
+        Возвращает (число крестов, СКО отклонения от решётки, px)."""
         if not self.ready():
             return 0, None
-        r = int(min(150, max(8, 15.0 / px_um)))
+        ks = min(1.0, 4.0 * px_um) if render_s is not None else 1.0
+        r = int(min(150, max(8, 15.0 * ks / px_um)))
+        R0 = 2 * r / ks
+        arm0 = self.arm
+        if ks < 1:
+            self.arm = self.arm * ks if self.arm else None
+        cand = [(i, j) for i, j in self.cells_range((0, 0), size)
+                if R0 <= self.cr.point(i, j)[0] <= size[0] - R0 and R0 <= self.cr.point(i, j)[1] <= size[1] - R0]
         nodes, regs = [], []
-        for i, j in self.cells_range((0, 0), size):
+        for n_, (i, j) in enumerate(cand):
+            if progress and n_ % 8 == 0:
+                progress(0.8 * n_ / max(1, len(cand)), f"cross {n_ + 1} of {len(cand)}")
             q = self.cr.point(i, j)
-            if not (2 * r <= q[0] <= size[0] - 2 * r and 2 * r <= q[1] <= size[1] - 2 * r):
-                continue
-            reg = render(q[0], q[1], 4 * r + 1, 4 * r + 1)
+            reg = render_s(q[0], q[1], ks, 4 * r + 1, 4 * r + 1) if ks < 1 else render(q[0], q[1], 4 * r + 1, 4 * r + 1)
             g = cv2.cvtColor(reg, cv2.COLOR_BGR2GRAY) if reg.ndim == 3 else reg
             if g.std() < 2:                                      # пусто (вне кадров)
                 continue
@@ -173,7 +218,7 @@ class Grid:
                 for k in pick:
                     d, resp = snap_cross(regs[k], r, arm=L)
                     if resp >= min_resp and np.any(d):              # не нашёл (d = 0) — не считается
-                        P_.append(nodes[k][1] + d); IJ_.append(nodes[k][0])
+                        P_.append(nodes[k][1] + np.asarray(d, float) / ks); IJ_.append(nodes[k][0])
                 if len(P_) < max(4, 0.5 * len(pick)):
                     continue
                 M_ = np.c_[np.ones(len(P_)), np.array(IJ_, float)]
@@ -185,11 +230,15 @@ class Grid:
                     res_ = np.hypot(*(M_ @ sol_ - np.array(P_)).T)
                 score[L] = (-int((res_ < 2.0).sum()), float(np.median(res_)))   # больше крестов точно на решётке
             self.arm = min(score, key=score.get) if score else None
+        if progress:
+            progress(0.85, "fitting the grid")
         IJ, Pts = [], []
         for (ij, q), g in zip(nodes, regs):
             d, resp = snap_cross(g, r, arm=self.arm)
             if resp >= min_resp:
-                IJ.append(ij); Pts.append(q + d)
+                IJ.append(ij); Pts.append(q + np.asarray(d, float) / ks)
+        if ks < 1:                                              # плечо — в px мозаики
+            self.arm = (self.arm / ks) if self.arm else arm0
         if len(Pts) < 4:
             return len(Pts), None
         IJ, Pts = np.array(IJ, float), np.array(Pts)

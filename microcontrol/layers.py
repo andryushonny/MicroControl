@@ -571,8 +571,8 @@ def update_lattice(m):
     if best is None:
         return False
     old = m.sample.data.get('lattice')
-    if old and old.get('numbered') and not best[0]['numbered']:
-        return False
+    if old and old.get('numbered') and not best[0]['numbered'] and old.get('src') != best[0].get('src'):
+        return False                                    # номера другой съёмки остаются; своя сетка заменяет свою
     if old is None or any(not np.allclose(old[k], best[0][k], atol=1e-3) for k in ('O', 'e1', 'e2')) \
             or old.get('numbered') != best[0]['numbered']:
         m.sample.data['lattice'] = best[0]

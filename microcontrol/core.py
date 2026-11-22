@@ -1334,11 +1334,13 @@ class Microscope:
             kx, ky = -kx, -ky
         return np.array([[0.0, ky], [kx, 0.0]]) if self.swap_xy else np.diag([kx, ky])
 
-    def check_orientation(self, fix=True, distance=None):
+    def check_orientation(self, fix=True, distance=None, swap=True):
+        """swap=False — поворот на 90° (swap_xy) не менять, только знаки осей (так — в начале скана: камера
+        на приборе не поворачивается, а ложный поворот разворачивает карту и мозаику)."""
         with timed("Orientation check"):
-            return self._check_orientation(fix, distance)
+            return self._check_orientation(fix, distance, swap)
 
-    def _check_orientation(self, fix=True, distance=None):
+    def _check_orientation(self, fix=True, distance=None, swap_ok=True):
         """Проверить камерой, куда идёт картинка при движении X и Y, и исправить swap_xy, mirror_x, mirror_y.
         Столик сдвигается на ~20% кадра по X и по Y и возвращается. От этого зависит сшивка: при неверном знаке
         кадры встают в обратном порядке. Делается сама в начале каждого скана (scan_check = True)."""
@@ -1372,6 +1374,11 @@ class Microscope:
             return Result("Orientation not checked",
                           Reason="the picture shift is not clear (focus, aim at the crosses or a textured place)")
         swap = abs(sx_[1]) > abs(sx_[0])                    # X двигает картинку по вертикали
+        if swap != bool(self.swap_xy) and not swap_ok:      # поворот на 90° сам не меняется: только сказать
+            L.event('ORI-002', f"Orientation: the picture looks turned by 90 deg (shifts X {sx_.round(1)}, "
+                               f"Y {sy_.round(1)} px); swap_xy kept {bool(self.swap_xy)}.", 30)
+            return Result("Orientation not changed",
+                          Reason="the picture looks turned by 90 deg: if so, press O in m.manual() to check it")
         kx = sx_[1] if swap else sx_[0]
         ky = sy_[0] if swap else sy_[1]
         base = -1 if not self.turn_180 else 1               # знак при mirror = False (см. _pixels_per_step)
@@ -1641,7 +1648,7 @@ class Microscope:
                       "(other objectives) wait for their objective.")
         P_.save_regions(self)
         if self.cam and self.scan_check:                   # знаки осей картинки — до плана (от них зависит сшивка)
-            r = self.check_orientation()
+            r = self.check_orientation(swap=False)
             if 'Changed' in r or 'Reason' in r:
                 print(r)
             if 'Changed' in r:                             # окно микроскопа скажет: стрелки могли поменяться

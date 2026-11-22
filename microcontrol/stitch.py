@@ -72,9 +72,11 @@ def _pair(st, ia, ib, d, W, H, pad, sigma, max_shift, other=None):
 @_per_sample
 @timed_fn('Stitch (all of it)')
 def stitch(folder, engine='builtin', max_shift_um=40.0, sigma=None, alpha=0.01, preview=True, verbose=True,
-           flat=True):
+           flat=True, crosses=True, _again=False):
     """Сшить скан: найти точные положения кадров. engine='auto' | 'builtin' | 'ashlar'.
-    max_shift_um — насколько столик может ошибиться между соседними кадрами."""
+    max_shift_um — насколько столик может ошибиться между соседними кадрами.
+    crosses=True — если кресты уже отмечены (mc.view, C), кадры ставятся ещё и по крестам: каждый кадр
+    с крестом привязан к решётке, дисторсия объектива находится тут же (anchor.py)."""
     t0 = time.monotonic()
     st = ScanData(folder)
     H, W = st.shape[:2]
@@ -105,7 +107,7 @@ def stitch(folder, engine='builtin', max_shift_um=40.0, sigma=None, alpha=0.01, 
     A = meta_A(meta, W, H)
     p = np.array([[r['x_p'], r['y_p']] for r in st.index], float)
     pred = -(p @ A.T)                                            # верхний левый угол кадра, px
-    max_shift = max_shift_um / px
+    max_shift = min(max_shift_um / px, 0.5 * min(W, H))       # больше — уже не шов, а совпадение шума
     if sigma is None:
         sigma = 1.0 if px < 0.5 else 0.0
     used = None
@@ -128,6 +130,13 @@ def stitch(folder, engine='builtin', max_shift_um=40.0, sigma=None, alpha=0.01, 
         wr.writerow(['id', 'x_px', 'y_px', 'scale'])
         for i in range(n):
             wr.writerow([i, f"{pos[i, 0]:.2f}", f"{pos[i, 1]:.2f}", "1.0000"])
+    sm = info.pop('_seams', None)
+    sp = os.path.join(out, 'seams.npz')                     # швы — для сшивки по крестам (anchor.py)
+    if sm is not None:
+        from .optics import load_dist, dist_vec
+        np.savez(sp, theta0=dist_vec(load_dist(folder, meta)), **sm)
+    elif os.path.exists(sp):
+        os.remove(sp)
     info.update(engine=used, frames=n, frame_px=[W, H], pixel_size_um=px, time_s=round(time.monotonic() - t0, 1))
     with open(os.path.join(out, 'stitch.json'), 'w', encoding='utf-8') as f:
         json.dump(info, f, indent=1)
@@ -137,7 +146,7 @@ def stitch(folder, engine='builtin', max_shift_um=40.0, sigma=None, alpha=0.01, 
                   "Camera vs stage": info.get('camera', '-'),
                   "Backlash X, Y, um": info.get('backlash_um', '-'),
                   "Corrections": f"light {'yes' if getattr(st, 'fix_info', {}).get('flatfield') else 'no'}, "
-                                 f"distortion k1 {getattr(st, 'fix_info', {}).get('k1', 0.0):.2e}",
+                                 f"distortion {getattr(st, 'fix_info', {}).get('corner_px', 0.0):.1f} px at the edge",
                   "Time, s": info['time_s']})
     if flat:                                                # яркость кадров по перекрытиям (после сшивки)
         try:
@@ -166,6 +175,26 @@ def stitch(folder, engine='builtin', max_shift_um=40.0, sigma=None, alpha=0.01, 
                     r['Crosses'] = f"{nmv} moved with their frames (F in the viewer fits the grid again)"
     except Exception as e:                                  # сшивка важнее: кресты можно поставить заново
         L.event('STI-003', f"Crosses not moved: {type(e).__name__}: {e}", 30)
+    if crosses:
+        try:
+            from .mask import Grid
+            if Grid(folder).ready():
+                from .anchor import anchor
+                from .optics import load_dist, dist_corner
+                c0 = dist_corner(load_dist(folder, meta), W, H)
+                st.close()
+                ra = anchor(folder, verbose=verbose, preview=False)
+                if ra.info['fitted'] and abs(ra.info['corner_px'] - c0) > 0.5 and not _again:
+                    # дисторсия заметно другая: швы — заново по выпрямленным кадрам, затем кресты ещё раз
+                    return stitch(folder, engine, max_shift_um, sigma, alpha, preview, verbose, flat, crosses, True)
+                for k_ in list(ra)[1:]:
+                    r[k_] = ra[k_]
+                r['Crosses'] = ra['Crosses']
+                r.share = ra.share
+                pos = load_positions(folder)
+        except Exception as e:                              # кресты не нашлись — остаётся сшивка по швам
+            L.event('STI-006', f"Not stitched on the crosses: {type(e).__name__}: {e}", 30)
+            r['Crosses'] = f"not used: {e}"
     if preview:
         r['Preview'] = make_preview(folder, pos, verbose=verbose)
         r['Time, s'] = round(time.monotonic() - t0, 1)
@@ -232,12 +261,24 @@ def _builtin(st, pred, p, W, H, max_shift, sigma, alpha, verbose, A=None):
     sg[0] = sg[1] if n > 1 else 0
     dsg = sg[J] - sg[I]
     Bl = np.zeros((2, 2))                                       # px на смену направления по X и по Y
-    if ok.sum() >= 3 and np.linalg.matrix_rank(dp[ok]) == 2:   # d = M·Δp + Bl·Δs по принятым швам (один ряд — нет)
+    okm = err < max(min(thr, 0.99), 0.3)                         # модель — по всем правдоподобным швам: выбросы
+    if okm.sum() >= 3 and np.linalg.matrix_rank(dp[okm]) == 2:  # уберёт МНК ниже (d = M·Δp + Bl·Δs; один ряд — нет)
+        ok_ = ok
+        ok = okm
         cols = [dp[ok]] + ([dsg[ok]] if np.abs(dsg[ok]).sum() > 0 else [])
-        sol = np.linalg.lstsq(np.hstack(cols), meas[ok], rcond=None)[0]
+        X_ = np.hstack(cols)
+        inl = np.ones(len(X_), bool)
+        for _ in range(4):                                      # ложные швы (совпадение шума) — прочь
+            sol = np.linalg.lstsq(X_[inl], meas[ok][inl], rcond=None)[0]
+            rs_ = np.hypot(*(X_ @ sol - meas[ok]).T)
+            new = rs_ < max(3.0, 3.0 * 1.48 * float(np.median(rs_[inl])))
+            if new.sum() < 3 or (new == inl).all():
+                break
+            inl = new
         model = sol[:2].T
         if len(cols) > 1:
             Bl = sol[2:].T / 2.0                                # Δs = ±2 при смене направления
+        ok = ok_
     base = p @ model.T + sg @ Bl.T
     base += (pred - base).mean(0)
     # 5) взвешенный МНК с подавлением выбросов (веса Коши по невязке): шов, не согласный с остальными,
@@ -265,7 +306,8 @@ def _builtin(st, pred, p, W, H, max_shift, sigma, alpha, verbose, A=None):
     ang = np.degrees(np.arctan2(R_[1, 0] - R_[0, 1], R_[0, 0] + R_[1, 1]))
     sc = np.sqrt(abs(np.linalg.det(model)))
     bl_um = np.hypot(*Bl.T) * 2 * (st.meta.get('pixel_size_um') or 1.0)
-    return pos, dict(pairs=len(pairs), accepted=int(keep.sum()), threshold=round(thr, 3),
+    return pos, dict(_seams=dict(I=I, J=J, meas=meas, w=np.where(keep, w, 0.0)),
+                     pairs=len(pairs), accepted=int(keep.sum()), threshold=round(thr, 3),
                      backlash_um=[round(float(v), 2) for v in bl_um],
                      residual_px=f"{np.nanmedian(res_k):.2f} median, {np.nanmax(res_k):.2f} max",
                      camera=f"turn {ang:+.2f} deg, {sc:.4f} px/step", model=model.tolist())

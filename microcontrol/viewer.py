@@ -301,7 +301,7 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
     from . import lattice as LT
     smp0 = P0_.sample_obj(folder)
     LAT = smp0.data.get('lattice') if smp0 is not None else None
-    seeded_ = False
+    seeded_, st0_msg = False, ""
     if not g.ready() and LAT is not None and LAT.get('numbered'):   # решётка образца с номерами есть: кресты не нужны
         try:
             LT.seed_grid(folder, g, LAT)
@@ -323,6 +323,15 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
                 json.dump(d_, f_, indent=1)
             g = Grid(folder)
             seeded_ = True
+            try:                                                # по координатам столика — на кресты этих кадров
+                nfx_, dfx_ = g.snap_to_crosses(lambda x, y, w, h: sc.render(x, y, 1.0, w, h), sc.size, px_um,
+                                               render_s=lambda x, y, s_, w, h: sc.render(x, y, s_, w, h))
+                if nfx_:
+                    g.save(px_um)
+                    st0_msg = (f"   The grid snapped to {nfx_} crosses of this scan "
+                               f"(moved by {np.hypot(*dfx_) * px_um:.2f} um)")
+            except Exception:
+                pass
         except Exception:
             pass
     ses, subs = SM.session_of(folder)
@@ -332,7 +341,8 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
               poly=[], dirty=True, Wv=Wv - SM.CAR_W, Hv=Hv, straight=False, switch=None, ruler=[], mouse=None,
               msg=car.pop('msg', None) or (f"Selection {SM.sample_index(folder)} ({subs.index(folder) + 1} of {len(subs)})" if len(subs) > 1 else "")
               + (f"   Crosses moved with the stitched frames ({moved_}); F: fit the grid again" if moved_ else "")
-              + ("   The grid comes from the sample lattice (marked once): no crosses to mark here" if seeded_ else ""))
+              + ("   The grid comes from the sample lattice (marked once): no crosses to mark here" if seeded_ else "")
+              + st0_msg)
 
     def car_click(x, y):
         h_ = SM.hit(car.get('hits', []), x - st['Wv'], y)
@@ -402,6 +412,8 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
 
     STAGES = {'light': "light field (uneven lighting)", 'seams': "seams (where each frame really is)",
               'brightness': "frame brightness", 'saving': "saving the preview and small copies",
+              'fit grid': "finding every cross and fitting the square grid",
+              'crosses: finding': "finding the crosses in every frame", 'crosses': "putting the frames onto the crosses",
               'export: squares': "cutting the squares", 'export: saving': "writing the selection picture",
               'export: drawing': "drawing: pictures of the squares in micrometres (DXF / DWG)"}
 
@@ -500,8 +512,8 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
             while th.is_alive():
                 img = base.copy()
                 nm_ = prog['title'].replace("Stitch: ", "").lower()
-                order_ = ['light', 'seams', 'brightness', 'saving']
-                stage = (f"Step {order_.index(nm_) + 1} of 4:  " if nm_ in order_ else "") + STAGES.get(nm_, prog['title'])
+                order_ = ['light', 'seams', 'brightness', 'crosses: finding', 'saving']
+                stage = (f"Step {order_.index(nm_) + 1} of 5:  " if nm_ in order_ else "") + STAGES.get(nm_, prog['title'])
                 UI.progress_panel(img, title, stage, prog['f'], prog['text'], _t.monotonic() - t0, prog['eta'], footer)
                 show(np.hstack([img, pan]) if pan.shape[0] == img.shape[0] else img)
                 cv2.waitKey(60)
@@ -522,8 +534,12 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
         if e is not None:
             car['msg'] = f"Stitching failed: {type(e).__name__}: {e}"
         else:
+            on_ = next((k_ for k_ in r if k_.startswith('On the grid')), None)
             car['msg'] = (f"Stitched in {st['busy_s']:.0f} s: seams {r.get('Seams accepted', '-')}, "
-                          f"error {r.get('Seam error, px', '-')} px" + ("; crosses moved with the frames" if 'Crosses' in r else ""))
+                          f"error {r.get('Seam error, px', '-')} px" +
+                          (f"; on the crosses: {r[on_].split('-> ')[-1]} of crosses within 0.5 um of the grid, "
+                           f"distortion {r.get('Distortion at the edge, px', '-').split('-> ')[-1]} px at the edge" if on_ else
+                           "; C: mark 2-3 crosses, then S again: the frames go onto the crosses"))
         st['switch'] = folder
 
     def ruler_text(a=None, b=None):
@@ -555,9 +571,9 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
             json.dump(d_, f_, indent=1)
 
     def add_cross(v, snap=False):
-        unseed()
         """Крест — ровно там, где щёлкнули (середина пикселя экрана); snap (Shift+щелчок) — к центру креста
         на снимке (поиск по шаблону «+»)."""
+        unseed()
         Mc = from_view((v[0] + 0.5, v[1] + 0.5))
         d = np.zeros(2)
         if snap:
@@ -565,8 +581,19 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
             reg = sc.render(Mc[0], Mc[1], 1.0, 4 * r + 1, 4 * r + 1)
             d, resp = snap_cross(cv2.cvtColor(reg, cv2.COLOR_BGR2GRAY), r, arm=g.arm)
         try:
+            was_ = g.ready()
+            if was_:
+                v1_, v2_ = g.cr.vectors()                   # последняя готовая сетка (её индексы — у выбора, подписей)
+                st['regrid'] = (np.array(g.cr.O, float), np.array(v1_, float), np.array(v2_, float))
             ij = g.cr.add(Mc + d)
             g.refined = None                                # решётка — по отметкам (квадратная)
+            if not was_ and g.ready() and st.get('regrid') is not None:
+                O0_, a0_, b0_ = st['regrid']                # сетка заново: индексы — как у прежней в этом месте,
+                ij_ = [tuple(int(v_) for v_ in np.round(np.linalg.solve(np.c_[a0_, b0_], np.asarray(p_) - O0_)))
+                       for p_ in g.cr.marks]                # чтобы выбор, подписи и номера остались на своих квадратах
+                if len(set(ij_)) == len(ij_):
+                    g.cr.ij = ij_
+                    g.cr._fit()
             if len(g.cr.marks) == 1:
                 st['msg'] = ("Cross 1 marked. Now click its neighbour in the same row. Drag a mark to move it, "
                              "Shift+click: snap to the cross centre")
@@ -579,11 +606,47 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
                     set_straight(True)
                 if _cfg.AUTO_HINTS or (getattr(g, 'scores', None) and st.get('hints')):   # подсказки — по Y
                     hints()
+            auto_fit()
             g.save(px_um)
             if st['straight']:
                 set_straight(True)
         except ValueError as e:
             st['msg'] = str(e)
+
+    def auto_fit():
+        """Сетка по отметкам (2–3 щелчка, ошибка щелчка копится вдоль решётки) -> сразу по ВСЕМ крестам мозаики
+        (как F), если их не слишком много для мгновенного ответа."""
+        if not g.ready() or len(g.cr.marks) < 2:
+            return
+        n_nodes = sum(1 for _ in g.cells_range((0, 0), sc.size))
+        if n_nodes > 600:
+            st['msg'] += "   F: fit the grid to all crosses"
+            return
+        n_, rms_ = fit_grid()
+        if rms_ is not None and n_ >= 4:
+            st['msg'] += (f"   Grid fitted to all {n_} crosses: {rms_ * px_um:.2f} um off on average. "
+                          "S: stitch again - the frames go onto the crosses")
+
+    def fit_grid():
+        """F: сетка по всем крестам мозаики (mask.Grid.refine) — с полосой прогресса в окне."""
+        from .util import Progress
+
+        def run():
+            pr = Progress(100, "Fit grid", unit='%')
+
+            def cb(f, txt):
+                pr.done = int(100 * f)
+                pr.update(0, txt, force=True)
+            try:
+                return g.refine(lambda x, y, w, h: sc.render(x, y, 1.0, w, h), sc.size, px_um,
+                                render_s=lambda x, y, s_, w, h: sc.render(x, y, s_, w, h), progress=cb)
+            finally:
+                pr.close()
+        r_, e_ = busy("Fitting the grid to all crosses", run)
+        if e_ is not None:
+            st['msg'] = f"Fit grid failed: {type(e_).__name__}: {e_}"
+            return 0, None
+        return r_
 
     def hints():
         """Жёлтая подсказка: квадраты, где что-то есть (mask.Grid.find_useful) — по уменьшенной мозаике."""
@@ -706,6 +769,8 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
                     g.refined = None
                     g.save(px_um)
                     st['msg'] = f"Cross mark moved; tilt {g.cr.angle():+.3f} deg" if len(g.cr.marks) > 1 else "Cross mark moved"
+                    auto_fit()
+                    g.save(px_um)
                 else:
                     st['msg'] = "Drag the mark to move it; right click removes it"
                 st['dirty'] = True
@@ -1492,6 +1557,9 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
             continue
         ch = chr(key & 0xFF) if 0 <= key < 256 else ''
         raw = ch
+        if g.ready():                                       # последняя готовая сетка: пересозданная получит её индексы
+            v1_, v2_ = g.cr.vectors()
+            st['regrid'] = (np.array(g.cr.O, float), np.array(v1_, float), np.array(v2_, float))
         step = 0.25 * min(st['Wv'], st['Hv']) / st['s']    # стрелки — четверть окна
         ch = ch.lower()
         if key == 27:
@@ -1565,12 +1633,12 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
             if st['mode'] == 'cross':
                 unseed(); g.cr.undo(); g.save(px_um); st['msg'] = "Last cross mark removed"
         elif ch == 'f' and g.ready():
-            n_, rms = g.refine(lambda x, y, w, h: sc.render(x, y, 1.0, w, h), sc.size, px_um)
+            n_, rms = fit_grid()
             if _cfg.AUTO_HINTS or (getattr(g, 'scores', None) and st.get('hints')):
                 hints()
             g.save(px_um)
             st['msg'] = f"Grid fitted to all {n_} crosses" + (f": {rms:.2f} px off" if rms is not None else ": too few") + \
-                f"   hints: {len(g.useful)} squares (Y)"
+                f"   hints: {len(g.useful)} squares (Y)   S: stitch again on the crosses"
         elif ch == 'h':
             st['help'] = not st.get('help')
         elif ch == 't':                                      # T: ровно (наклон снят) / как снято

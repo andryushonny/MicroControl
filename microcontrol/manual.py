@@ -794,7 +794,7 @@ def _run(m, fullscreen=False, _keys=None):
     keys = iter(_keys) if _keys is not None else None
     if m.scan_check and not getattr(m, '_orient_checked', False):   # раз за сеанс: знаки осей картинки камерой
         try:
-            r = m.check_orientation()
+            r = m.check_orientation(swap=False)       # поворот на 90° — только клавишей O
             m._orient_checked = 'Reason' not in r
             msg, msg_t = "Orientation: " + r.get('Changed', r.get('Result', r.get('Reason', ''))), time.monotonic()
             if 'Changed' in r:

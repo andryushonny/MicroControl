@@ -147,6 +147,8 @@ HELP_ALL = [
     ("", "Right click on green: remove that square (or cell)   Shift + right click: the whole green area"),
     ("Hints", "Y: yellow hints on / off   Shift+Y: select them   < / >: sensitivity -/+ 5   U: type it"),
     ("Export", "E: export the selected squares (PNG + DXF)"),
+    ("Profiles", "P: window with the R, G, B profiles across the arms of the cross under the mouse: edges, width, contrast"),
+    ("", "Click a cross: pin it   Drag the yellow lines in the window: the edges (drawn on the map too)   Wheel there: range"),
 ]
 
 
@@ -742,10 +744,14 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
                                                car['scroll'] - 60 * np.sign(wheel_delta(flags)))))
                 st['dirty'] = True
             return
+        if prof_mouse(ev, x, y, flags):                     # окошко профилей
+            return
         if car.get('hov') is not None:                      # мышь ушла с карусели
             car['hov'], car['hxy'], st['car_dirty'] = None, None, True
         if ev == cv2.EVENT_MOUSEMOVE:
             st['hov'] = (x, y)
+            if st.get('prof'):
+                st['prof_dirty'] = True
         if ev == cv2.EVENT_MOUSEMOVE and st['mode'] == 'ruler' and len(st['ruler']) == 1:
             st['mouse'] = (x + 0.5, y + 0.5)               # линейка тянется за мышью до второй точки
             st['dirty'] = True
@@ -812,7 +818,9 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
                     g.save(px_um)
                 st['msg'] = f"Selected {len(g.selected)} squares"
             elif not moved and ev0 == cv2.EVENT_LBUTTONDOWN:
-                if st['mode'] == 'cross':
+                if st.get('prof') and st['mode'] == 'look':
+                    prof_click(x, y)
+                elif st['mode'] == 'cross':
                     add_cross((x, y), snap=sh0)
                 elif st['mode'] == 'select' and g.ready():
                     c = g.cell_at(from_view((x, y)))
@@ -866,6 +874,237 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
         elif ev == cv2.EVENT_MOUSEWHEEL:
             zoom(1.25 if wheel_delta(flags) > 0 else 0.8, x, y)
             st['dirty'] = True
+
+    prof_cache = {}
+
+    def prof_at(v):
+        """Профили креста под мышью (окно просмотра v): поиск креста как у Shift+щелчка, затем профили R, G, B
+        поперёк плеч (cross_profiles). Нет креста — просто срезы через мышь. Кэш по месту (мышь стоит — не считать)."""
+        Mc = from_view((v[0] + 0.5, v[1] + 0.5))
+        key_ = (int(round(Mc[0] * 2)), int(round(Mc[1] * 2)), st.get('prof_span', 1.0))
+        if key_ in prof_cache:
+            return prof_cache[key_]
+        from .mask import meas_gray
+        r = int(min(150, max(8, 15.0 / px_um)))
+        reg = sc.render(Mc[0], Mc[1], 1.0, 4 * r + 1, 4 * r + 1)
+        mid_ = np.array([2.0 * r, 2.0 * r])
+        info = {}
+        try:
+            d, resp = snap_cross(meas_gray(reg), r, arm=g.arm, info=info, angle=g.angle_deg())
+        except Exception:
+            d, resp = np.zeros(2), 0.0
+        L, t = info.get('arm'), info.get('thick')
+        res = None
+        if resp > 0 and L and t and np.any(d):
+            ang = np.radians(info['angle'] if info.get('edges') else (g.angle_deg() or 0.0))
+            res = dict(cross=True, reg=reg, rc=mid_ + d, c=Mc + d, L=L, t=t, ang=ang, edges=info.get('edges', False))
+            if not prof_fill(res):
+                res = None
+        if res is None:                                     # креста нет: срезы через мышь
+            res = dict(cross=False, reg=reg, rc=mid_, c=Mc, L=r // 2, t=max(3, r // 8), ang=0.0)
+            prof_fill(res, cuts=True)
+        if len(prof_cache) > 30:
+            prof_cache.clear()
+        prof_cache[key_] = res
+        return res
+
+    def prof_fill(res, cuts=False):
+        """Профили для res (заново — при другом размахе колесом). cuts — простые срезы через точку."""
+        from .mask import cross_profiles
+        span = st.get('prof_span', 1.0)
+        h_ = (2.0 * res['t'] + 4) * span
+        if cuts:
+            reg_, c0 = res['reg'].astype(np.float32), int(res['rc'][0])
+            hh = int(min(c0 - 1, max(6, h_)))
+            off = np.arange(-hh, hh + 1, dtype=np.float32)
+            res['prof'] = {'h': dict(x=off, prof=reg_[c0 - hh:c0 + hh + 1, c0 - 1:c0 + 2].mean(1), edges=None,
+                                     e=np.array([1.0, 0.0]), n=np.array([0.0, 1.0])),
+                           'v': dict(x=off, prof=reg_[c0 - 1:c0 + 2, c0 - hh:c0 + hh + 1].mean(0), edges=None,
+                                     e=np.array([0.0, 1.0]), n=np.array([-1.0, 0.0]))}
+        else:
+            pr = cross_profiles(res['reg'], res['rc'], res['L'], res['t'], res['ang'], h=h_)
+            if not pr:
+                return False
+            res['prof'] = pr
+        res['span'] = span
+        return True
+
+    def prof_edges(res, key_):
+        """Края плеча: свои (перетащены в окошке) или найденные по зелёному."""
+        u_ = res.get('user', {}).get(key_)
+        return u_ if u_ is not None else res['prof'][key_].get('edges')
+
+    def prof_plot(img, x0, y0, w, h, d_, title, edges):
+        """Один график: B, G, R по смещению поперёк плеча (мкм), края — жёлтые линии (их можно тянуть)."""
+        UI.put(img, title, x0, y0 - 6, 0.45, UI.TEXT)
+        cv2.rectangle(img, (x0, y0), (x0 + w, y0 + h), (90, 90, 90), 1)
+        x, P = d_['x'], np.asarray(d_['prof'], float)
+        lo, hi = float(P.min()), float(P.max())
+        span = max(hi - lo, 1.0)
+        lo, hi = lo - 0.08 * span, hi + 0.08 * span
+        X = x0 + 4 + (x - x[0]) / max(x[-1] - x[0], 1) * (w - 8)
+        Y = lambda v_: y0 + h - 4 - (v_ - lo) / (hi - lo) * (h - 8)
+        if edges:
+            for e_ in edges:
+                xe = int(round(x0 + 4 + (e_ - x[0]) / max(x[-1] - x[0], 1) * (w - 8)))
+                if x0 <= xe <= x0 + w:
+                    cv2.line(img, (xe, y0 + 1), (xe, y0 + h - 1), (0, 220, 255), 1, cv2.LINE_AA)
+                    cv2.drawMarker(img, (xe, y0 + h - 2), (0, 220, 255), cv2.MARKER_TRIANGLE_UP, 7, 1)
+        for ch_, col in ((0, (255, 140, 60)), (1, (80, 220, 80)), (2, (70, 70, 255))):
+            pts = np.c_[X, Y(P[:, ch_])].round().astype(np.int32)
+            cv2.polylines(img, [pts], False, col, 1, cv2.LINE_AA)
+        UI.put(img, f"{hi:.0f}", x0 + w + 4, y0 + 12, 0.38, UI.DIM)
+        UI.put(img, f"{lo:.0f}", x0 + w + 4, y0 + h - 2, 0.38, UI.DIM)
+        UI.put(img, f"{x[0] * px_um:+.1f}", x0, y0 + h + 14, 0.38, UI.DIM)
+        UI.put(img, f"{x[-1] * px_um:+.1f} um", x0 + w - 52, y0 + h + 14, 0.38, UI.DIM)
+        if edges:
+            a_, b_ = sorted(edges)
+            G_ = P[:, 1]
+            n_ = len(G_)
+            bg = float(np.median(np.r_[G_[:max(1, n_ // 6)], G_[-max(1, n_ // 6):]]))
+            k_ = np.clip(np.round(np.array([a_, b_]) - x[0]).astype(int), 0, n_ - 1)
+            arm_ = float(np.median(G_[k_[0]:k_[1] + 1])) if k_[1] > k_[0] else bg
+            return (b_ - a_), (arm_ - bg) / max(bg, 1.0), (a_ + b_) / 2
+        return None
+
+    def prof_res():
+        """Что показывать: закреплённый крест (щелчок), последний (мышь в окошке) или крест под мышью."""
+        if st.get('prof_pin') is not None:
+            return st['prof_pin']
+        hx, hy = st['hov']
+        x0_, y0_, x1_, y1_ = st.get('prof_rect') or (0, 0, -1, -1)
+        if x0_ <= hx <= x1_ and y0_ <= hy <= y1_ and st.get('prof_last') is not None:
+            return st['prof_last']
+        st['prof_last'] = prof_at((hx, hy))
+        return st['prof_last']
+
+    def with_prof(img):
+        """Окошко профилей (P) поверх просмотра: у креста — профили поперёк горизонтальных и вертикальных плеч,
+        ширина плеча, контраст по зелёному, центр креста. Края плеч (жёлтые) — и на карте, вдоль плеч."""
+        if not st.get('prof') or st.get('hov') is None:
+            return img
+        Wv, Hv = st['Wv'], st['Hv']
+        hx, hy = st['hov']
+        if not (0 <= hx < Wv and 0 <= hy < Hv) and st.get('prof_pin') is None:
+            return img
+        img = img.copy()
+        try:
+            res = prof_res()
+        except Exception as e_:
+            UI.toast(img, f"Profiles: {e_}", Wv / 2, 40, 0.5, 'err', Wv - 40)
+            return img
+        c_ = res['c']
+        rc_ = np.asarray(res['rc'], float)
+        for key_ in ('h', 'v'):                             # края на карте: линии вдоль плеча
+            d_ = res['prof'].get(key_)
+            ed = prof_edges(res, key_) if d_ is not None else None
+            if not ed:
+                continue
+            e, n = np.asarray(d_['e'], float), np.asarray(d_['n'], float)
+            Lx = res['L'] * 1.05
+            for o_ in ed:
+                p0, p1 = to_view(c_ + o_ * n - Lx * e), to_view(c_ + o_ * n + Lx * e)
+                cv2.line(img, tuple(int(round(q)) for q in p0), tuple(int(round(q)) for q in p1),
+                         (0, 220, 255), 1, cv2.LINE_AA)
+        if res['cross']:                                    # где найден центр — крестик
+            q = to_view(c_)
+            cv2.drawMarker(img, (int(round(q[0])), int(round(q[1]))), (0, 220, 255), cv2.MARKER_CROSS, 14, 1, cv2.LINE_AA)
+        pw, ph = 380, 368
+        if st.get('prof_rect') is None or not (st['prof_rect'][0] <= hx <= st['prof_rect'][2] and
+                                               st['prof_rect'][1] <= hy <= st['prof_rect'][3]):
+            st['prof_x0'] = Wv - pw - 12 if hx < Wv - pw - 40 else 12   # окошко — с другой стороны от мыши
+        x0, y0 = st.get('prof_x0', Wv - pw - 12), 44
+        st['prof_rect'] = (x0, y0, x0 + pw, y0 + ph)
+        UI.panel(img, x0, y0, x0 + pw, y0 + ph, 0.9, UI.LINE)
+        ttl = "Profiles" + ("  (pinned)" if st.get('prof_pin') is not None else "") + \
+              ("  (cross found)" if res['cross'] else "  (no cross: cuts through the mouse)")
+        UI.put(img, ttl, x0 + 12, y0 + 22, 0.5, UI.ACCENT, 1)
+        rows, plots = [], {}
+        for k, (key_, tt) in enumerate((('h', "across the horizontal arms (Y)"), ('v', "across the vertical arms (X)"))):
+            d_ = res['prof'].get(key_)
+            if d_ is None:
+                continue
+            px0, py0, w_, h_ = x0 + 12, y0 + 50 + k * 128, pw - 60, 86
+            plots[key_] = (px0, py0, w_, h_, float(d_['x'][0]), float(d_['x'][-1]))
+            r_ = prof_plot(img, px0, py0, w_, h_, d_, tt, prof_edges(res, key_))
+            if r_:
+                rows.append(f"{key_.upper()}: width {r_[0] * px_um:.2f} um ({r_[0]:.1f} px), contrast {100 * r_[1]:+.0f} %"
+                            + ("  (set by hand)" if res.get('user', {}).get(key_) is not None else ""))
+        st['prof_plots'] = plots
+        if max(float(np.max(d_['prof'])) for d_ in res['prof'].values()) >= 250:
+            rows.append("Overexposed (255): lower the exposure for exact edges")
+        rows.append("Click: pin   Drag lines: edges   Wheel: range   R-click: auto")
+        yy = y0 + ph - 14 - 16 * len(rows)
+        for t_ in rows:
+            UI.put(img, t_, x0 + 12, yy, 0.42, UI.ERR if t_.startswith("Overexposed") else
+                   (UI.DIM if t_.startswith("Click") else UI.TEXT))
+            yy += 16
+        UI.put(img, f"centre {c_[0] * px_um:.2f}, {c_[1] * px_um:.2f} um" + ("  (by the edges)" if res.get('edges') else ""),
+               x0 + 12, yy, 0.42, UI.DIM)
+        return img
+
+    def prof_mouse(ev, x, y, flags):
+        """Мышь над окошком профилей: тянуть жёлтые края, колесо — размах, правый щелчок — края заново.
+        -> True, если событие съедено окошком."""
+        if not st.get('prof') or st.get('prof_rect') is None:
+            return False
+        x0_, y0_, x1_, y1_ = st['prof_rect']
+        drag = st.get('prof_drag')
+        if not (x0_ <= x <= x1_ and y0_ <= y <= y1_) and drag is None:
+            return False
+        res = st.get('prof_pin') or st.get('prof_last')
+        if res is None:
+            return True
+        def off_at(key_):
+            px0, py0, w_, h_, xa, xb = st['prof_plots'][key_]
+            return xa + (x - px0 - 4) / max(w_ - 8, 1) * (xb - xa)
+        def plot_at():
+            for key_, (px0, py0, w_, h_, xa, xb) in st.get('prof_plots', {}).items():
+                if px0 - 6 <= x <= px0 + w_ + 6 and py0 - 4 <= y <= py0 + h_ + 4:
+                    return key_
+            return None
+        if ev == cv2.EVENT_LBUTTONDOWN:
+            key_ = plot_at()
+            if key_ is not None:
+                st['prof_pin'] = res                        # тянут край — крест закреплён
+                ed = list(prof_edges(res, key_) or (off_at(key_) - 2, off_at(key_) + 2))
+                i_ = int(np.argmin([abs(off_at(key_) - e_) for e_ in ed]))
+                ed[i_] = off_at(key_)
+                res.setdefault('user', {})[key_] = tuple(ed)
+                st['prof_drag'] = (key_, i_)
+                st['prof_dirty'] = True
+        elif ev == cv2.EVENT_MOUSEMOVE and drag is not None:
+            key_, i_ = drag
+            ed = list(res['user'][key_])
+            ed[i_] = off_at(key_)
+            res['user'][key_] = tuple(ed)
+            st['prof_dirty'] = True
+        elif ev == cv2.EVENT_LBUTTONUP:
+            st['prof_drag'] = None
+        elif ev == cv2.EVENT_RBUTTONDOWN:
+            key_ = plot_at()
+            for k_ in ([key_] if key_ else ['h', 'v']):
+                res.get('user', {}).pop(k_, None)
+            st['prof_dirty'] = True
+        elif ev == cv2.EVENT_MOUSEWHEEL:                    # размах профиля: шире / уже
+            st['prof_span'] = float(np.clip(st.get('prof_span', 1.0) * (0.8 if wheel_delta(flags) > 0 else 1.25), 0.4, 4.0))
+            prof_fill(res, cuts=not res['cross'])
+            prof_cache.clear()
+            st['prof_dirty'] = True
+        return True
+
+    def prof_click(x, y):
+        """Щелчок в просмотре при открытом окошке: закрепить крест под мышью (ещё раз — открепить)."""
+        res = prof_at((x, y))
+        if st.get('prof_pin') is not None and (not res['cross'] or
+                                               np.hypot(*(res['c'] - st['prof_pin']['c'])) < 2):
+            st['prof_pin'] = None
+            st['msg'] = "Profile unpinned: it follows the mouse"
+        else:
+            st['prof_pin'] = res
+            st['msg'] = ("Profile pinned to this cross: drag the yellow lines in the window, they move on the map too. "
+                         "Click again: unpin")
+        st['dirty'] = True
 
     def render():
         Wv, Hv = st['Wv'], st['Hv']
@@ -1023,7 +1262,8 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
                 UI.put(img, a_, x0_ + 18, yy, fsh, UI.ACCENT, 1)
                 UI.put(img, b_, x0_ + 18 + wl, yy, fsh, UI.TEXT)
         st['scene'] = img
-        return np.hstack([img, carousel_img()])
+        st['prof_dirty'] = False
+        return np.hstack([with_prof(img), carousel_img()])
 
     def carousel_img():
         pan_, car['hits'], car['content'] = SM.carousel(st['Hv'], _car_items(subs, folder, car), subs.index(folder),
@@ -1503,9 +1743,9 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
             if not st.get('icon'):                          # окно уже на экране: значок программы (Windows)
                 st['icon'] = True
                 set_icon(WIN)
-        elif st.get('car_dirty') and st.get('scene') is not None:   # только карусель (наведение мыши)
-            show(np.hstack([st['scene'], carousel_img()]))
-            st['car_dirty'] = False
+        elif (st.get('car_dirty') or st.get('prof_dirty')) and st.get('scene') is not None:   # карусель, профили
+            show(np.hstack([with_prof(st['scene']), carousel_img()]))
+            st['car_dirty'] = st['prof_dirty'] = False
         key = next(keys, EXIT) if keys is not None else cv2.waitKeyEx(8 if st['down'] else 20)
         if keys is not None:
             cv2.waitKey(1)
@@ -1683,6 +1923,12 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
             else:
                 fit_here()
                 break
+        elif ch == 'p':                                      # P: окошко профилей креста под мышью
+            st['prof'] = not st.get('prof')
+            st['prof_pin'] = st['prof_last'] = st['prof_rect'] = None
+            st['msg'] = ("Profiles: move the mouse onto a cross; click: pin it. Yellow lines: the edges of the arms "
+                         "(green channel), also on the map; drag them in the window. P: off" if st['prof'] else "Profiles off")
+            st['dirty'] = True
         elif ch == 'h':
             st['help'] = not st.get('help')
         elif ch == 't':                                      # T: ровно (наклон снят) / как снято

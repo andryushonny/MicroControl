@@ -1514,3 +1514,32 @@ fw, fh = m.frame_size; m.area = mc.Area(0, 0, 3 * fw, 2 * fh); f = m.scan(); r =
 assert {'flatfield.npy', 'dark.npy'} <= set(os.listdir(os.path.join(f, 'join'))), os.listdir(os.path.join(f, 'join'))
 print("Prepare step by step: lamp, even light, dark frame, flat field + exposure, focus + settling; saved, Keep next time; "
       "the flat field and the dark frame go into the stitch: OK")
+
+# ------------------------------------------------------------------ 47. Профили креста (P в просмотре): ширина плеча по краям R, G, B; крест под мышью — самая крупная «+», не пылинка
+from microcontrol.mask import cross_profiles, snap_cross, meas_gray
+rng = np.random.default_rng(7)
+def _cross_img(c, ang, L=30, t=6, N=241, ss=8):
+    n = N * ss; im = np.zeros((n, n), np.float32); C = (np.asarray(c) + 0.5) * ss - 0.5
+    R = cv2.getRotationMatrix2D((float(C[0]), float(C[1])), -ang, 1.0)
+    for P_ in ([[C[0]-L*ss, C[1]-t*ss/2], [C[0]+L*ss, C[1]-t*ss/2], [C[0]+L*ss, C[1]+t*ss/2], [C[0]-L*ss, C[1]+t*ss/2]],
+               [[C[0]-t*ss/2, C[1]-L*ss], [C[0]+t*ss/2, C[1]-L*ss], [C[0]+t*ss/2, C[1]+L*ss], [C[0]-t*ss/2, C[1]+L*ss]]):
+        cv2.fillPoly(im, [cv2.transform(np.array([P_], np.float32), R)[0].astype(np.int32)], 1.0)
+    im = cv2.GaussianBlur(cv2.resize(im, (N, N), interpolation=cv2.INTER_AREA), (0, 0), 1.5)
+    return (120 + 60 * im + rng.normal(0, 3, im.shape)).clip(0, 255).astype(np.uint8)
+im = _cross_img(np.array([120.3, 119.6]), 10.0, L=30, t=6)
+info = {}; d, resp = snap_cross(im, 60, info=info, angle=10.0)
+c_ = (np.array(im.shape[::-1]) - 1) / 2 + d
+pr = cross_profiles(im, c_, info['arm'], info['thick'], np.radians(info.get('angle', 10.0)))
+wid = [pr[k]['edges'][1] - pr[k]['edges'][0] for k in 'hv']
+assert all(abs(w_ - 6) < 0.6 for w_ in wid), wid
+spots = im.copy()
+for q in ((40, 40), (200, 60), (60, 190), (190, 200)):                    # тёмные пылинки вокруг
+    cv2.circle(spots, q, 3, 60, -1)
+d2, _ = snap_cross(spots, 100, angle=10.0)
+assert np.hypot(*((np.array(im.shape[::-1]) - 1) / 2 + d2 - (120.3, 119.6))) < 0.5, d2
+m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp()); m.focus(); m.goto(x=150, y=150); m.exposure = 20.0
+fw, fh = m.frame_size; m.area = mc.Area(0, 0, 2 * fw, 2 * fh); f = m.scan(); mc.stitch(f, verbose=False); m.close()
+fo = next((os.path.join(f, d_) for d_ in sorted(os.listdir(f)) if os.path.exists(os.path.join(f, d_, 'join'))), f)
+mc.view(fo, _keys=[-1, ord('p'), -1] + [('move', 100 + 40 * k, 100 + 30 * k) for k in range(8)] +
+        [('click', 200, 180), -1, ('drag', 700, 137, 680, 137), -1, ('rclick', 700, 137), -1, ('click', 200, 180), -1, 27, 27])
+print(f"Profiles across the arms: width {wid[0]:.2f} / {wid[1]:.2f} px (true 6), dust does not pull the snap; P window: OK")

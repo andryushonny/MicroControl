@@ -574,6 +574,39 @@ def _edge_center(g, c, L, t, ang=0.0):
     return cc, a1
 
 
+def cross_profiles(img, c, L, t, ang=0.0, h=None):
+    """Профили яркости поперёк плеч креста (для окошка в просмотре): для горизонтальных и вертикальных плеч —
+    среднее по профилям вдоль обоих плеч, по каждому цвету. h — полуширина профиля, px (по умолчанию 2t + 4).
+    -> {'h'|'v': dict(x — смещение поперёк, px; prof — (n, 3) B, G, R; edges — (левый, правый) края по зелёному
+    или None; e, n — направления вдоль и поперёк плеча)}."""
+    img = np.asarray(img, np.float32)
+    if img.ndim == 2:
+        img = np.dstack([img] * 3)
+    H_, W_ = img.shape[:2]
+    h = int(max(4, h if h else 2.0 * t + 4))
+    off = np.arange(-h, h + 1, dtype=np.float32)
+    out = {}
+    for key, vert in (('h', False), ('v', True)):
+        a_ = ang + (np.pi / 2 if vert else 0.0)
+        e = np.array([np.cos(a_), np.sin(a_)])
+        n = np.array([-e[1], e[0]])
+        acc, k = np.zeros((len(off), 3), np.float32), 0
+        for s_ in np.r_[np.linspace(-0.85 * L, -0.45 * L, 8), np.linspace(0.45 * L, 0.85 * L, 8)]:
+            q = np.asarray(c, float) + s_ * e
+            xs = (q[0] + off * n[0]).astype(np.float32)[None, :]
+            ys = (q[1] + off * n[1]).astype(np.float32)[None, :]
+            if xs.min() < 1 or ys.min() < 1 or xs.max() > W_ - 2 or ys.max() > H_ - 2:
+                continue
+            acc += cv2.remap(img, xs, ys, cv2.INTER_LINEAR)[0]
+            k += 1
+        if not k:
+            continue
+        prof = acc / k
+        ed = _edges1d(prof[:, 1])
+        out[key] = dict(x=off, prof=prof, edges=(ed[0] - h, ed[1] - h) if ed else None, e=e, n=n)
+    return out
+
+
 def snap_cross(region, r, arm=None, info=None, angle=0.0, edges=True):
     """Центр креста в окне region (серое). Крест ищется шаблоном «+» (плечо arm, px; без arm — перебор),
     кандидат оценивается по симметрии креста при повороте на 90° и 180°: цифры у креста (номера литографии)
@@ -613,26 +646,31 @@ def snap_cross(region, r, arm=None, info=None, angle=0.0, edges=True):
 def _snap_plain(region, r, arm=None, info=None):
     """snap_cross без поворота и краёв: (d, отклик, плечо, толщина)."""
     g0 = cv2.GaussianBlur(region.astype(np.float32), (0, 0), 1.0)
-    g = g0 - cv2.GaussianBlur(g0, (0, 0), max(4.0, (arm or r / 3) * 0.8))     # убрать фон: только детали
-    mid = (np.array(g.shape[::-1], float) - 1) / 2
-    best = (-1.0, None, None, None)
+    mid = (np.array(g0.shape[::-1], float) - 1) / 2
+    cand = []
     for L in ([int(arm)] if arm else [a for a in ARMS if a <= 0.9 * r]):
-        for t in sorted({max(3, L // 2), max(3, L // 5)}):
+        g = g0 - cv2.GaussianBlur(g0, (0, 0), max(4.0, L * 0.8))     # убрать фон своего размера: только детали
+        for t in sorted({max(3, L // 2), max(3, L // 4), max(3, L // 5)}):
             T = _plus(L, t)
             if T.shape[0] + 2 >= min(g.shape):
                 continue
             R = np.abs(cv2.matchTemplate(g, T, cv2.TM_CCOEFF_NORMED))
+            yy_, xx_ = np.ogrid[0:R.shape[0], 0:R.shape[1]]  # центр — не дальше r от середины окна
+            if not arm:
+                R[np.hypot(xx_ + T.shape[1] // 2 - mid[0], yy_ + T.shape[0] // 2 - mid[1]) > r] = 0
             _, v, _, (px, py) = cv2.minMaxLoc(R)
             c = np.array([px + T.shape[1] // 2, py + T.shape[0] // 2], float)
             if 0 < px < R.shape[1] - 1 and 0 < py < R.shape[0] - 1:          # доля пикселя: центр масс 3x3
                 w = R[py - 1:py + 2, px - 1:px + 2] - R[py - 1:py + 2, px - 1:px + 2].min()
                 if w.sum() > 0:
                     c += (w.sum(0) @ [-1, 0, 1] / w.sum(), w.sum(1) @ [-1, 0, 1] / w.sum())
-            sc = v * max(0.0, _sym(g, c, int(1.3 * L)))
-            if sc > best[0]:
-                best = (sc, c, L, t)
+            cand.append((v * max(0.0, _sym(g, c, int(1.3 * L))), c, L, t))
+    best = max(cand, key=lambda q: q[0]) if cand else (-1.0, None, None, None)
+    if best[0] > 0:                                      # крест — самая крупная «+»: точки и пылинки мельче
+        best = max((q for q in cand if q[0] >= 0.9 * best[0]), key=lambda q: (q[2], q[0]))
     sc, c, L, t = best
-    if c is None or sc < 0.03:                           # шаблон не нашёл — старый способ (симметрия 180°)
+    if c is None or sc < (0.15 if not arm else 0.03):                        # шаблон не нашёл — старый способ (симметрия 180°)
+        g = g0 - cv2.GaussianBlur(g0, (0, 0), max(4.0, (arm or r / 3) * 0.8))
         win = cv2.createHanningWindow(g.shape[::-1], cv2.CV_32F)
         (sx, sy), resp = cv2.phaseCorrelate(g * win, np.ascontiguousarray(g[::-1, ::-1]) * win)
         d = -np.array([sx, sy]) / 2.0                    # повёрнутое окно сдвинуто на -2·d
@@ -640,7 +678,7 @@ def _snap_plain(region, r, arm=None, info=None):
             info['arm'] = None
         return (d if np.hypot(*d) < r else np.zeros(2)), resp, None, None
     if info is not None:
-        info['arm'] = L
+        info['arm'], info['thick'] = L, t
     d = c - mid
     return (d if np.hypot(*d) < r else np.zeros(2)), float(min(1.0, sc * 3)), L, t
 

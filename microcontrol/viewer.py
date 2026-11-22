@@ -329,7 +329,7 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
                 if nfx_:
                     g.save(px_um)
                     st0_msg = (f"   The grid snapped to {nfx_} crosses of this scan "
-                               f"(moved by {np.hypot(*dfx_) * px_um:.2f} um)")
+                               f"(moved by {np.hypot(*dfx_) * px_um:.2f} um); F: fit it to all crosses")
             except Exception:
                 pass
         except Exception:

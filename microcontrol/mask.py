@@ -147,8 +147,8 @@ class Grid:
 
     def snap_to_crosses(self, render, size, px_um, min_resp=0.1, render_s=None):
         """Сетка поставлена не по этим кадрам (по решётке образца через координаты столика): сдвинуть её на
-        настоящие кресты этой мозаики. Каждый крест, куда попадает решётка, ищется по симметрии; сдвиг — медиана.
-        4 и больше крестов — затем refine по всем. -> (найдено крестов, сдвиг px или None)."""
+        настоящие кресты этой мозаики. Каждый крест, куда попадает решётка, ищется по симметрии (до 16 узлов — быстро); сдвиг — медиана.
+        Точно по всем крестам — F (refine) или сшивка по крестам. -> (найдено крестов, сдвиг px или None)."""
         if not self.ready():
             return 0, None
         # окно ±30 мкм: сетка, перенесённая с другого объектива, может промахнуться на 10-15 мкм;
@@ -156,20 +156,29 @@ class Grid:
         k = min(1.0, 4.0 * px_um) if render_s is not None else 1.0
         r = int(min(150, max(8, 30.0 * k / px_um)))
         R0 = 10.0 / px_um                                     # узел не ближе 10 мкм к краю (окно может выйти за край)
-        ds = []
-        for i, j in self.cells_range((0, 0), size):
-            q = self.cr.point(i, j)
-            if not (R0 <= q[0] <= size[0] - R0 and R0 <= q[1] <= size[1] - R0):
-                continue
+        nodes = [self.cr.point(i, j) for i, j in self.cells_range((0, 0), size)]
+        nodes = [q for q in nodes if R0 <= q[0] <= size[0] - R0 and R0 <= q[1] <= size[1] - R0]
+        if len(nodes) > 16:                                   # быстро: до 16 узлов, разбросанных по мозаике
+            c_ = np.asarray(size, float) / 2
+            nodes.sort(key=lambda q: np.hypot(*(q - c_)))
+            nodes = [nodes[int(t)] for t in np.linspace(0, len(nodes) - 1, 16)]
+        ds, arms = [], []
+        arm = None if k < 1 else self.arm
+        for q in nodes:
             reg = render_s(q[0], q[1], k, 4 * r + 1, 4 * r + 1) if render_s is not None else \
                 render(q[0], q[1], 4 * r + 1, 4 * r + 1)
             gq = cv2.cvtColor(reg, cv2.COLOR_BGR2GRAY) if reg.ndim == 3 else reg
             if gq.std() < 2:
                 continue
-            d, resp = snap_cross(gq, r, arm=None if k < 1 else self.arm)
+            info = {}
+            d, resp = snap_cross(gq, r, arm=arm, info=info)
             if resp >= min_resp and np.any(d):
                 ds.append(np.asarray(d, float) / k)
-            if len(ds) >= 60:
+                if arm is None and info.get('arm'):
+                    arms.append(info['arm'])
+                    if len(arms) >= 3:                        # плечо найдено — дальше без перебора
+                        arm = float(np.median(arms))
+            if len(ds) >= 8:
                 break
         if not ds:
             return 0, None
@@ -177,8 +186,6 @@ class Grid:
         self.cr.marks = [np.asarray(p, float) + d for p in self.cr.marks]
         self.cr._fit()
         self.refined = None
-        if len(ds) >= 4 and k >= 1:
-            self.refine(render, size, px_um, min_resp)
         return len(ds), d
 
     def refine(self, render, size, px_um, min_resp=0.1, render_s=None, progress=None):

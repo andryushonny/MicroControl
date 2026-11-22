@@ -14,6 +14,7 @@
 """
 import os
 import json
+import time
 import uuid
 import numpy as np
 from shapely.geometry import box, Polygon
@@ -383,16 +384,31 @@ def next_objective(o):
 
 
 def _latest_grids(m):
-    """[(выделение, папка последней съёмки, grid.json)] — для съёмок, где есть сетка."""
+    """[(выделение, папка съёмки, grid.json)]: у каждого выделения — та его съёмка, где сетку правили последней
+    (обычно последняя; открыли в просмотре старую и выбрали там — она). Только съёмки, где сетка есть."""
     from .project import Selection
     out = []
     for r in m._regions:
         if is_group(r) or is_mask(r):
             continue
-        sc = Selection(m.sample, r).latest
-        if sc and os.path.exists(os.path.join(sc.folder, 'grid.json')):
+        try:
+            scs = Selection(m.sample, r).scans
+        except Exception:
+            scs = []
+        best = None
+        for sc in scs:                                           # старые -> новые: при равенстве — новее
+            gp = os.path.join(sc.folder, 'grid.json')
+            if not os.path.exists(gp):
+                continue
             try:
-                out.append((r, sc.folder, json.load(open(os.path.join(sc.folder, 'grid.json'), encoding='utf-8'))))
+                t_ = float(json.load(open(gp, encoding='utf-8')).get('brush_t') or 0)
+            except (OSError, ValueError):
+                continue
+            if best is None or t_ >= best[0]:
+                best = (t_, sc.folder, gp)
+        if best is not None:
+            try:
+                out.append((r, best[1], json.load(open(best[2], encoding='utf-8'))))
             except (OSError, ValueError):
                 pass
     return out
@@ -460,10 +476,8 @@ def sync_brush(m):
                     pg = geom(m, par)
                     from shapely.geometry import Point
                     S_ = mosaic_to_stage(f, q)
-                    tol = pg.buffer(0.02 * L['pitch'])          # пирамидка: только квадраты целиком внутри
-                    cs = {(int(np.floor(u)), int(np.floor(v))) for (u, v), S1 in zip(uv, S_)
-                          if pg.buffer(EPS).contains(Point(*S1)) and
-                          tol.contains(LT.cells_geom(L, [(int(np.floor(u)), int(np.floor(v)))], 1))}
+                    cs = {(int(np.floor(u)), int(np.floor(v))) for (u, v), S1 in zip(uv, S_)   # середина внутри;
+                          if pg.buffer(EPS).contains(Point(*S1))}   # контур черновика — по краю снятого (пирамидка)
                     want.setdefault((par['uid'], ()), set()).update(cs)
         for uid, rq in (d.get('refine') or {}).items():          # подсетки выделений
             k = idx(m, uid)
@@ -479,14 +493,33 @@ def sync_brush(m):
                 fac = tuple((r.get('factors') or []) + [n])
                 inside = {tuple(c) for c in r.get('cells') or []}
                 cs = {tuple(c) for c in rq['cells'] if not inside or (c[0] // n, c[1] // n) in inside}
+                from shapely.geometry import Point
+                rg_ = geom(m, r).buffer(EPS)                      # середина клетки — в родителе (как у квадратов)
+                Nn = (int(np.prod(r.get('factors') or [])) if r.get('factors') else 1) * n
+                cs = {c for c in cs if rg_.contains(Point(*LT.to_stage(L, [((c[0] + 0.5) / Nn, (c[1] + 0.5) / Nn)])[0]))}
                 want.setdefault((uid, fac), set()).update(cs)
-    for (puid, fac), cells in list(want.items()):
+    for (puid, fac), cells in sorted(want.items(), key=lambda t: len(t[0][1])):   # сначала мельче уровень
+        if idx(m, puid) is None:                                 # родитель ушёл в этом же проходе
+            continue
         par = m._regions[idx(m, puid)]
+        if fac and par.get('cells'):                             # родитель мог измениться в этом же проходе
+            from shapely.geometry import Point
+            n_, pc_ = fac[-1], {tuple(c) for c in par['cells']}
+            Nn_, pgb_ = int(np.prod(fac)), geom(m, par).buffer(EPS)
+            cells = {c for c in cells if (c[0] // n_, c[1] // n_) in pc_ and
+                     pgb_.contains(Point(*LT.to_stage(L, [((c[0] + 0.5) / Nn_, (c[1] + 0.5) / Nn_)])[0]))}
         src = f"{puid}@{'x'.join(map(str, fac)) or '1'}"
         mine = [r for r in m._regions if r.get('src') == src]
         used = set()
         N = int(np.prod(fac)) if fac else 1
+        pgeo = geom(m, par)
+
+        def shape_of(fg_):                                       # клетки, обрезанные по краю родителя
+            g_ = LT.cells_geom(L, fg_, N)
+            return g_.intersection(pgeo) if not pgeo.is_empty and not pgeo.buffer(EPS).contains(g_) else g_
         for fg in LT.figures(cells):
+            if shape_of(fg).is_empty:                            # снаружи родителя целиком — не черновик
+                continue
             fs = set(fg)
             best = max(((len(fs & {tuple(c) for c in r.get('cells') or []}), i) for i, r in enumerate(mine)
                         if i not in used), default=(0, None))
@@ -495,18 +528,18 @@ def sync_brush(m):
                 used.add(best[1])
                 if sorted(map(tuple, r.get('cells') or [])) != fg:
                     r['cells'] = [list(c) for c in fg]
-                    set_geom(m, r, LT.cells_geom(L, fg, N))
+                    set_geom(m, r, shape_of(fg))
                     changed.append(f"{_t(r)} follows the brush")
             else:
                 r = dict(uid=uuid.uuid4().hex, num=new_num(m), obj=obj(m, par), fw=par.get('fw', m.frame_size[0]),
                          fh=par.get('fh', m.frame_size[1]), pts=[], thumbs=[], kind='draft', parent=puid, src=src,
                          cells=[list(c) for c in fg], factors=list(fac))
-                set_geom(m, r, LT.cells_geom(L, fg, N))
+                set_geom(m, r, shape_of(fg))
                 m._regions.append(r)
                 changed.append(f"Draft {r['num']} ({LT.address(*fg[0], list(fac))}{' ...' if len(fg) > 1 else ''})")
         for i, r in enumerate(mine):
             if i not in used:
-                m._regions.remove(r)
+                _vanish(m, r)
                 changed.append(f"{_t(r)} gone with its cells")
     renamed = False                                              # подсетки, заданные квадратам до черновика:
     for par, f, d in _latest_grids(m):                           # 'cell:X,Y' -> черновик с этим квадратом
@@ -527,12 +560,32 @@ def sync_brush(m):
         if more:
             changed.append(more)
     for r in [r for r in m._regions if r.get('src') and is_mask(r)]:   # кисть очищена (или подсетка сменилась)
+        if r not in m._regions:
+            continue
         pu, lev = r['src'].split('@')
         fac = () if lev == '1' else tuple(map(int, lev.split('x')))
         if (pu, fac) not in want and (pu in seen1 if lev == '1' else pu in seenR):
-            m._regions.remove(r)
+            _vanish(m, r)
             changed.append(f"{_t(r)} gone with its cells")
+    for r in [r for r in m._regions if r.get('parent') and idx(m, r['parent']) is None]:   # сирот не бывает
+        par0 = next((p for p in m._regions if p.get('kind') not in ('group', 'draft') and not p.get('parent')
+                     and p is not r and geom(m, p).buffer(EPS).contains(geom(m, r).representative_point())), None)
+        r['parent'] = par0['uid'] if par0 is not None else None
     return "; ".join(changed) if changed else None
+
+
+def _vanish(m, r):
+    """Черновик ушёл вместе с клетками: его черновики-клетки (подсетка) уходят тоже, а настоящие выделения
+    внутри него (из его клеток сделали Selection) переходят к его родителю."""
+    if r not in m._regions:
+        return
+    for c in [c for c in m._regions if c.get('parent') == r.get('uid')]:
+        if is_mask(c) and (c.get('src') or '').startswith(r['uid'] + '@'):
+            _vanish(m, c)
+        else:
+            c['parent'] = r.get('parent')
+    if r in m._regions:
+        m._regions.remove(r)
 
 
 def brush_into_grid(regs, L, folder, g):
@@ -587,6 +640,7 @@ def remove_brush_cells(m, reg):
             d2 = json.load(open(os.path.join(f, 'grid.json'), encoding='utf-8'))
             d2['selected_removed'] = d2.get('selected_removed', []) + [list(c) for c in sorted(drop & g.selected)]
             d2['selected'] = [c for c in d2.get('selected', []) if tuple(c) not in drop]
+            d2['brush_t'] = time.time()
             with open(os.path.join(f, 'grid.json'), 'w', encoding='utf-8') as fo:
                 json.dump(d2, fo, indent=1)
         rq = (d.get('refine') or {}).get(puid)

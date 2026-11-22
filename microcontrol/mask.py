@@ -7,7 +7,8 @@
 DXF для AutoCAD — квадраты в мкм.
 """
 from .samples import per_sample as _per_sample
-import json, math, os, shutil
+import json
+import time, math, os, shutil
 import numpy as np
 import cv2
 from . import log as L
@@ -46,7 +47,7 @@ def _stage_layout(folder, P):
         return None
 
 
-KEEP = ('selected_removed', 'refine', 'seeded', 'seeded_labels')         # ключи grid.json, которые пишет не только сетка
+KEEP = ('selected_removed', 'refine', 'seeded', 'seeded_labels', 'brush_t')         # ключи grid.json, которые пишет не только сетка
 
 class Grid:
     def __init__(self, folder):
@@ -136,8 +137,11 @@ class Grid:
         try:                                                # записи окна микроскопа: сдвиг маски, снятые части
             old_ = json.load(open(gp_, encoding='utf-8'))
             d.update({k_: old_[k_] for k_ in KEEP if k_ in old_})
+            if sorted(map(list, old_.get('selected', []))) != d['selected']:
+                d['brush_t'] = time.time()                  # здесь выбор поменяли: эта съёмка главная для кисти
         except (OSError, ValueError):
-            pass
+            if d['selected']:
+                d['brush_t'] = time.time()
         with open(gp_, 'w', encoding='utf-8') as f:
             json.dump(d, f, indent=1)
 

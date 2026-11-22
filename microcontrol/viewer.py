@@ -308,6 +308,7 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
             g.save(px_um)
             d_ = json.load(open(os.path.join(folder, 'grid.json'), encoding='utf-8'))
             d_['seeded'] = True
+            d_['brush_t'] = _t.time()                           # новая съёмка — теперь главная для кисти
             d_['seeded_labels'] = [list(c_) for c_ in g.labels]
             try:                                                # кисть прежних съёмок — в новую сетку
                 from .layers import brush_into_grid
@@ -593,6 +594,38 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
         st['msg'] = (f"Sensitivity {g.sensitivity:g}: {len(g.useful)} squares in yellow "
                      f"(something covers > {sens_frac(g.sensitivity) * 100:.2g} % of the square)")
 
+    def scan_outline():
+        """Контур выделения этой съёмки (мкм столика) или None — по нему окно микроскопа принимает квадраты."""
+        if smp is None:
+            return None
+        try:
+            regs_ = json.load(open(smp.file, encoding='utf-8')).get('selections', [])
+        except (OSError, ValueError):
+            return None
+        me_ = next((r_ for r_ in regs_ if r_.get('kind') not in ('group', 'draft') and 'A' in r_ and
+                    os.path.abspath(folder).startswith(os.path.abspath(P0_.sel_folder(smp.folder, r_)) + os.sep)), None)
+        if me_ is None:
+            return None
+        from shapely.geometry import box as _bx
+        from .layers import from_json
+        if me_.get('shape'):
+            return from_json(me_['shape'])
+        (ax_, ay_), (bx_, by_) = me_['A'], me_['B']
+        return _bx(min(ax_, bx_) - me_.get('fw', 0) / 2, min(ay_, by_) - me_.get('fh', 0) / 2,
+                   max(ax_, bx_) + me_.get('fw', 0) / 2, max(ay_, by_) + me_.get('fh', 0) / 2)
+
+    def inside_only(cells):
+        """Квадраты, чья середина в снятом выделении (как примет окно микроскопа). -> (взятые, сколько отброшено)."""
+        pg_ = scan_outline()
+        if pg_ is None or not cells:
+            return set(cells), 0
+        from .snap import mosaic_to_stage
+        from shapely.geometry import Point as _Pt
+        cl_ = sorted(cells)
+        S_ = mosaic_to_stage(folder, np.array([g.cr.point(i + 0.5, j + 0.5) for i, j in cl_]))
+        ok_ = {c for c, S1 in zip(cl_, S_) if pg_.buffer(0.01).contains(_Pt(*S1))}
+        return ok_, len(cl_) - len(ok_)
+
     def apply_poly(poly_view, on, touch=False):
         pts = [from_view(v) for v in poly_view]
         tg_ = refine_target(np.mean(pts, axis=0))
@@ -600,12 +633,15 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
             paint_refine(tg_, pts, on)
             return
         cells = g.cells_touching(pts) if touch else g.cells_in(pts, sc.size)
+        out_ = 0
         if on:
+            cells, out_ = inside_only(cells)
             g.selected |= cells
         else:
             g.selected -= cells
         g.save(px_um)
-        st['msg'] = f"{'Selected' if on else 'Unselected'} {len(cells)} squares, total {len(g.selected)}"
+        st['msg'] = f"{'Selected' if on else 'Unselected'} {len(cells)} squares, total {len(g.selected)}" + \
+            (f"; {out_} outside this scan's selection - not taken" if out_ else "")
 
     def mouse(ev, x, y, flags, _=None):
         shift = bool(flags & cv2.EVENT_FLAG_SHIFTKEY)
@@ -682,6 +718,10 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
             elif st['mode'] == 'paint' and ev0 == cv2.EVENT_LBUTTONDOWN and not moved:
                 if g.ready():                               # щелчок кистью: один квадрат (Shift — снять)
                     c_ = g.cell_at(from_view((x, y)))
+                    if not sh0 and not inside_only({c_})[0]:
+                        st['msg'] = "This square lies outside the scanned selection: not taken"
+                        st['dirty'] = True
+                        return
                     (g.selected.discard if sh0 else g.selected.add)(c_)
                     g.save(px_um)
                 st['msg'] = f"Selected {len(g.selected)} squares"
@@ -690,6 +730,10 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
                     add_cross((x, y), snap=sh0)
                 elif st['mode'] == 'select' and g.ready():
                     c = g.cell_at(from_view((x, y)))
+                    if c not in g.selected and not inside_only({c})[0]:
+                        st['msg'] = "This square lies outside the scanned selection: not taken"
+                        st['dirty'] = True
+                        return
                     g.selected.symmetric_difference_update({c})
                     g.save(px_um)
                     st['msg'] = f"Square {c} {'selected' if c in g.selected else 'unselected'}, total {len(g.selected)}"
@@ -965,6 +1009,19 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
         from .snap import mosaic_to_stage
         sq_ = sorted(g.selected)
         uv_ = LT.to_uv(L_, mosaic_to_stage(folder, np.array([g.cr.point(i + 0.5, j + 0.5) for i, j in sq_])))
+        me_ = next((r_ for r_ in regs_ if r_.get('kind') not in ('group', 'draft') and
+                    os.path.abspath(folder).startswith(os.path.abspath(P0_.sel_folder(smp.folder, r_)) + os.sep)), None)
+        if me_ is not None:                                 # как в окне микроскопа: середина квадрата — в съёмке
+            from shapely.geometry import Point as _Pt, box as _bx
+            from .layers import from_json
+            if me_.get('shape'):
+                pg_ = from_json(me_['shape'])
+            else:
+                (ax_, ay_), (bx_, by_) = me_['A'], me_['B']
+                pg_ = _bx(min(ax_, bx_) - me_.get('fw', 0) / 2, min(ay_, by_) - me_.get('fh', 0) / 2,
+                          max(ax_, bx_) + me_.get('fw', 0) / 2, max(ay_, by_) + me_.get('fh', 0) / 2)
+            S_ = mosaic_to_stage(folder, np.array([g.cr.point(i + 0.5, j + 0.5) for i, j in sq_]))
+            uv_ = [uv_[i_] for i_, S1 in enumerate(S_) if pg_.buffer(0.01).contains(_Pt(*S1))]
         cells_ = {(int(np.floor(u)), int(np.floor(v))) for u, v in uv_}
         have_ = {tuple(c) for r_ in regs_ if not r_.get('factors') and r_.get('cells') for c in r_['cells']}
         out_ = []
@@ -1007,6 +1064,7 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
         rf_ = d_.get('refine') or {}
         rf_[uid] = dict(n=int(n), cells=[list(c) for c in sorted(cells)])
         d_['refine'] = rf_
+        d_['brush_t'] = _t.time()
         with open(gp_, 'w', encoding='utf-8') as f_:
             json.dump(d_, f_, indent=1)
 
@@ -1475,7 +1533,7 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
                 if not g.useful and not getattr(g, 'scores', None):
                     hints()
                 n0 = len(g.selected)
-                g.selected |= set(g.useful)
+                g.selected |= inside_only(set(g.useful))[0]
                 g.save(px_um)
                 st['mode'] = 'select'                       # сразу выбор: поправить выделение руками
                 st['msg'] = f"Hints selected: +{len(g.selected) - n0} squares, total {len(g.selected)}. " \
@@ -1522,7 +1580,7 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
             set_refine(int(ch))
         elif ch == 'a' and st['mode'] in ('select', 'paint') and g.ready():
             W_, H_ = sc.size
-            g.selected |= g.cells_in([(0, 0), (W_, 0), (W_, H_), (0, H_)], sc.size)
+            g.selected |= inside_only(g.cells_in([(0, 0), (W_, 0), (W_, H_), (0, H_)], sc.size))[0]
             g.save(px_um); st['msg'] = f"All {len(g.selected)} squares selected"
         elif ch == 'x' and st['mode'] in ('select', 'paint'):
             g.selected.clear(); g.save(px_um); st['msg'] = "Selection cleared"

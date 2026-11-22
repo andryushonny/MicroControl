@@ -1187,3 +1187,96 @@ for name, fn in ops:
     after = json.dumps([{k: v for k, v in r.items() if k != 'thumbs'} for r in m._regions], sort_keys=True, default=str)
     assert after == before and Grid(f).selected == gs0, (name, before, after, gs0, Grid(f).selected)
 m.close(); print("Ctrl+Z in the microscope window: drafts from the view, merge, delete, to selection, move, group, hide: OK")
+
+
+# ------------------------------------------------------------------ 40. Целостность: квадраты и клетки в просмотре <-> черновики (на краю тоже), создание и удаление, старая съёмка
+import random as _rnd
+from shapely.geometry import Point as _Pt
+from microcontrol import samples as SM, layers as LY, lattice as LT
+from microcontrol.mask import Grid
+from microcontrol.snap import mosaic_to_stage
+m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp()); m.focus()
+fw, fh = m.frame_size
+m.area = mc.Area(0, 0, 3 * fw, 2 * fh); f = m.scan(); mc.stitch(f, verbose=False)
+px_um = json.load(open(os.path.join(f, 'meta.json')))['pixel_size_um']
+g = Grid(f); p0 = np.array([150.0, 120.0]); a_ = 100 / px_um
+g.cr.add(p0); g.cr.add(p0 + (a_, 0)); g.cr.add(p0 + (0, a_)); g.labels = {(0, 0): (5, 7), (2, 1): (7, 8)}; g.save(px_um)
+LY.sync_brush(m); SM.persist(m)
+L = m.sample.data['lattice']
+par = m._regions[0]; pg = LY.geom(m, par)
+
+def accepted(gr):
+    sq = sorted(gr.selected)
+    if not sq:
+        return set()
+    S = mosaic_to_stage(f, np.array([gr.cr.point(i + 0.5, j + 0.5) for i, j in sq]))
+    uv = LT.to_uv(L, S)
+    return {(int(np.floor(u)), int(np.floor(v))) for (u, v), S1 in zip(uv, S) if pg.buffer(0.01).contains(_Pt(*S1))}
+
+def check(tag):
+    LY.sync_brush(m); SM.persist(m)
+    acc = accepted(Grid(f))
+    d1 = [r for r in m._regions if r.get('kind') == 'draft' and not r.get('factors')]
+    got = [{tuple(c) for c in r['cells']} for r in d1]
+    assert set().union(*got) == acc if got else not acc, (tag, sorted(acc), got)          # каждый принятый квадрат — в черновике
+    assert sum(len(x) for x in got) == len(acc), (tag, "a square in two drafts")
+    assert sorted(map(sorted, got)) == sorted(map(sorted, LT.figures(acc))), (tag, "one draft per figure")
+    for r in m._regions:                                                                   # пирамидка: внутри родителя
+        if r.get('parent') and r.get('kind') != 'group':
+            pr = m._regions[LY.idx(m, r['parent'])]
+            assert LY.geom(m, pr).buffer(0.05).contains(LY.geom(m, r)), (tag, r['num'])
+    rf = json.load(open(os.path.join(f, 'grid.json'))).get('refine') or {}
+    for r in d1:                                                                            # клетки подсеток <-> черновики
+        rq = rf.get(r['uid'])
+        kids = [k for k in m._regions if k.get('parent') == r['uid'] and k.get('kind') == 'draft']
+        gr_ = LY.geom(m, r).buffer(0.01)
+        want = {tuple(c) for c in (rq or {}).get('cells', []) if (c[0] // rq['n'], c[1] // rq['n']) in
+                {tuple(x) for x in r['cells']} and gr_.contains(_Pt(*LT.to_stage(
+                    L, [((c[0] + 0.5) / rq['n'], (c[1] + 0.5) / rq['n'])])[0]))} if rq and int(rq.get('n') or 1) > 1 else set()
+        have = set().union(*[{tuple(c) for c in k['cells']} for k in kids]) if kids else set()
+        assert have == want, (tag, r['num'], sorted(want), sorted(have))
+
+rng = _rnd.Random(7)
+for step in range(40):
+    g = Grid(f)
+    act = rng.random()
+    if act < 0.55:                                                     # выбрать / снять квадрат, в том числе на краю
+        c = (rng.randint(-2, 4), rng.randint(-2, 3))
+        (g.selected.discard if c in g.selected else g.selected.add)(c); g.save(px_um)
+    elif act < 0.75:                                                   # подсетка в черновике и случайные клетки
+        d1 = [r for r in m._regions if r.get('kind') == 'draft' and not r.get('factors')]
+        if d1:
+            r = rng.choice(d1); n = rng.choice([2, 3, 4])
+            cs = [(c[0] * n + rng.randrange(n), c[1] * n + rng.randrange(n)) for c in r['cells'] for _ in range(2)]
+            d = json.load(open(os.path.join(f, 'grid.json'))); d.setdefault('refine', {})[r['uid']] = dict(n=n, cells=[list(c) for c in cs])
+            json.dump(d, open(os.path.join(f, 'grid.json'), 'w'))
+    elif act < 0.9:                                                    # удалить черновик в окне микроскопа
+        d1 = [k for k, r in enumerate(m._regions) if r.get('kind') == 'draft']
+        if d1:
+            SM.delete_area(m, rng.choice(d1))
+    else:                                                              # снять все
+        g.selected.clear(); g.save(px_um)
+    check(f"step {step}")
+m.close(); print("Squares and cells <-> drafts stay one-to-one through 40 random edits (edges, refine, delete): OK")
+
+
+# ------------------------------------------------------------------ 41. Квадрат на краю съёмки — черновик есть (обрезан по краю); выбор в старой версии съёмки тоже работает
+from microcontrol import samples as SM, layers as LY
+from microcontrol.mask import Grid
+m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp()); m.focus()
+fw, fh = m.frame_size
+m.area = mc.Area(0, 0, 3 * fw, 2 * fh); f = m.scan(); mc.stitch(f, verbose=False)
+px_um = json.load(open(os.path.join(f, 'meta.json')))['pixel_size_um']
+g = Grid(f); p0 = np.array([150.0, 120.0]); a_ = 100 / px_um
+g.cr.add(p0); g.cr.add(p0 + (a_, 0)); g.cr.add(p0 + (0, a_)); g.labels = {(0, 0): (5, 7), (2, 1): (7, 8)}
+g.selected |= {(-1, -1)}; g.save(px_um)                                   # квадрат на краю: середина внутри съёмки
+print(LY.sync_brush(m)); SM.persist(m)
+d = [r for r in m._regions if r.get('kind') == 'draft']
+assert len(d) == 1 and LY.geom(m, m._regions[0]).buffer(0.05).contains(LY.geom(m, d[0])), d
+assert LY.geom(m, d[0]).area < 1e4 - 1                                    # обрезан по краю снятого
+f2 = m.scan(); mc.stitch(f2, verbose=False)                               # вторая версия той же съёмки
+assert os.path.dirname(f2) == os.path.dirname(f)
+g = Grid(f); g.selected |= {(1, 0)}; g.save(px_um)                        # выбрали в СТАРОЙ версии
+print(LY.sync_brush(m)); SM.persist(m)
+assert len([r for r in m._regions if r.get('kind') == 'draft']) == 2, m._regions
+m.close(); print("A square at the edge makes a draft (cut to the edge); squares chosen in an older version count: OK")

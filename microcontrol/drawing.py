@@ -98,8 +98,18 @@ def export_sample(m, ks=None, out=None, dwg=True, verbose=True):
         if r.get('cells'):                                     # клетки — каждая целиком (общие грани — на каждом слое)
             N = LT.level(r)
             many = len(r['cells']) > 400
+            from .layers import geom as _geom
+            from shapely.geometry import Polygon as _Pg
+            rg_ = _geom(m, r).buffer(1e-3)
             for a, b in r['cells']:
-                q = D(LT.cell_stage(L, a, b, N))
+                cs_ = LT.cell_stage(L, a, b, N)
+                if not rg_.contains(_Pg(cs_)):                  # клетка на краю — по краю участка (пирамидка)
+                    cut_ = _Pg(cs_).intersection(_geom(m, r))
+                    cut_ = max(getattr(cut_, 'geoms', [cut_]), key=lambda p_: p_.area)
+                    if cut_.is_empty or cut_.geom_type != 'Polygon':
+                        continue
+                    cs_ = np.array(cut_.exterior.coords)[:-1]
+                q = D(cs_)
                 msp.add_lwpolyline([tuple(p) for p in q], close=True, dxfattribs={'layer': lay})
                 if not many:
                     msp.add_text(LT.address(a, b, r.get('factors') or []), height=0.08 * P / N,

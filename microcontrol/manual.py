@@ -816,6 +816,7 @@ def _run(m, fullscreen=False, _keys=None):
             nav.fit(bx, w_, h_)
         camsmall = cv2.resize(view[:mh_ * 0 + H - bh_, :Wl], (mw_, int(mw_ * (H - bh_) / Wl))) if nv['big'] else None
         mp = nav.base([f_ for f_, _k in latest_scans()], w_, h_)
+        boxes_ = {}
         for k_, rg_ in sorted(enumerate(m._regions), key=lambda t: SM.obj(m, t[1])):
             if rg_.get('kind') == 'group' or SM.hidden(m, k_):
                 continue
@@ -823,8 +824,24 @@ def _run(m, fullscreen=False, _keys=None):
             for ring_ in _rings(m, rg_):
                 nav.poly(mp, ring_, c_ if k_ == m._sel else SM.dim(c_, 0.85), 2 if k_ == m._sel else 1,
                          fill=SM.dim(c_, 0.6) if rg_.get('shape') else None)
-            x0_, y0_, x1_, y1_ = SM._rect(m, rg_)
-            nav.label(mp, f"{SM.num(m, k_)}  {SM.obj(m, rg_)}x", (x0_, y0_), c_)
+            pts_ = np.vstack([nav.to_px(r_) for r_ in _rings(m, rg_)]) if _rings(m, rg_) else None
+            if pts_ is not None:
+                boxes_[k_] = (*pts_.min(0), *pts_.max(0))
+        def anc_(k_):                                       # выделения, в которых лежит k_ (на них подпись можно)
+            out_, p_ = set(), SM.parent(m, k_)
+            while p_ is not None and p_ not in out_ and len(out_) < 30:
+                out_.add(p_)
+                p_ = SM.parent(m, p_)
+            return out_
+        lab_ = []                                           # подписи: выбранное первым, потом крупные слои
+        for k_ in sorted(boxes_, key=lambda k2: (k2 != m._sel, SM.obj(m, m._regions[k2]))):
+            b_ = boxes_[k_]
+            if b_[2] - b_[0] < 14 and k_ != m._sel:         # совсем мелкое на этом масштабе — без подписи
+                continue
+            mine_ = anc_(k_) | {k_}
+            lab_.append((f"{SM.num(m, k_)}  {SM.obj(m, m._regions[k_])}x", b_, SM.col(m, k_),
+                         [q_ for k2, q_ in boxes_.items() if k2 not in mine_]))
+        nav.labels(mp, lab_, [(inset[0] - mr[0], inset[1] - mr[1], inset[2] - mr[0], inset[3] - mr[1])] if nv['big'] else [])
         nav.poly(mp, cam, (40, 230, 255), 2)                # камера здесь
         cx_, cy_ = nav.to_px(cam.mean(0))
         cv2.drawMarker(mp, (int(cx_), int(cy_)), (40, 230, 255), cv2.MARKER_CROSS, 10, 1, cv2.LINE_AA)
@@ -838,8 +855,8 @@ def _run(m, fullscreen=False, _keys=None):
         nav.scale_bar(mp)
         hint_ = ("Map: click - go there, drag - new area, wheel - zoom, right drag - move, double-click - open, Tab - camera"
                  if nv['big'] else "Map (Tab: bigger)  click - go, drag - new area")
-        cv2.putText(mp, hint_, (8, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (20, 20, 20), 3, cv2.LINE_AA)
-        cv2.putText(mp, hint_, (8, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (225, 225, 225), 1, cv2.LINE_AA)
+        UI.panel(mp, 0, 0, UI.size(hint_, 0.42)[0] + 16, 26, 0.8)        # подсказка — на тёмной плашке
+        UI.put(mp, hint_, 8, 18, 0.42, (225, 225, 225), 1)
         view[mr[1]:mr[3], mr[0]:mr[2]] = mp
         cv2.rectangle(view, (mr[0], mr[1]), (mr[2] - 1, mr[3] - 1), (90, 92, 104), 1)
         if camsmall is not None:                            # камера — в углу

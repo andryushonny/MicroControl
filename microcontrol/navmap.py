@@ -120,6 +120,37 @@ class NavMap:
             cv2.addWeighted(ov, 0.25, img, 0.75, 0, dst=img)
         cv2.polylines(img, [pts], True, color, thick, cv2.LINE_AA, 4)
 
+    def labels(self, img, items, reserved=()):
+        """Подписи выделений плашками, не наезжая друг на друга и на чужие выделения.
+        items: [(текст, рамка на карте (x0, y0, x1, y1), цвет, [рамки, на которые не залезать])] — по важности."""
+        from . import ui as UI
+        H, W = img.shape[:2]
+        placed = [(0, 0, W, 26), (0, H - 26, 220, H), *reserved]   # подсказка сверху, масштаб внизу, камера в углу
+        inter = lambda a, b: max(0, min(a[2], b[2]) - max(a[0], b[0])) * max(0, min(a[3], b[3]) - max(a[1], b[1]))
+        for text, (x0, y0, x1, y1), color, avoid in items:
+            tw, th, _b = UI.size(text, 0.42)
+            bw, bh = tw + 10, th + 8
+            cands = [(x0, y0 - bh - 2), (x1 - bw, y0 - bh - 2), (x0 + 2, y0 + 2), (x0, y1 + 2), (x1 - bw, y1 + 2),
+                     (x1 + 2, y0), (x0 - bw - 2, y0)]
+            best = None
+            for cx, cy in cands:
+                r = (cx, cy, cx + bw, cy + bh)
+                if r[0] < 0 or r[1] < 0 or r[2] > W or r[3] > H:
+                    continue
+                cost = sum(inter(r, q) for q in placed) * 4 + sum(inter(r, q) for q in avoid)
+                if best is None or cost < best[0]:
+                    best = (cost, r)
+                if cost == 0:
+                    break
+            if best is None:
+                continue
+            r = tuple(int(v) for v in best[1])
+            sub = img[r[1]:r[3], r[0]:r[2]]
+            sub[:] = (sub * 0.25 + np.array([24, 24, 28], np.float32) * 0.75).astype(np.uint8)
+            cv2.rectangle(img, (r[0], r[1]), (r[2] - 1, r[3] - 1), color, 1)
+            UI.put(img, text, r[0] + 5, r[3] - 5, 0.42, color, 1)
+            placed.append(r)
+
     def label(self, img, text, S, color):
         x, y = self.to_px(S)
         cv2.putText(img, text, (int(x) + 4, int(y) + 14), _FONT, 0.42, (20, 20, 20), 3, cv2.LINE_AA)

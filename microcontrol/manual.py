@@ -1459,7 +1459,7 @@ def _run(m, fullscreen=False, _keys=None):
                 res['folder'] = folder
                 if res.get('stop'):
                     return
-                subs_ = SM.samples(folder)
+                subs_ = list(getattr(m, 'last_scans', None) or [folder])   # только что снятые (не все съёмки образца)
                 for i_, sf in enumerate(subs_):
                     res['stitch'] = (i_ + 1, len(subs_))
                     _stitch(sf, verbose=True)

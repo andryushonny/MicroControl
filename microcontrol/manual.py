@@ -238,7 +238,7 @@ def live_map(m, shape, W, H, zoom=1.0, zc=None, rot=0.0):
     B = getattr(m, '_bl', None)                             # люфт (шаги на знак подхода): где столик на самом деле
     if B is not None:
         P = P + np.asarray(B, float) @ np.array([m._dir.get('x', 0), m._dir.get('y', 0)], float)
-    P = P * d
+    P = P * d + _ar_d(m)                                    # + поправка по картинке (сверка с мозаикой)
     c = np.array([iw / 2, ih / 2])
     to = lambda S: tuple(i2v(c + K @ ((P - np.asarray(S)) / d)))
     back = lambda q: P - d * np.linalg.solve(K, v2i(q) - c)
@@ -253,9 +253,95 @@ def camera_box(m, shape):
     B = getattr(m, '_bl', None)
     if B is not None:
         P = P + np.asarray(B, float) @ np.array([m._dir.get('x', 0), m._dir.get('y', 0)], float)
-    P = P * d
+    P = P * d + _ar_d(m)
     c = np.array([iw / 2, ih / 2])
     return np.array([P - d * np.linalg.solve(K, np.array(u, float) - c) for u in ((0, 0), (iw, 0), (iw, ih), (0, ih))])
+
+
+def _ar_d(m):
+    """Поправка положения столика по картинке, мкм: где столик на самом деле минус где он по модели (люфт и
+    прочее). Её меряет ar_lock, сверяя живой кадр с уже снятой мозаикой, — кресты на кадре и контуры совпадают."""
+    v = m.__dict__.get('_ar_d')
+    return np.zeros(2) if v is None else np.asarray(v, float)
+
+
+def ar_lock(m, img):
+    """Сверить живой кадр с мозаикой съёмки образца под ним (самой подробной, накрывающей кадр) и поправить
+    m._ar_d. -> (сдвиг, мкм, имя съёмки) или (None, причина)."""
+    from .project import latest_scans
+    from .snap import stage_to_mosaic, geometry
+    if m.sample is None:
+        return None, "no sample"
+    ih, iw = img.shape[:2]
+    K, d = m._pixels_per_step(), m.motor_step
+    P = np.array([m._p['x'], m._p['y']], float)
+    B = getattr(m, '_bl', None)
+    if B is not None:
+        P = P + np.asarray(B, float) @ np.array([m._dir.get('x', 0), m._dir.get('y', 0)], float)
+    P = P * d + _ar_d(m)
+    c = np.array([iw / 2, ih / 2])
+    cam = lambda u: P - d * np.linalg.solve(K, np.asarray(u, float) - c)      # пиксель кадра -> мкм столика
+    best = None
+    for f in latest_scans(m.sample.folder):
+        jp = os.path.join(f, 'join', 'preview_all.jpg')
+        if not os.path.exists(jp):
+            continue
+        try:
+            meta = json.load(open(os.path.join(f, 'meta.json'), encoding='utf-8'))
+            g = geometry(f)
+        except Exception:
+            continue
+        size = np.asarray(g['pos'], float).max(0) + (g['W'], g['H'])
+        k = min(1.0, 4000 / size.max())
+        corners = stage_to_mosaic(f, np.array([cam(u) for u in ((0, 0), (iw, 0), (0, ih), (iw, ih))]))
+        inside = np.mean([(0 <= q[0] <= size[0]) and (0 <= q[1] <= size[1]) for q in corners])
+        if inside < 0.75:
+            continue
+        o = meta.get('objective') or 0
+        if best is None or o > best[0]:
+            best = (o, f, k, corners)
+    if best is None:
+        return None, "no stitched scan under the camera"
+    o, f, k, corners = best
+    pv = _ar_cache(f)
+    if pv is None:
+        return None, "no preview"
+    src = np.float32([[0, 0], [iw, 0], [0, ih]])
+    dst = np.float32(corners[:3] * k)                       # пиксель кадра -> пиксель превью
+    A = cv2.getAffineTransform(src, dst)
+    s_ = float(np.hypot(*A[:, 0]))                          # пикселей превью на пиксель кадра
+    w = min(1.0, max(s_, 160.0 / iw))                       # работать в разрешении превью (не меньше 160 px)
+    Ww, Hw = max(32, int(iw * w)), max(32, int(ih * w))
+    Aw = A @ np.array([[1 / w, 0, 0], [0, 1 / w, 0], [0, 0, 1]])
+    E = cv2.warpAffine(pv, np.float32(Aw), (Ww, Hw), flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP, borderValue=0)
+    V = cv2.resize(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.ndim == 3 else img, (Ww, Hw), interpolation=cv2.INTER_AREA)
+    if np.mean(E > 4) < 0.7:
+        return None, "the scan does not cover the frame"
+    hp = lambda a_: (a_.astype(np.float32) - cv2.GaussianBlur(a_.astype(np.float32), (0, 0), max(2.0, Ww / 24)))
+    win = cv2.createHanningWindow((Ww, Hw), cv2.CV_32F)
+    (sx, sy), resp = cv2.phaseCorrelate(hp(E), hp(V), win)
+    t = np.array([sx, sy]) / w                              # сдвиг содержимого кадра, пиксели камеры
+    if resp < 0.05 or np.hypot(*t) > 0.3 * min(iw, ih):
+        return None, f"no clear match (match {resp:.2f})"
+    dP = d * np.linalg.solve(K, t)                          # c + K (P' - S) / d = c + K (P - S) / d + t
+    m.__dict__['_ar_d'] = _ar_d(m) + dP
+    return dP, os.path.basename(os.path.dirname(os.path.dirname(f)))
+
+
+_AR_CACHE = {}
+
+
+def _ar_cache(f):
+    jp = os.path.join(f, 'join', 'preview_all.jpg')
+    key = (jp, os.path.getmtime(jp))
+    if _AR_CACHE.get(f, (None,))[0] != key:
+        im = cv2.imread(jp, cv2.IMREAD_GRAYSCALE)
+        if im is None:
+            return None
+        if len(_AR_CACHE) > 6:
+            _AR_CACHE.clear()
+        _AR_CACHE[f] = (key, im)
+    return _AR_CACHE[f][1]
 
 
 STEPS = ["1 Overview", "2 Pick areas", "3 Detail", "4 Export"]
@@ -1569,6 +1655,7 @@ def _run(m, fullscreen=False, _keys=None):
 
     refresh_gs()
     h_last = (h_sig(), h_snap())
+    arl = dict(on=True, pos=None, t=0.0, done=False, note='')   # сверка дополненной реальности с мозаикой (J)
     while True:
         sg_ = h_sig()
         if sg_ != h_last[0]:                              # что-то сделано: в историю (с квадратами съёмок)
@@ -1600,6 +1687,22 @@ def _run(m, fullscreen=False, _keys=None):
         if need:
             img = live.img if live is not None else m.image(0)
             last_n, last_t = (live.n if live is not None else last_n), time.monotonic()
+            pos_ = (m._p['x'], m._p['y'], m.objective)          # дополненная реальность: сверка с мозаикой,
+            if pos_ != arl['pos']:                              # когда столик постоял
+                if arl['pos'] is not None and (np.hypot(pos_[0] - arl['pos'][0], pos_[1] - arl['pos'][1]) *
+                                               m.motor_step > 2 * max(m.frame_size) or pos_[2] != arl['pos'][2]):
+                    m.__dict__['_ar_d'] = None                  # уехали далеко / другой объектив: заново
+                arl.update(pos=pos_, t=time.monotonic(), done=False)
+            elif arl['on'] and not arl['done'] and time.monotonic() - arl['t'] > 0.4:
+                arl['done'] = True
+                try:
+                    dP_, nm_ = ar_lock(m, img)
+                    arl['note'] = (f"AR on the scan ({_ar_d(m)[0]:+.1f}, {_ar_d(m)[1]:+.1f} um)" if dP_ is not None
+                                   else f"AR not checked: {nm_}")
+                    if dP_ is not None and np.hypot(*dP_) > 0.3:
+                        L.event('MAN-020', f"AR locked to the scan {nm_}: corrected by {dP_[0]:+.2f}, {dP_[1]:+.2f} um.")
+                except Exception as e_:
+                    arl['note'] = f"AR not checked: {e_}"
             if m._pending:                                 # карта и строка состояния — по новой или выбранной области
                 A, B, zk = work(m._pending['A']), None, len(m._regions)
             elif m._sel is not None and SM.obj(m, m._regions[m._sel]) == m.objective and not SM.hidden(m, m._sel) \
@@ -1618,6 +1721,8 @@ def _run(m, fullscreen=False, _keys=None):
             base = render(img, Wl, H, kz, zm['c'], rot)
             view = np.zeros((H, W, 3), np.uint8)
             view[:, :Wl] = base
+            cam_poly_ = np.array([i2v(u_) for u_ in ((0, 0), (img.shape[1], 0), (img.shape[1], img.shape[0]),
+                                                     (0, img.shape[0]))], float)
             rp_ = np.array([m.real_position.x, m.real_position.y])     # контуры выделений на кадре (строго:
             rad_ = 1.5 * max(m.frame_size) / max(1.0, zm['z']) + 2 * max(m.frame_size)   # с учётом люфта)
             ov_ = None
@@ -1675,6 +1780,9 @@ def _run(m, fullscreen=False, _keys=None):
                 else:
                     b_ = q2 = None
                 UI.ruler(view, a_, b_, ruler_text(rul['pts'][0], q2) if q2 is not None else "")
+            cm_ = np.zeros((H, Wl), np.uint8)              # дополненная реальность — только на кадре камеры
+            cv2.fillPoly(cm_, [np.int32(np.round(cam_poly_ * 16))], 255, cv2.LINE_8, 4)
+            view[:, :Wl] = np.where(cm_[..., None] > 0, view[:, :Wl], base)
             if m.laser:                                    # лазер включён — видно всегда
                 t_ = f"LASER ON  {m.laser:g} mW   (I: off)"
                 tw_ = UI.size(t_, 0.7, 2)[0]
@@ -1683,7 +1791,7 @@ def _run(m, fullscreen=False, _keys=None):
                 UI.put(view, t_, x_, 42, 0.7, (255, 255, 255), 2)
             p = m.position
             sc = max(0.7, H / 1100)
-            line = f"Sharpness {sharp:.0f}"
+            line = f"Sharpness {sharp:.0f}" + (f"    {arl['note']}" if arl['note'] and arl['on'] else "")
             if A and B:
                 r, c, ny, nx = cell_of(m, A, B)
                 line += f"    Selection {SM.num(m, zk)} ({m.objective}x): {nx} x {ny} = {nx * ny} frames" + \
@@ -2261,6 +2369,14 @@ def _run(m, fullscreen=False, _keys=None):
             elif ch == 'k':                                # запомнить Z здесь как точку фокуса выделения
                 msg = SM.add_point(m)
                 L.event('MAN-006', msg + ".")
+            elif ch == 'j':                                # J: сверка дополненной реальности с мозаикой
+                arl['on'] = not arl['on']
+                if not arl['on']:
+                    m.__dict__['_ar_d'] = None
+                arl['done'] = False
+                msg, msg_t = ("AR lock on: when the stage stops, the camera picture is matched to the scan and "
+                              "the outlines follow the real crosses" if arl['on'] else
+                              "AR lock off: outlines by the stage model only"), time.monotonic()
             elif ch == 'l':                                # L: свет вкл. / выкл.
                 m.light = 0 if m.light else 5
                 msg = "Light on" if m.light else "Light off"

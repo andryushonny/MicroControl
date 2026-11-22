@@ -234,6 +234,9 @@ class Microscope:
     motor_speed = Setting('float', 50, 20000, 'um/s', "Real motor speed (set by the controller, not by us); MicroControl waits distance / motor_speed after each move")
     max_jump = Setting('float', 100, 25000, 'um', "Longest single move by goto or G-code; a longer one is refused as suspicious")
     move_pause = Setting('float', lambda m: _sim0(m, 0.05), 10, 's', "Pause after every move (the stage stops shaking)")
+    one_side = Setting('bool', doc="Backlash: X and Y always arrive from the same side (a move back goes past the target "
+                                    "by overshoot and returns): the stage stops the same way every time; scans go row by row")
+    overshoot = Setting('int', 1, 500, 'steps', "One-side approach: how far past the target a move back goes (more than the backlash)")
     photo_pause = Setting('float', 0, 10, 's', "Scan: pause before each picture")
     light_pause = Setting('float', 0, 120, 's', "Pause after switching the light on (brightness becomes stable)")
     focus_method = Setting('choice', None, tuple(F.METHODS), '', "Sharpness measure for autofocus")
@@ -291,6 +294,7 @@ class Microscope:
                          move_pause=0.0 if sim else 0.1, photo_pause=0.0 if sim else 0.1, light_pause=0.0 if sim else 2.0,
                          focus_method='laplacian', focus_every=5, refocus=False, batch_size=100, save_jpg=True, jpg_scale=0.5,
                          frame_format='jpg', frame_scale=0.5, jpg_quality=90, scan_check=True, still_check=True,
+                         one_side=False, overshoot=10,
                          log_bytes=True)
         self._open_port(port, force)
         try:
@@ -882,10 +886,16 @@ class Microscope:
         z = target.get('z', self._p['z'])
         for ax in (['z'] if z < self._p['z'] else []) + ['x', 'y'] + (['z'] if z > self._p['z'] else []):
             d = target.get(ax, self._p[ax]) - self._p[ax]
+            back = 0
+            if ax != 'z' and self._cfg.get('one_side') and ax in target and (d < 0 or (d == 0 and self._dir.get(ax, 1) < 0)):
+                back = int(self._cfg.get('overshoot', 10))      # люфт: всегда подъезжать с одной стороны (+)
+                d -= back
             while d:
                 n = max(-CHUNK_STEPS, min(CHUNK_STEPS, d))
                 self._step(ax, n)
                 d -= n
+            if back:
+                self._step(ax, back)
 
     # ---------------- движение ----------------
     @property
@@ -1659,7 +1669,8 @@ class Microscope:
                 fw_, fh_ = self.frame_size
                 keep = (lambda X, Y, r_=reg, w_=fw_, h_=fh_: touches_frame(self, r_, X, Y, w_, h_))
             area_._of_selection = True                     # m.area после съёмки — не «новая зона руками»
-            prog = plan(self, area=area_, focus=focus, overlap=ov, path=path, pts=pts, keep=keep)
+            prog = plan(self, area=area_, focus=focus, overlap=ov,
+                        path='rows' if self._cfg.get('one_side') and path == 'snake' else path, pts=pts, keep=keep)
             if len(regs) > 1:
                 print(f"Selection {reg['num']} ({k + 1} of {len(regs)}): {area_}")
             r = self.gcode(prog, save=name or f"Selection {reg['num']}", notes=notes, folder=folder, extra=extra)

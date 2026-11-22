@@ -1366,3 +1366,36 @@ M.run(m, fullscreen=False, _keys=[-1, -1]); nav = m._nav
 M.run(m, fullscreen=False, _keys=[-1, ('maprect', *nav.to_px((150, 120)), *nav.to_px((300, 220))), -1, -1])
 assert len(m._regions) == 1, m._regions                                    # маленький 10x внутри 50x не создан
 m.close(); print("A coarser area inside a finer one is refused: OK")
+
+
+# ------------------------------------------------------------------ 43. Люфт: сверка кадра с мозаикой (дополненная реальность совпадает с крестами), подъезд с одной стороны
+import microcontrol.manual as M
+m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp())
+m._world.backlash = {'x': 3.0, 'y': 2.0}                                   # люфт 3 и 2 шага
+m.focus()
+fw, fh = m.frame_size
+m.area = mc.Area(0, 0, 3 * fw, 3 * fh); f = m.scan(); mc.stitch(f, verbose=False)
+s_ = m.motor_step
+true_ = lambda: np.array([m._world.p['x'], m._world.p['y']]) * s_
+for tgt, frm in (((1.4 * fw, 1.3 * fh), (2.6 * fw, 2.5 * fh)), ((1.6 * fw, 1.5 * fh), (0.3 * fw, 0.2 * fh))):
+    m.goto(x=frm[0], y=frm[1]); m.goto(x=tgt[0], y=tgt[1])                 # подъезд с разных сторон
+    m.__dict__['_ar_d'] = None
+    for _ in range(3):
+        dP, nm = M.ar_lock(m, m.image(0))
+        assert dP is not None, nm
+    K, d = m._pixels_per_step(), m.motor_step
+    est = np.array([m._p['x'], m._p['y']], float) * d + M._ar_d(m)
+    B = getattr(m, '_bl', None)
+    if B is not None:
+        est = est + d * np.asarray(B, float) @ np.array([m._dir['x'], m._dir['y']], float)
+    err = est - true_()
+    off0 = err if tgt == (1.4 * fw, 1.3 * fh) else off0
+    assert np.hypot(*(err - off0)) < 0.4, (tgt, err, off0)                   # с любой стороны — одно и то же (< 0.4 мкм)
+    assert np.hypot(*dP) < 0.3, dP                                           # сошлось
+m.one_side = True                                                            # подъезд всегда с одной стороны
+m.goto(x=2.5 * fw, y=2.5 * fh); m.goto(x=fw, y=fh)
+assert m._dir['x'] == 1 and m._dir['y'] == 1 and abs(m.position.x - fw) < s_ and abs(m.position.y - fh) < s_
+p1 = true_(); m.goto(x=0.2 * fw, y=0.1 * fh); m.goto(x=fw, y=fh)
+assert np.allclose(true_(), p1, atol=1e-6), (true_(), p1)                   # туда же — ровно туда же
+m.close(); print("Backlash: the camera picture is matched to the mosaic (outlines on the real crosses from any side, "
+                 "< 0.4 um), one-side approach stops the same way every time: OK")

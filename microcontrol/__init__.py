@@ -54,7 +54,7 @@ PROJECTS (Project > Sample > Selection > Scan)
   mc.view_window(folder)               Open a scan in the viewer in its own window (one window per project)
   mc.export_sample(m[, [k, ...]])      One drawing of the sample (AutoCAD DXF / DWG): chosen areas, crosses, numbers
   s.selections[0].latest.view()        The last scan of a selection; .scans — every version
-  Menu in both windows                 Open, New project, New sample, Info, Scans, View, Help
+  Menu in both windows                 Open, New (project / sample), Info, Scans, View, Help
 
 WORKFLOW
   m.manual()                       Live view on the full screen; mark the area with keys 1 and 2

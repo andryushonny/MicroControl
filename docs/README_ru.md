@@ -119,7 +119,7 @@ p.samples, s.selections, s.selections[0].scans, s.selections[0].latest.view()
 mc.projects(), mc.all_samples()
 ```
 
-В обоих окнах сверху меню: **Open** (образец любого проекта), **New project**, **New sample**, **Info** (описания), **Scans** (все версии), **View**, **Help**. Окна открываются обычными окнами; `m.manual(fullscreen=True)` — на весь экран.
+В обоих окнах сверху меню: **Open** (образец любого проекта), **New** (из списка: Project или Sample), **Info** (описания), **Scans** (все версии), **View**, **Help**. Окна открываются обычными окнами; `m.manual(fullscreen=True)` — на весь экран.
 
 ## Слои: карта и подробные участки
 

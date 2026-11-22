@@ -1085,7 +1085,7 @@ def _run(m, fullscreen=False, _keys=None):
         car['order'] = order                               # новая (только угол 1) — в списке после угла 2
         return items
 
-    MENU = ["Open", "New project", "New sample", "Info", "Scans", "View", "Help"]
+    MENU = ["Open", "New", "Info", "Scans", "View", "Help"]
 
     def menu_img(W_):
         sm_ = m.sample
@@ -1416,6 +1416,12 @@ def _run(m, fullscreen=False, _keys=None):
                     msg = f"Opened {m.sample.title} [{pj.uid}]: {len(m._regions)} selections"
                 else:
                     return menu_do(r_[0].rstrip('.'))
+            elif item == "New":                                    # New: что создать — из списка
+                r_ = D.choose("New", ["Project   - a new project with its first sample",
+                                      f"Sample    - a new sample (substrate) in {m.project.name}"], 1, ("Create",))
+                if r_ is None or r_[1] is None:
+                    return
+                return menu_do("New project" if r_[1] == 0 else "New sample")
             elif item == "New project":
                 a_ = D.new_project("New project", "Project name", "What the project is about")
                 if not a_:

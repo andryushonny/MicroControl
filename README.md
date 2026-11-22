@@ -119,7 +119,7 @@ p.samples, s.selections, s.selections[0].scans, s.selections[0].latest.view()
 mc.projects(), mc.all_samples()
 ```
 
-Both windows have a menu on top: **Open** (a sample of any project), **New project**, **New sample**, **Info** (descriptions), **Scans** (every version), **View**, **Help**. Windows open as normal windows; `m.manual(fullscreen=True)` — the whole screen.
+Both windows have a menu on top: **Open** (a sample of any project), **New** (choose Project or Sample from a list), **Info** (descriptions), **Scans** (every version), **View**, **Help**. Windows open as normal windows; `m.manual(fullscreen=True)` — the whole screen.
 
 ## Layers: a map and the details
 

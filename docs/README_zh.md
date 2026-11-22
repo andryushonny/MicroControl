@@ -119,7 +119,7 @@ p.samples, s.selections, s.selections[0].scans, s.selections[0].latest.view()
 mc.projects(), mc.all_samples()
 ```
 
-两个窗口顶部都有菜单：**Open**（任意项目的样品）、**New project**、**New sample**、**Info**（描述）、**Scans**（所有版本）、**View**、**Help**。窗口以普通窗口打开；`m.manual(fullscreen=True)` —— 全屏。
+两个窗口顶部都有菜单：**Open**（任意项目的样品）、**New**（从列表中选择 Project 或 Sample）、**Info**（描述）、**Scans**（所有版本）、**View**、**Help**。窗口以普通窗口打开；`m.manual(fullscreen=True)` —— 全屏。
 
 ## 图层：地图与细节
 

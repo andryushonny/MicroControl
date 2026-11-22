@@ -254,7 +254,7 @@ def reorder_ok(m, src, dst):
     return max(src, dst) < len(m._regions) and parent(m, src) == parent(m, dst)
 
 
-def reorder(m, src, dst, after=False):
+def reorder(m, src, dst, after=False, save=True):
     """Перетаскивание в карусели: поставить src перед dst (after=True — после). src, dst — индексы выделений
     одного слоя (лежат прямо в одном выделении или группе).
     Возвращает сообщение; порядок хранится в sample.json ('rank')."""
@@ -267,7 +267,8 @@ def reorder(m, src, dst, after=False):
         sib.insert(sib.index(dst) + (1 if after else 0), src)
         for i, c in enumerate(sib):
             m._regions[c]['rank'] = i
-        persist(m)
+        if save:
+            persist(m)
         return f"Selection {num(m, src)} moved {'after' if after else 'before'} Selection {num(m, dst)}"
     return "Drop it next to a card of the same layer (inside the same selection or group)"
 
@@ -361,7 +362,11 @@ def corner(m, which, img=None):
                pts=[m._pending['pts'][0], fpt] + m._pending['pts'][1:],
                thumbs=m._pending['thumbs'][:1] + th, num=m._pending['num'], uid=m._pending['uid'],
                obj=m.objective, fw=m._pending.get('fw', m.frame_size[0]), fh=m._pending.get('fh', m.frame_size[1]))
-    from .layers import geom
+    from .layers import geom, clip_to_parent
+    try:
+        pk_, cut_ = clip_to_parent(m, new)                  # пирамидка: обрезать по краю большего
+    except ValueError as e:
+        raise MicroControlError('E704', str(e)) from None
     gn = geom(m, new)
     bad = [rg['num'] for rg in m._regions if rg.get('kind') not in ('group', 'draft') and obj(m, rg) == m.objective
            and gn.intersection(geom(m, rg)).area > 1e-3]
@@ -369,7 +374,7 @@ def corner(m, which, img=None):
         raise MicroControlError('E704', f"This selection overlaps Selection {', '.join(map(str, bad))} of the same "
                                         f"objective ({m.objective}x): choose corner 2 so that they do not overlap")
     m._regions.append(new)
-    gp_ = _geo_parent(m, len(m._regions) - 1)                         # лежит в том, где отметили (дальше — явно)
+    gp_ = pk_ if pk_ is not None else _geo_parent(m, len(m._regions) - 1)   # лежит в том, где отметили
     new['parent'] = m._regions[gp_]['uid'] if gp_ is not None else None
     m._area_seq = max(getattr(m, '_area_seq', 0), new['num'])         # номер больше не выдаётся
     m._pending, m._sel = None, len(m._regions) - 1

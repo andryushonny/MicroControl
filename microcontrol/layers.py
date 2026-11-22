@@ -177,6 +177,43 @@ def geometric_parent(m, reg, skip=None):
     return best[1] if best else None
 
 
+def clip_to_parent(m, reg, pk=None):
+    """Пирамидка: участок внутри большего не вылезает за его край — обрезается по нему (клетки — только целые
+    внутри). pk — индекс родителя (None — по месту). Возвращает (родитель или None, обрезан ли).
+    ValueError, если внутри родителя ничего не остаётся."""
+    from . import lattice as LT
+    if pk is None:
+        pk = geometric_parent(m, reg)
+    if pk is None:                                           # середина снаружи: тот, с кем больше общего
+        from .samples import obj
+        g0 = geom(m, reg)
+        best = max(((geom(m, o).intersection(g0).area, i) for i, o in enumerate(m._regions)
+                    if o is not reg and not is_group(o) and not is_mask(o) and obj(m, o) < obj(m, reg)),
+                   default=(0, None))
+        pk = best[1] if best[0] > 1e-6 else None
+    if pk is None or is_group(m._regions[pk]):
+        return pk, False
+    gp = geom(m, m._regions[pk])
+    g = geom(m, reg)
+    if gp.is_empty or gp.buffer(EPS).contains(g):
+        return pk, False
+    L = lattice_of(m)
+    if reg.get('cells') and L:
+        N = LT.level(reg)
+        tol = gp.buffer(0.02 * L['pitch'] / N)
+        keep = [c for c in reg['cells'] if tol.contains(LT.cells_geom(L, [tuple(c)], N))]
+        if not keep:
+            raise ValueError("Nothing of it lies inside the larger area: draw inside it")
+        reg['cells'] = [list(c) for c in keep]
+        set_geom(m, reg, LT.cells_geom(L, [tuple(c) for c in keep], N))
+    else:
+        g2 = g.intersection(gp)
+        if g2.area < 1e-3 * max(g.area, 1e-9):
+            raise ValueError("Nothing of it lies inside the larger area: draw inside it")
+        set_geom(m, reg, g2)
+    return pk, True
+
+
 def detach(m, reg):
     """Выделение кисти меняют операциями — дальше оно живёт само: его квадраты кисть больше не трогает."""
     if reg.get('src'):
@@ -423,8 +460,10 @@ def sync_brush(m):
                     pg = geom(m, par)
                     from shapely.geometry import Point
                     S_ = mosaic_to_stage(f, q)
+                    tol = pg.buffer(0.02 * L['pitch'])          # пирамидка: только квадраты целиком внутри
                     cs = {(int(np.floor(u)), int(np.floor(v))) for (u, v), S1 in zip(uv, S_)
-                          if pg.buffer(EPS).contains(Point(*S1))}
+                          if pg.buffer(EPS).contains(Point(*S1)) and
+                          tol.contains(LT.cells_geom(L, [(int(np.floor(u)), int(np.floor(v)))], 1))}
                     want.setdefault((par['uid'], ()), set()).update(cs)
         for uid, rq in (d.get('refine') or {}).items():          # подсетки выделений
             k = idx(m, uid)
@@ -469,6 +508,24 @@ def sync_brush(m):
             if i not in used:
                 m._regions.remove(r)
                 changed.append(f"{_t(r)} gone with its cells")
+    renamed = False                                              # подсетки, заданные квадратам до черновика:
+    for par, f, d in _latest_grids(m):                           # 'cell:X,Y' -> черновик с этим квадратом
+        rf = d.get('refine') or {}
+        for key in [k_ for k_ in rf if k_.startswith('cell:')]:
+            c = tuple(map(int, key[5:].split(',')))
+            r = next((r for r in m._regions if r.get('src') == f"{par['uid']}@1" and
+                      c in {tuple(x) for x in r.get('cells') or []}), None)
+            if r is None:
+                continue
+            d2 = json.load(open(os.path.join(f, 'grid.json'), encoding='utf-8'))
+            d2['refine'][r['uid']] = d2['refine'].pop(key)
+            with open(os.path.join(f, 'grid.json'), 'w', encoding='utf-8') as fo:
+                json.dump(d2, fo, indent=1)
+            renamed = True
+    if renamed:
+        more = sync_brush(m)
+        if more:
+            changed.append(more)
     for r in [r for r in m._regions if r.get('src') and is_mask(r)]:   # кисть очищена (или подсетка сменилась)
         pu, lev = r['src'].split('@')
         fac = () if lev == '1' else tuple(map(int, lev.split('x')))

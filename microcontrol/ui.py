@@ -249,3 +249,25 @@ def menu_bar(W, title, items, hover=None, active=None):
     if t:
         put(img, t, W - 12 - size(t, 0.5)[0], MENU_H - 10, 0.5, ACCENT, 1)
     return img, hits
+
+
+def tint_outside(img, shapes, color, alpha):
+    """Закрасить полупрозрачно всё, КРОМЕ фигур (внутри — как есть: там и ищут).
+    shapes: [(наружный контур Nx2 в px, [дыры Nx2])]. Без фигур — ничего не делает."""
+    if not shapes:
+        return img
+    mask = np.zeros(img.shape[:2], np.uint8)
+    for ext, holes in shapes:
+        cv2.fillPoly(mask, [np.int32(np.round(np.asarray(ext, float) * 16))], 255, cv2.LINE_8, 4)
+        for h in holes or ():
+            cv2.fillPoly(mask, [np.int32(np.round(np.asarray(h, float) * 16))], 0, cv2.LINE_8, 4)
+    tint = cv2.addWeighted(img, 1 - alpha, np.full_like(img, color), alpha, 0)
+    cv2.copyTo(tint, cv2.bitwise_not(mask), img)
+    return img
+
+
+def geom_shapes(g, to_px):
+    """shapely (Multi)Polygon -> [(наружный контур, [дыры])] в px окна (to_px — для массива точек)."""
+    ps = [g] if g.geom_type == 'Polygon' else [p for p in getattr(g, 'geoms', []) if p.geom_type == 'Polygon']
+    return [(to_px(np.array(p.exterior.coords)[:-1]), [to_px(np.array(h.coords)[:-1]) for h in p.interiors])
+            for p in ps if not p.is_empty]

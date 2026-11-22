@@ -1096,3 +1096,63 @@ g3 = Grid(f3)
 assert g3.labels == {c3: (9, 9)} and 'disagree' not in g3.numbering()[2], (g3.labels, g3.numbering()[2])
 m.close(); print("View follows the microscope window (deleted stays deleted), right click: one square / Shift: the area,"
                  " own numbers replace the seeded ones: OK")
+
+
+# ------------------------------------------------------------------ 37. Пирамидка: участок внутри большего обрезается по его краю; перетаскивание карточки — сразу видно
+import microcontrol.manual as M
+from microcontrol import samples as SM, layers as LY
+m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp()); m.focus()
+fw, fh = m.frame_size
+M.run(m, fullscreen=False, _keys=[-1, -1])
+nav = m._nav
+M.run(m, fullscreen=False, _keys=[-1, ('maprect', *nav.to_px((0, 0)), *nav.to_px((2 * fw, 2 * fh))), -1, -1])
+g10 = LY.geom(m, m._regions[0])
+m.objective = 50; m.focus()
+M.run(m, fullscreen=False, _keys=[-1, -1]); nav = m._nav
+x1_ = g10.bounds[2]
+M.run(m, fullscreen=False, _keys=[-1, ('maprect', *nav.to_px((x1_ - 40, 50)), *nav.to_px((x1_ + 60, 110))), -1, -1])
+k50 = next(k for k, r in enumerate(m._regions) if r['obj'] == 50)
+g50 = LY.geom(m, m._regions[k50])
+assert g10.buffer(0.05).contains(g50) and g50.bounds[2] <= x1_ + 0.05, (g50.bounds, x1_)   # обрезан по краю 10x
+assert m._regions[k50]['parent'] == m._regions[0]['uid']
+assert int(np.prod(SM.frames_of(m, k50))) > 0
+m.scan()                                                                   # снимается только то, что внутри
+m.objective = 100; m.focus()                                               # 100x углами 1-2, вылезая за 50x
+c50 = g50.bounds
+m.goto(x=c50[0] + 5, y=c50[1] + 5); SM.corner(m, 1)
+m.goto(x=c50[2] + 30, y=c50[3] + 30); print(SM.corner(m, 2))
+g100 = LY.geom(m, m._regions[-1])
+assert g50.buffer(0.05).contains(g100), (g100.bounds, c50)
+try:                                                                       # целиком снаружи — нельзя
+    m.goto(x=c50[2] + 300, y=c50[3] + 300); SM.corner(m, 1); m.goto(x=c50[2] + 330, y=c50[3] + 330); SM.corner(m, 2)
+except mc.MicroControlError:
+    pass
+m.objective = 10
+M.run(m, fullscreen=False, _keys=[-1, ('car', 1000, 140), ('cmove', 1000, 200), ('cmove', 1000, 260), -1,
+                                  ('cdrop', 1000, 260), -1])                # тянем карточку: не падает
+m.close(); print("Pyramid: a smaller area is cut to the edge of the larger one (map and corners); card drag preview: OK")
+
+
+# ------------------------------------------------------------------ 38. Подсетка сразу по выбранным квадратам (черновика ещё нет): 3 над ними, клетка, потом окно микроскопа
+import microcontrol.viewer as V_
+from microcontrol import samples as SM, layers as LY, lattice as LT
+from microcontrol.mask import Grid
+m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp()); m.focus()
+fw, fh = m.frame_size
+m.area = mc.Area(0, 0, 3 * fw, 2 * fh); f = m.scan(); mc.stitch(f, verbose=False)
+px_um = json.load(open(os.path.join(f, 'meta.json')))['pixel_size_um']
+g = Grid(f); p0 = np.array([150.0, 120.0]); a_ = 100 / px_um
+g.cr.add(p0); g.cr.add(p0 + (a_, 0)); g.cr.add(p0 + (0, a_)); g.labels = {(0, 0): (5, 7), (2, 1): (7, 8)}; g.save(px_um)
+LY.sync_brush(m); SM.persist(m)                                       # решётка образца есть, черновиков нет
+q = lambda i, j, a=0.5, b=0.5: g.cr.point(i + a, j + b)
+V_.view(f, _keys=[-1, ord('m'), ('qclick', *q(1, 0)), ('qclick', *q(2, 0)), ('qmove', *q(1, 0)), ord('3'),
+                  ('qclick', *q(1, 0, 0.2, 0.2)), -1, 27])
+rf = json.load(open(os.path.join(f, 'grid.json')))['refine']
+key = next(iter(rf))
+assert key.startswith('cell:') and rf[key]['n'] == 3 and rf[key]['cells'] == [[15, 18]], rf
+print(LY.sync_brush(m)); SM.persist(m)
+d1 = next(r for r in m._regions if r.get('kind') == 'draft' and not r.get('factors'))
+d2 = next(r for r in m._regions if r.get('parent') == d1['uid'])
+assert d1.get('sub') == 3 and d2['factors'] == [3] and LT.address(*d2['cells'][0], [3]) == "6,7 > 1,1"
+assert list(json.load(open(os.path.join(f, 'grid.json')))['refine']) == [d1['uid']]
+m.close(); print("Finer grid right over freshly selected squares (no draft yet): 3, a cell, then the drafts: OK")

@@ -810,7 +810,19 @@ def _run(m, fullscreen=False, _keys=None):
             return None
         rp = m.real_position
         x0_, y0_, x1_, y1_ = SM.rect(dict(m._pending, B=(rp.x, rp.y)), *m.frame_size)
-        return np.array([(x0_, y0_), (x1_, y0_), (x1_, y1_), (x0_, y1_)], float)
+        ring_ = np.array([(x0_, y0_), (x1_, y0_), (x1_, y1_), (x0_, y1_)], float)
+        try:                                               # пирамидка: видно сразу, где обрежется
+            from .layers import clip_to_parent, geom as _g, box as _bx, set_geom as _sg
+            tmp_ = dict(m._pending, B=(rp.x, rp.y))
+            _sg(m, tmp_, _bx(x0_, y0_, x1_, y1_))
+            if clip_to_parent(m, tmp_)[1]:
+                c_ = _g(m, tmp_)
+                c_ = max(getattr(c_, 'geoms', [c_]), key=lambda p_: p_.area)
+                if c_.geom_type == 'Polygon' and not c_.is_empty:
+                    ring_ = np.array(c_.exterior.coords)[:-1]
+        except Exception:
+            pass
+        return ring_
 
     def draw_nav(view, Wl, bh_, shape):
         """Карта образца: в углу кадра (камера крупно) или на всё поле (Tab), камера тогда — в углу."""
@@ -832,13 +844,34 @@ def _run(m, fullscreen=False, _keys=None):
         camsmall = cv2.resize(view[:mh_ * 0 + H - bh_, :Wl], (mw_, int(mw_ * (H - bh_) / Wl))) if nv['big'] else None
         mp = nav.base([f_ for f_, _k in latest_scans()], w_, h_)
         boxes_ = {}
+        from .layers import geom as _gm
+        clear_map = []                                      # выделения — чистые (там смотрят), вокруг — темнее
+        for k_, rg_ in enumerate(m._regions):
+            if rg_.get('kind') != 'group' and not SM.hidden(m, k_):
+                clear_map += UI.geom_shapes(_gm(m, rg_), nav.to_px)
+        UI.tint_outside(mp, clear_map, (30, 30, 30), 0.45)
+        for k_, rg_ in enumerate(m._regions):                # пирамидка: внутри выделения — всё, кроме его детей
+            if rg_.get('kind') == 'group' or SM.hidden(m, k_):
+                continue
+            kids_ = [r2 for k2, r2 in enumerate(m._regions) if r2.get('parent') == rg_.get('uid')
+                     and r2.get('kind') != 'group' and not SM.hidden(m, k2)]
+            if not kids_:
+                continue
+            mk_ = np.zeros(mp.shape[:2], np.uint8)
+            for ext_, hs_ in UI.geom_shapes(_gm(m, rg_), nav.to_px):
+                cv2.fillPoly(mk_, [np.int32(np.round(ext_ * 16))], 255, cv2.LINE_8, 4)
+            for r2 in kids_:
+                for ext_, hs_ in UI.geom_shapes(_gm(m, r2), nav.to_px):
+                    cv2.fillPoly(mk_, [np.int32(np.round(ext_ * 16))], 0, cv2.LINE_8, 4)
+            tn_ = cv2.addWeighted(mp, 0.75, np.full_like(mp, SM.col(m, k_)), 0.25, 0)
+            cv2.copyTo(tn_, mk_, mp)
         for k_, rg_ in sorted(enumerate(m._regions), key=lambda t: SM.obj(m, t[1])):
             if rg_.get('kind') == 'group' or SM.hidden(m, k_):
                 continue
             c_ = SM.col(m, k_)
             for ring_ in _rings(m, rg_):
                 nav.poly(mp, ring_, c_ if k_ == m._sel else SM.dim(c_, 0.85), 2 if k_ == m._sel else 1,
-                         fill=SM.dim(c_, 0.6) if rg_.get('shape') else None, dashed=rg_.get('kind') == 'draft')
+                         dashed=rg_.get('kind') == 'draft')
             pts_ = np.vstack([nav.to_px(r_) for r_ in _rings(m, rg_)]) if _rings(m, rg_) else None
             if pts_ is not None:
                 boxes_[k_] = (*pts_.min(0), *pts_.max(0))
@@ -999,7 +1032,7 @@ def _run(m, fullscreen=False, _keys=None):
         L_ = lattice_of(m)
         if L_ is not None:
             return new_area_cells(L_, S0, S1)
-        from .layers import geometric_parent, new_num, set_geom, box as _box
+        from .layers import new_num, set_geom, box as _box
         from .errors import MicroControlError as _E
         x0_, x1_ = sorted((S0[0], S1[0]))
         y0_, y1_ = sorted((S0[1], S1[1]))
@@ -1008,7 +1041,11 @@ def _run(m, fullscreen=False, _keys=None):
                   thumbs=[])
         set_geom(m, r_, _box(x0_, y0_, max(x1_, x0_ + 1), max(y1_, y0_ + 1)))
         r_.pop('shape')                                    # прямоугольник: хватает углов A, B
-        from .layers import geom as _geom
+        from .layers import geom as _geom, clip_to_parent
+        try:
+            gp_, cut_ = clip_to_parent(m, r_)              # пирамидка: не шире того, в чём лежит
+        except ValueError as e:
+            return str(e)
         g_ = _geom(m, r_)
         bad = [o['num'] for o in m._regions if o.get('kind') not in ('group', 'draft') and SM.obj(m, o) == m.objective
                and g_.intersection(_geom(m, o)).area > 1e-3 * g_.area]
@@ -1016,13 +1053,13 @@ def _run(m, fullscreen=False, _keys=None):
             return str(_E('E704', f"Selection {', '.join(map(str, bad))} ({m.objective}x) is already there. "
                                   f"For an area inside it put a larger objective (M), then drag again"))
         m._regions.append(r_)
-        gp_ = geometric_parent(m, r_)
         r_['parent'] = m._regions[gp_]['uid'] if gp_ is not None else None
         m._sel = len(m._regions) - 1
         SM.persist(m)
         nx_, ny_ = SM.frames_of(m, m._sel)
         return (f"{SM.title(m, m._sel)} ({m.objective}x): {(x1_ - x0_) / 1000:.2f} x {(y1_ - y0_) / 1000:.2f} mm, "
-                f"{nx_ * ny_} frames. Scan area shoots it")
+                f"{nx_ * ny_} frames" + (f", cut to the edge of {SM.title(m, gp_)}" if cut_ else "") +
+                ". Scan area shoots it")
 
     def new_area_cells(L_, S0, S1):
         from . import lattice as LT
@@ -1059,6 +1096,12 @@ def _run(m, fullscreen=False, _keys=None):
         r_ = dict(uid=__import__('uuid').uuid4().hex, num=new_num(m), obj=m.objective, fw=fw_, fh=fh_, pts=[],
                   thumbs=[], cells=[list(c) for c in sorted(cells)], factors=fac)
         set_geom(m, r_, LT.cells_geom(L_, cells, M_))
+        from .layers import clip_to_parent
+        try:
+            gp_, cut_ = clip_to_parent(m, r_, par_k)       # пирамидка: только клетки целиком внутри большего
+        except ValueError as e:
+            return str(e)
+        cells = [tuple(c) for c in r_['cells']]
         g_ = _geom(m, r_)
         bad = [o['num'] for o in m._regions if o.get('kind') not in ('group', 'draft') and SM.obj(m, o) == m.objective
                and g_.intersection(_geom(m, o)).area > 1e-3 * g_.area]
@@ -1066,13 +1109,12 @@ def _run(m, fullscreen=False, _keys=None):
             return (f"[E704] Selection {', '.join(map(str, bad))} ({m.objective}x) is already there. For an area "
                     f"inside it put a larger objective (M), then drag again")
         m._regions.append(r_)
-        from .layers import geometric_parent
-        gp_ = par_k if par_k is not None else geometric_parent(m, r_)
         r_['parent'] = m._regions[gp_]['uid'] if gp_ is not None else None
         m._sel = len(m._regions) - 1
         SM.persist(m)
         return (f"{SM.title(m, m._sel)} ({m.objective}x): {len(cells)} cell{'s' if len(cells) > 1 else ''} "
-                f"of {'1/' + str(M_) if M_ > 1 else 'lithography squares'}, from {LT.address(*cells[0], fac)}")
+                f"of {'1/' + str(M_) if M_ > 1 else 'lithography squares'}, from {LT.address(*cells[0], fac)}"
+                + (f"; cut to the edge of {SM.title(m, gp_)}" if cut_ else ""))
 
     def map_go(S):
         """Щелчок по карте: столик едет туда (Z — по точкам фокуса выделения под точкой, если есть)."""
@@ -1538,7 +1580,20 @@ def _run(m, fullscreen=False, _keys=None):
             rp_ = np.array([m.real_position.x, m.real_position.y])     # контуры выделений на кадре (строго:
             rad_ = 1.5 * max(m.frame_size) / max(1.0, zm['z']) + 2 * max(m.frame_size)   # с учётом люфта)
             ov_ = None
-            from .layers import rings
+            clear_cam = []                                  # выделения этого объектива — чистые, вокруг — темнее
+            from .layers import rings, geom as _gq
+            for k_, rg_ in enumerate(m._regions):
+                if rg_.get('kind') in ('group', 'draft') or SM.hidden(m, k_) or SM.obj(m, rg_) != m.objective:
+                    continue
+                x0_, y0_, x1_, y1_ = SM._rect(m, rg_)
+                if x1_ < rp_[0] - rad_ or x0_ > rp_[0] + rad_ or y1_ < rp_[1] - rad_ or y0_ > rp_[1] + rad_:
+                    continue
+                d_ = mdr['d'] if mdr.get('k') == k_ else np.zeros(2)
+                clear_cam += UI.geom_shapes(_gq(m, rg_), lambda A_: np.array([to_v(S_ + d_) for S_ in A_], float))
+            if clear_cam:
+                sub_ = view[:, :Wl].copy()
+                UI.tint_outside(sub_, clear_cam, (40, 40, 40), 0.35)
+                view[:, :Wl] = sub_
             for k_, rg_ in enumerate(m._regions):
                 if rg_.get('kind') == 'group' or SM.hidden(m, k_):
                     continue
@@ -1549,18 +1604,12 @@ def _run(m, fullscreen=False, _keys=None):
                 d_ = mdr['d'] if mdr.get('k') == k_ else np.zeros(2)
                 for ring_ in rings(m, rg_):
                     pts = np.int32(np.round(np.array([to_v(S_ + d_) for S_ in ring_], float) * 16))   # 1/16 px
-                    if (rg_.get('src') or rg_.get('shape')) and rg_.get('kind') != 'draft':
-                        if ov_ is None:
-                            ov_ = view[:, :Wl].copy()
-                        cv2.fillPoly(ov_, [pts], SM.dim(c_k, 0.5), cv2.LINE_AA, 4)
                     if rg_.get('kind') == 'draft':                   # маска — пунктиром, без заливки
                         UI.dashed_poly(view[:, :Wl], pts / 16.0, c_k if k_ == m._sel else SM.dim(c_k, 0.9),
                                        2 if k_ == m._sel else 1)
                     else:
                         cv2.polylines(view[:, :Wl], [pts], True, c_k if k_ == m._sel else SM.dim(c_k, 0.85),
                                       2 if k_ == m._sel else 1, cv2.LINE_AA, 4)
-            if ov_ is not None:
-                view[:, :Wl] = cv2.addWeighted(ov_, 0.3, view[:, :Wl], 0.7, 0)
             pr_ = pending_ring()
             if pr_ is not None:                             # новая область: от угла 1 до столика, пунктиром
                 UI.dashed_poly(view[:, :Wl], np.array([to_v(S_) for S_ in pr_], float),
@@ -1765,8 +1814,27 @@ def _run(m, fullscreen=False, _keys=None):
             car['hits'], car['content'] = hits_, cont_
             car['scroll'] = car_clamp(car['scroll'])
             dr_ = car.get('drag')
+            tg_ = car_target(dr_['y']) if dr_ is not None else None
+            if dr_ is not None and tg_ is not None and tg_[0] != dr_['src'] and SM.reorder_ok(m, dr_['src'], tg_[0]):
+                # перетаскивание: список сразу такой, каким станет, если отпустить сейчас (карточка — в рамке)
+                ranks_ = [r_.get('rank') for r_ in m._regions]
+                order0_ = list(car['order'])
+                SM.reorder(m, dr_['src'], tg_[0], tg_[1], save=False)
+                items2_ = car_items()
+                order2_ = list(car['order'])
+                for r_, rk_ in zip(m._regions, ranks_):          # как было: решает отпускание
+                    if rk_ is None:
+                        r_.pop('rank', None)
+                    else:
+                        r_['rank'] = rk_
+                car['order'] = order0_
+                sel2_ = order2_.index(selk_) if selk_ in order2_ else None
+                pan_, hits2_, _c = SM.carousel(H, items2_, sel2_, car['scroll'], title="Selections", tools=car_tools())
+                sh_ = next((h for h in hits2_ if h[4] == 'sel' and h[5] < len(order2_) and order2_[h[5]] == dr_['src']), None)
+                if sh_ is not None and sh_[3] > 39:
+                    cv2.rectangle(pan_, (sh_[0], max(39, sh_[1])), (sh_[2] - 1, sh_[3] - 1), (90, 220, 90), 2)
+                dr_ = None                                     # линия-указатель не нужна: видно и так
             if dr_ is not None:                                # перетаскивание: куда ляжет карточка
-                tg_ = car_target(dr_['y'])
                 src_h = next((h for h in hits_ if h[4] == 'sel' and h[5] < len(car['order'])
                               and car['order'][h[5]] == dr_['src']), None)
                 if src_h is not None:

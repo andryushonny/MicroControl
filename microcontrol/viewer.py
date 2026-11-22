@@ -747,6 +747,7 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
             Rm = R()
             t = mid() - Rm @ np.array([D / 2, D / 2])
             img = cv2.warpAffine(big, np.float32(np.c_[Rm, t]), (Wv, Hv), flags=cv2.INTER_LINEAR)
+        img = draw_finer(img)                               # снятое крупнее — поверх, в своих контурах
         red, green, yellow = (40, 40, 255), SM.sample_color(folder), (0, 220, 255)   # выбранные — цветом выделения
         base_, void_ = img.copy(), cv2.inRange(img, (0, 0, 0), (22, 22, 22))   # вне мозаики сетку не рисуем
         if g.ready():
@@ -763,16 +764,20 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
                 ok_ = (cc_[:, 0] >= e_) & (cc_[:, 0] <= sc.size[0] - e_) & (cc_[:, 1] >= e_) & (cc_[:, 1] <= sc.size[1] - e_)
                 cells = [(int(a), int(b)) for a, b in cr_[ok_]]
             quads = cell_quads(cells) if cells else np.zeros((0, 4, 2))
-            if cells and (g.selected or (st.get('hints', _cfg.AUTO_HINTS) and g.useful)):   # зелёные — выделены,
-                ov = img.copy()                                                   # жёлтые — подсказка
-                hint_ = st.get('hints', _cfg.AUTO_HINTS)
-                sel_ = [i_ for i_, c in enumerate(cells) if c in g.selected]
-                use_ = [i_ for i_, c in enumerate(cells) if hint_ and c not in g.selected and c in g.useful]
-                if sel_:
-                    cv2.fillPoly(ov, list(np.int32(quads[sel_])), green)
-                if use_:
-                    cv2.fillPoly(ov, list(np.int32(quads[use_])), (0, 215, 255))
+            sel_ = [i_ for i_, c in enumerate(cells) if c in g.selected]
+            if g.selected:                                  # выбранное — чистое (там ищут), всё вокруг — под цветом
+                clear_ = [quads[i_] for i_ in sel_] if sel_ else []
+                if not clear_ and step < 1.5:               # мелко: квадраты целиком, без отбора
+                    clear_ = list(cell_quads(sorted(g.selected)))
+                UI.tint_outside(img, [(q_, []) for q_ in clear_] or [(np.zeros((3, 2)), [])], green, 0.3)
+            hint_ = st.get('hints', _cfg.AUTO_HINTS)
+            use_ = [i_ for i_, c in enumerate(cells) if hint_ and c not in g.selected and c in g.useful]
+            if use_:                                        # жёлтые — подсказка
+                ov = img.copy()
+                cv2.fillPoly(ov, list(np.int32(quads[use_])), (0, 215, 255))
                 img = cv2.addWeighted(ov, 0.35, img, 0.65, 0)
+            if sel_ and step >= 7:                          # край выбранного — зелёной линией
+                cv2.polylines(img, list(np.int32(np.round(quads[sel_]))), True, green, 1, cv2.LINE_AA)
             if step >= 34 and len(cells) <= 3000:           # номер квадрата в уголке: (X, Y) по подписям
                 num = g.numbering()
                 fs = min(0.5, step / 160)
@@ -804,6 +809,7 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
             elif g.selected:
                 st['msg'] = st['msg'] if 'zoom in' in st['msg'] else st['msg']
         img = cv2.copyTo(base_, void_, img)
+        pyramid_tint(img)                                     # внутри выделений — всё, кроме выбранного в них
         H_img, W_img = img.shape[:2]
         for q_, c_, lab_, dash_, new_ in sample_outlines():      # выделения образца на этой картинке
             pv_ = np.array([to_view(p_) for p_ in q_], float)
@@ -947,7 +953,25 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
             rf_ = json.load(open(os.path.join(folder, 'grid.json'), encoding='utf-8')).get('refine') or {}
         except (OSError, ValueError):
             rf_ = {}
-        return regs_, rf_
+        return regs_ + pending_figures(regs_, rf_), rf_
+
+    def pending_figures(regs_, rf_):
+        """Выбранные здесь квадраты, из которых окно микроскопа ещё не сделало черновик (или оно закрыто):
+        подсетку можно задать и им — запрос 'cell:X,Y' потом перейдёт к черновику с этим квадратом."""
+        L_ = lat_now()
+        if L_ is None or not g.ready() or not g.selected:
+            return []
+        from .snap import mosaic_to_stage
+        sq_ = sorted(g.selected)
+        uv_ = LT.to_uv(L_, mosaic_to_stage(folder, np.array([g.cr.point(i + 0.5, j + 0.5) for i, j in sq_])))
+        cells_ = {(int(np.floor(u)), int(np.floor(v))) for u, v in uv_}
+        have_ = {tuple(c) for r_ in regs_ if not r_.get('factors') and r_.get('cells') for c in r_['cells']}
+        out_ = []
+        for fg_ in LT.figures(cells_ - have_):
+            key_ = next((k_ for k_ in rf_ if k_.startswith('cell:') and
+                         tuple(map(int, k_[5:].split(','))) in fg_), f"cell:{fg_[0][0]},{fg_[0][1]}")
+            out_.append(dict(uid=key_, num=0, kind='draft', cells=[list(c) for c in fg_], factors=[], pending=True))
+        return out_
 
     def lat_now():
         try:
@@ -971,7 +995,7 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
             N_ = LT.level(r_)
             if [int(np.floor(u_ * N_)), int(np.floor(v_ * N_))] in r_['cells'] and (best_ is None or N_ > best_['N']):
                 best_ = dict(uid=r_['uid'], n=n_, N=N_, cells={tuple(c) for c in r_['cells']}, num=r_['num'],
-                             kind='Draft' if r_.get('kind') == 'draft' else 'Selection',
+                             kind='the new Draft' if r_.get('pending') else ('Draft' if r_.get('kind') == 'draft' else 'Selection'),
                              factors=(r_.get('factors') or []) + [n_])
         return best_
 
@@ -998,13 +1022,16 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
         hit_ = [r_ for r_ in regs_ if r_.get('cells') and
                 [int(np.floor(u_ * LT.level(r_))), int(np.floor(v_ * LT.level(r_)))] in r_['cells']]
         if not hit_:
-            st['msg'] = "Put the mouse over a selection made of cells (select lithography squares with M first)"
+            st['msg'] = ("Finer grid: first select lithography squares (M, they turn green), then put the mouse over "
+                         "them and press 2-5. Scanned rectangles have no cells: select squares inside them")
             return
         r_ = max(hit_, key=LT.level)
         old_ = rf_.get(r_['uid']) or {}
         write_refine(r_['uid'], n, old_.get('cells', []) if int(old_.get('n') or 0) == n else [])
         kind_ = 'Draft' if r_.get('kind') == 'draft' else 'Selection'
-        st['msg'] = (f"{kind_} {r_['num']}: grid 1/{n} inside it (cells {LT.pitch_text(lat_now(), LT.level(r_) * n)}); "
+        if r_.get('pending'):
+            kind_ = 'The new draft'
+        st['msg'] = (f"{kind_} {r_['num'] or ''}: grid 1/{n} inside it (cells {LT.pitch_text(lat_now(), LT.level(r_) * n)}); "
                      "M selects its cells" if n > 1 else f"{kind_} {r_['num']}: no finer grid")
 
     def paint_refine(tg_, pts, on, single=False):
@@ -1054,6 +1081,71 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
                 return True
         return False
 
+    def finer_layers():
+        """Съёмки образца крупнее этой (50x, 100x над 10x), каждая — [картинка, preview px -> мозаика этой (2x3),
+        контур в мозаике этой]. Кэш по времени sample.json и превью."""
+        if smp is None:
+            return []
+        from . import project as P2_
+        from .snap import mosaic_to_stage, stage_to_mosaic, geometry
+        from .layers import from_json
+        my_obj = sc.st.meta.get('objective') or 0
+        scans_ = [f_ for f_ in P2_.latest_scans(smp.folder) if os.path.abspath(f_) != os.path.abspath(folder)]
+        key_ = (os.path.getmtime(smp.file) if os.path.exists(smp.file) else 0,
+                tuple((f_, os.path.getmtime(os.path.join(f_, 'join', 'preview_all.jpg')))
+                      for f_ in scans_ if os.path.exists(os.path.join(f_, 'join', 'preview_all.jpg'))))
+        if st.get('_fl_key') == key_:
+            return st['_fl']
+        regs_ = {r_['uid']: r_ for r_ in json.load(open(smp.file, encoding='utf-8')).get('selections', [])}
+        out_ = []
+        for f_ in scans_:
+            jp_ = os.path.join(f_, 'join', 'preview_all.jpg')
+            try:
+                meta_ = json.load(open(os.path.join(f_, 'meta.json'), encoding='utf-8'))
+                if not os.path.exists(jp_) or (meta_.get('objective') or 0) <= my_obj:
+                    continue
+                pic_ = cv2.imread(jp_)
+                g2_ = geometry(f_)
+                size_ = np.asarray(g2_['pos'], float).max(0) + (g2_['W'], g2_['H'])
+                k_ = min(1.0, 4000 / size_.max())
+                src_ = np.float32([[0, 0], [pic_.shape[1], 0], [0, pic_.shape[0]]])
+                dst_ = stage_to_mosaic(folder, mosaic_to_stage(f_, src_ / k_)).astype(np.float32)
+                A_ = cv2.getAffineTransform(src_, dst_)
+                r_ = regs_.get(meta_.get('sample_uid'))
+                ring_ = None
+                if r_ is not None and r_.get('shape'):
+                    gm_ = from_json(r_['shape'])
+                    ps_ = [gm_] if gm_.geom_type == 'Polygon' else list(gm_.geoms)
+                    ring_ = [stage_to_mosaic(folder, np.array(p_.exterior.coords)[:-1]) for p_ in ps_]
+                out_.append((meta_.get('objective') or 0, pic_, A_, ring_))
+            except Exception:
+                continue
+        out_.sort(key=lambda t_: t_[0])                     # крупнее — выше
+        st['_fl_key'], st['_fl'] = key_, out_
+        return out_
+
+    def draw_finer(img):
+        Hh, Ww = img.shape[:2]
+        Rm = R() * st['s']                                  # мозаика этой -> окно: mid + s R (M - c)
+        T_ = np.c_[Rm, mid() - Rm @ np.array([st['cx'], st['cy']])]
+        for o_, pic_, A_, ring_ in finer_layers():
+            M_ = T_[:, :2] @ A_[:, :2]
+            t_ = T_[:, :2] @ A_[:, 2] + T_[:, 2]
+            corners_ = np.array([[0, 0], [pic_.shape[1], 0], [0, pic_.shape[0]], [pic_.shape[1], pic_.shape[0]]], float)
+            cv_ = corners_ @ M_.T + t_
+            if cv_[:, 0].max() < 0 or cv_[:, 1].max() < 0 or cv_[:, 0].min() > Ww or cv_[:, 1].min() > Hh:
+                continue
+            if np.hypot(*M_[:, 0]) * pic_.shape[1] < 12:        # совсем мелко — не видно, не тратим время
+                continue
+            w_ = cv2.warpAffine(pic_, np.float32(np.c_[M_, t_]), (Ww, Hh), flags=cv2.INTER_LINEAR, borderValue=0)
+            mask_ = cv2.inRange(w_, (7, 7, 7), (255, 255, 255))  # вне кадров (чёрное) — не кладём
+            if ring_:
+                cm_ = np.zeros_like(mask_)
+                cv2.fillPoly(cm_, [np.int32(np.round(to_view_arr(r2_) * 16)) for r2_ in ring_], 255, cv2.LINE_8, 4)
+                mask_ = cv2.bitwise_and(mask_, cm_)
+            img = cv2.copyTo(w_, mask_, img)
+        return img
+
     def draw_subgrids(img):
         """Подсетки выделений (тонкие линии внутри их клеток) и клетки кисти в них (зелёные)."""
         L_ = lat_now()
@@ -1079,15 +1171,45 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
                         cv2.line(img, (int(v0[0] * 16), int(v0[1] * 16)), (int(v1[0] * 16), int(v1[1] * 16)),
                                  SM.dim(col_, 0.8), 1, cv2.LINE_AA, 4)
             M_ = N_ * n_
-            ov_ = None
-            for a, b in (rf_.get(r_['uid']) or {}).get('cells', []):
-                q_ = stage_to_mosaic(folder, LT.cell_stage(L_, a, b, M_))
-                pv_ = np.array([to_view(p_) for p_ in q_], float)
-                if ov_ is None:
-                    ov_ = img.copy()
-                cv2.fillPoly(ov_, [np.int32(np.round(pv_ * 16))], (90, 200, 90), cv2.LINE_AA, 4)
-            if ov_ is not None:
-                cv2.addWeighted(ov_, 0.35, img, 0.65, 0, dst=img)
+            pc_ = (rf_.get(r_['uid']) or {}).get('cells', [])
+            if pc_:                                         # выбранные клетки подсетки — зелёной рамкой
+                clear_ = [to_view_arr(stage_to_mosaic(folder, LT.cell_stage(L_, a, b, M_))) for a, b in pc_]
+                cv2.polylines(img, [np.int32(np.round(q_ * 16)) for q_ in clear_], True, (90, 200, 90), 1, cv2.LINE_AA, 4)
+
+    def pyramid_tint(img):
+        """Пирамидка: внутри каждого выделения, в котором выбраны участки меньше (дети, клетки подсетки), всё,
+        кроме них, — под цветом. Чем глубже — тем чище: видно, куда смотреть дальше."""
+        if smp is None:
+            return
+        from .snap import stage_to_mosaic
+        from .layers import from_json
+        regs_, rf_ = regions_now()
+        L_ = lat_now()
+        kids_ = {}
+        for r_ in regs_:
+            if r_.get('parent') and r_.get('kind') != 'group':
+                kids_.setdefault(r_['parent'], []).append(r_)
+        for r_ in regs_:
+            if r_.get('kind') == 'group' or not r_.get('shape'):
+                continue
+            if os.path.abspath(folder).startswith(os.path.abspath(P0_.sel_folder(smp.folder, r_)) + os.sep):
+                continue                                    # своё выделение этой съёмки — по квадратам (выше)
+            holes_ = [from_json(k_['shape']) for k_ in kids_.get(r_['uid'], []) if k_.get('shape')]
+            pc_ = (rf_.get(r_['uid']) or {}).get('cells', [])
+            if pc_ and L_ is not None:
+                M_ = LT.level(r_) * int((rf_.get(r_['uid']) or {}).get('n') or 1)
+                holes_.append(LT.cells_geom(L_, [tuple(c) for c in pc_], M_))
+            if not holes_:
+                continue
+            tv_ = lambda A_: to_view_arr(stage_to_mosaic(folder, A_))
+            mask_ = np.zeros(img.shape[:2], np.uint8)
+            for ext_, hs_ in UI.geom_shapes(from_json(r_['shape']), tv_):
+                cv2.fillPoly(mask_, [np.int32(np.round(ext_ * 16))], 255, cv2.LINE_8, 4)
+            for h_ in holes_:
+                for ext_, hs_ in UI.geom_shapes(h_, tv_):
+                    cv2.fillPoly(mask_, [np.int32(np.round(ext_ * 16))], 0, cv2.LINE_8, 4)
+            tint_ = cv2.addWeighted(img, 0.72, np.full_like(img, SM.color(r_['num'] - 1)), 0.28, 0)
+            cv2.copyTo(tint_, mask_, img)
 
     def sample_outlines():
         """Выделения образца на этой мозаике: [(кольцо в пикселях мозаики, цвет, подпись, пунктир, ждёт)]."""

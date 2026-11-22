@@ -99,7 +99,7 @@ The drawing is used to write a circuit over the flakes, so every picture in it i
 | Cross centre | template + **edges of the arms**: two straight lines through the middles of the arms, their crossing is the centre (≈0.1 px, also when the chip is turned; digits next to the cross are ignored) |
 | Lens distortion | `D` in the microscope window (`m.calibrate_distortion()`): 3×3 pictures with 50 % overlap around any details; matched pieces of the overlaps give $k_1, k_2, p_1, p_2$ without crosses and without trusting the stage. Remembered for the objective, used for every scan |
 | Frames | full camera resolution, JPG 95 by default; `m.frame_format = 'png'` — lossless. Crosses and seams are measured in the green channel (sharpest, no colour fringes) |
-| Before a scan | `A` (`m.prepare()`): lamp steady, autofocus, exposure (brightest details ≈80 %, no overexposure), white balance on an empty place, pause for the stage to settle |
+| Before a scan | button **Prepare** or `A` (`m.prepare()`): lamp steady, autofocus, exposure (brightest details ≈80 %, no overexposure), white balance on an empty place, pause for the stage to settle |
 | Backlash | `B` — one-side approach (remembered). The stitch does not trust the stage anyway; this keeps the frames where they are expected and the camera overlay exact |
 
 For the circuit itself, outline the flakes at 50x / 100x: at 10x the optics blur edges by about 1 µm.

@@ -56,7 +56,7 @@ HELP = ["Shift+Esc: Exit (or close the window)", "P: Hide / show the left panel"
         "Wheel: zoom   Drag (middle button too): move the zoomed picture   Z: whole frame",
         "Map (top right): click - the stage goes there, drag - a new area on this objective, wheel - zoom, right drag - move",
         "Tab: big map / big camera   Double-click a shot area on the map: open it (crosses, brush, export)",
-        "Buttons on top: Scan area (scan + stitch), New area, Export (drawing for AutoCAD: DWG + DXF), Settings",
+        "Buttons on top: Prepare (as A), Scan area (scan + stitch), New area, Export (drawing for AutoCAD: DWG + DXF), Settings",
         "Selections are layers: Ctrl+click cards to mark them, then Merge / Minus / Overlap / Group / Ungroup above the list",
         "The eye on a card hides the selection on the maps (and shows it again); Show all above the list",
         "Squares selected in the view (M) become Drafts, one per figure   Shift+drag over a selection: move it",
@@ -353,7 +353,7 @@ STEP_HELP = [
     "Step 2: open the overview (double-click it on the map or V), mark 3 crosses (C), number two squares (N), select the squares with flakes (M)",
     "Step 3: put 50x or 100x, choose an area on the right and press Scan area",
     "Step 4: press Export, tick the areas: one drawing for AutoCAD (DWG + DXF with pictures, outlines, crosses)"]
-BUTTONS = ["New area", "Scan area", "Export", "Settings"]
+BUTTONS = ["Prepare", "New area", "Scan area", "Export", "Settings"]
 
 
 MAP_COLS, MAP_ROWS = 11, 9    # видимое окно мини-карты, кадров
@@ -1356,11 +1356,30 @@ def _run(m, fullscreen=False, _keys=None):
             th.join()
         return res
 
+    def prepare_here(what='prepare'):
+        """Prepare (кнопка, A): подготовка к снимкам здесь; D — дисторсия объектива. Полоса — в окне."""
+        nonlocal msg, msg_t
+        if live is not None:
+            live.paused = True
+        try:
+            res_ = busy("Prepare before the scan" if what == 'prepare' else f"Distortion of {m.objective}x",
+                        (lambda: m.prepare()) if what == 'prepare' else (lambda: m.calibrate_distortion()))
+        finally:
+            if live is not None:
+                live.paused = False
+        if 'e' in res_:
+            msg = f"{'Prepare' if what == 'prepare' else 'Distortion'} failed: {res_['e']}"
+        else:
+            msg = "   ".join(f"{k_}: {v_}" for k_, v_ in list(res_['r'].items()))
+        msg_t = time.monotonic()
+
     def tbar_do(what):
         nonlocal msg, msg_t
         msg_t = time.monotonic()
         if what[0] == 'step':
             msg = STEP_HELP[what[1]]
+        elif what[1] == "Prepare":
+            prepare_here()
         elif what[1] == "Scan area":
             scan_here()
         elif what[1] == "New area":
@@ -2490,20 +2509,7 @@ def _run(m, fullscreen=False, _keys=None):
                     m.offset_clear()
                     msg = "Offset removed: real coordinates"
             elif ch == 'a' or ch == 'd':                   # A: подготовка; D: дисторсия объектива
-                if live is not None:
-                    live.paused = True
-                try:
-                    res_ = busy("Prepare before the scan" if ch == 'a' else f"Distortion of {m.objective}x",
-                                (lambda: m.prepare()) if ch == 'a' else (lambda: m.calibrate_distortion()))
-                finally:
-                    if live is not None:
-                        live.paused = False
-                if 'e' in res_:
-                    msg = f"{'Prepare' if ch == 'a' else 'Distortion'} failed: {res_['e']}"
-                else:
-                    r_ = res_['r']
-                    msg = "   ".join(f"{k_}: {v_}" for k_, v_ in list(r_.items()))
-                msg_t = time.monotonic()
+                prepare_here('prepare' if ch == 'a' else 'distortion')
             elif ch == 'w':                                # баланс белого (навести на пустое место)
                 m.white_balance()
                 msg = "White balance done"

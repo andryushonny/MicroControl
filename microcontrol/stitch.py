@@ -252,6 +252,9 @@ def _builtin(st, pred, p, W, H, max_shift, sigma, alpha, verbose, A=None):
         ok_ = ok
         ok = okm
         cols = [dp[ok]] + ([dsg[ok]] if np.abs(dsg[ok]).sum() > 0 else [])
+        if len(cols) > 1 and (np.linalg.matrix_rank(np.hstack(cols)) < np.hstack(cols).shape[1]
+                              or len(dp[ok]) < np.hstack(cols).shape[1] + 2):
+            cols = cols[:1]                                     # люфт неотличим от шага (2 ряда): без него
         X_ = np.hstack(cols)
         inl = np.ones(len(X_), bool)
         for _ in range(4):                                      # ложные швы (совпадение шума) — прочь

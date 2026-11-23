@@ -871,6 +871,10 @@ def _run(m, fullscreen=False, _keys=None):
         return SM.rect(reg, fw_, fh_)               # размер кадра — объектива самого выделения
 
     def reg_area(reg):
+        if reg.get('shape'):                               # по контуру (клетки, черновики): его рамка, не A-B
+            from .layers import geom as _gm
+            b_ = _gm(m, reg).bounds
+            return Area(*work(b_[:2]), *work(b_[2:]))
         return Area(*work(reg['A']), *work(reg['B']))
 
     def first_num(k):                                    # номера точек фокуса области k
@@ -1532,6 +1536,8 @@ def _run(m, fullscreen=False, _keys=None):
     def wiz_action(name):
         """Кнопка мастера: Done — сделать шаг, Skip — дальше, Cancel — выйти; Overwrite / Keep — для старых данных."""
         nonlocal msg, msg_t
+        if not wiz.get('title'):                           # мастер закрыт — кнопок нет
+            return
         if name == "Cancel":
             wiz.clear()
             msg, msg_t = "Prepare cancelled", time.monotonic()

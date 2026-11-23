@@ -1976,6 +1976,9 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
                     _t.sleep(a[0])
                     key = -1
                     kind = ''
+                if kind == 'qwheel':                        # ('qwheel', x, y, +1) — колесо в точке мозаики
+                    a = [int(round(v_)) for v_ in to_view(a[:2])] + [a[2]]
+                    kind = 'wheel'
                 if kind[:1] == 'q':                         # ('qclick', ...) — точки в пикселях мозаики
                     kind = kind[1:]
                     nums_ = [v_ for v_ in a if not isinstance(v_, str)]

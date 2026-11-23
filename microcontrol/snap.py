@@ -61,22 +61,35 @@ def geometry(folder):
     pos = pos - pos.min(0)
     use_s = [k for k in range(2) if np.ptp(sg[:, k]) > 0]
     X = np.c_[p, sg[:, use_s], np.ones(len(p))]
-    if len(p) >= 3 and np.linalg.matrix_rank(p - p.mean(0)) == 2:
+    from .storage import meta_A
+    st = ScanData(folder)
+    try:
+        Mo_cal = -meta_A(st.meta, W, H)                     # камера из калибровки (px на шаг)
+    finally:
+        st.close()
+    Mo = None
+    if len(p) >= X.shape[1] + 2 and np.linalg.matrix_rank(X) == X.shape[1] \
+            and np.linalg.matrix_rank(p - p.mean(0)) == 2:
         coef = np.linalg.lstsq(X, pos, rcond=None)[0]
         Mo = coef[:2].T
         Bl = np.zeros((2, 2))
         for j, k in enumerate(use_s):
             Bl[:, k] = coef[2 + j]
         c = coef[-1]
-    else:                                                   # один ряд / кадр: камера из калибровки
-        from .storage import meta_A
-        st = ScanData(folder)
-        try:
-            Mo = -meta_A(st.meta, W, H)
-        finally:
-            st.close()
+        if np.linalg.norm(Mo - Mo_cal) > 0.05 * np.linalg.norm(Mo_cal):   # мало кадров: люфт и сдвиг ряда
+            Mo = None                                       # неразличимы (2 ряда) — подгонке не верить
+    if Mo is None:                                          # камера из калибровки; люфт и сдвиг — по остатку
+        Mo = Mo_cal
+        r_ = pos - p @ Mo.T
+        Xs = np.c_[sg[:, use_s], np.ones(len(p))]
         Bl = np.zeros((2, 2))
-        c = (pos - p @ Mo.T).mean(0)
+        if use_s and len(p) >= Xs.shape[1] + 1 and np.linalg.matrix_rank(Xs) == Xs.shape[1]:
+            cf = np.linalg.lstsq(Xs, r_, rcond=None)[0]
+            for j, k in enumerate(use_s):
+                Bl[:, k] = cf[j]
+            c = cf[-1]
+        else:
+            c = r_.mean(0)
     B = np.linalg.solve(Mo, Bl)
     T = p + sg @ B.T
     resid = pos - (T @ Mo.T + c)

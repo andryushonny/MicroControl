@@ -401,7 +401,8 @@ ok(C('move_stage', dx_um=2.5 * fw, dy_um=1.5 * fh, reason='go to corner 2'))
 r = ok(C('area_corner', corner=2)); print(r['message'])
 ok(C('add_focus_point'))
 # ошибки
-r = C('area_corner', corner=1); assert not r['ok'] and r['error']['code'] == 'E704', r
+r = C('area_corner', corner=1); assert r['ok'], r                                # внутри — того же объектива можно
+m._pending = None
 r = C('move_stag', dx_um=1); assert r['error']['code'] == 'NO_TOOL' and 'move_stage' in r['error']['hint'], r
 r = C('move_stage', dx=5, reason='x'); assert r['error']['code'] == 'BAD_ARGS', r
 r = C('move_stage', dx_um='abc', reason='x'); assert r['error']['code'] == 'BAD_ARGS', r
@@ -598,10 +599,7 @@ m.move(dx=fw5); SM.corner(m, 2)                                                 
 assert [SM.obj(m, r) for r in m._regions] == [10, 50] and SM.parent(m, 1) == 0, [SM.parent(m, 1)]
 assert SM.tree(m) == [(0, 0), (1, 1)]
 m.objective = 10
-try:                                                                               # тот же объектив внутри — нельзя
-    SM.corner(m, 1); raise AssertionError("same objective overlap allowed")
-except mc.MicroControlError as e:
-    assert 'E704' in str(e), e
+SM.corner(m, 1); m._pending = None                                                # тот же объектив внутри — можно
 m.objective = 50
 det = m.scan(name='detail')                                                        # снимается только 50x
 assert json.load(open(os.path.join(det, 'meta.json')))['parent_uid'] == m._regions[0]['uid']
@@ -1308,12 +1306,17 @@ def sel(x0, y0, x1, y1, o, parent=None):
              parent=parent)
     LY.set_geom(m, r, _box(x0, y0, x1, y1)); m._regions.append(r); return len(m._regions) - 1
 
-ok, msg = LY.draft_to_selection(m, kd, 10)                                 # a) 10x в съёмке 10x — нельзя
-assert not ok and 'larger objective' in msg and m._regions[kd].get('kind') == 'draft', msg
+import copy
+_r0 = copy.deepcopy(m._regions)
+ok, msg = LY.draft_to_selection(m, kd, 10)                                 # a) 10x в съёмке 10x — теперь можно
+assert ok, msg                                                             # a) тот же объектив внутри — можно
+m._regions = copy.deepcopy(_r0); SM.persist(m)
 gd = LY.geom(m, m._regions[kd]); bx = gd.bounds
 k50 = sel(bx[0] + 5, bx[1] + 5, bx[0] + 40, bx[1] + 30, 50, S1['uid'])    # 50x внутри черновика (снаружи — съёмка 10x)
-ok, msg = LY.draft_to_selection(m, kd, 50)                                 # b) черновик 50x наехал бы на 50x
-assert not ok and 'E704' in msg, msg
+_r1 = copy.deepcopy(m._regions)
+ok, msg = LY.draft_to_selection(m, kd, 50)                                 # b) 50x внутри черновика — вложено, можно
+assert ok, msg
+m._regions = copy.deepcopy(_r1); SM.persist(m)
 LY._drop(m, [k50])
 ok, msg = LY.draft_to_selection(m, kd, 50)                                 # c) теперь можно
 assert ok and m._regions[kd].get('kind') is None and m._regions[kd]['obj'] == 50, msg
@@ -1326,8 +1329,8 @@ except ValueError as e:
 assert snap_() == s0
 k2 = sel(gb[2] - 60, gb[1] + 10, gb[2] - 20, gb[1] + 40, 50, S1['uid'])   # другой 50x рядом
 gk = LY.geom(m, m._regions[k2]).bounds; gk0 = LY.geom(m, m._regions[kd]).bounds
-try:                                                                       # e) наехать на такой же — нельзя
-    LY.move(m, k2, gk0[0] - gk[0] + 5, gk0[1] - gk[1] + 5); raise AssertionError("overlap")
+try:                                                                       # e) наехать частью на такой же — нельзя
+    LY.move(m, k2, gk0[2] - gk[0] - 20, gk0[1] - gk[1] + 5); raise AssertionError("overlap")
 except ValueError as e:
     assert 'E704' in str(e), e
 c0 = np.array(LY.geom(m, m._regions[kd]).centroid.coords[0])               # f) родитель едет — дети с ним
@@ -1344,17 +1347,14 @@ kd = next(k for k, r in enumerate(m._regions) if r.get('obj') == 50 and r.get('k
 gk = LY.geom(m, m._regions[kd]).bounds                                     # i) объектив по кругу: пирамидка цела
 k100 = sel(gk[0] + 1, gk[1] + 1, gk[0] + 10, gk[1] + 8, 100, m._regions[kd]['uid'])
 ok, msg = LY.next_objective_of(m, kd, sorted(_OB))
-assert ok and 10 < m._regions[kd]['obj'] < 100, (msg, m._regions[kd]['obj'])
+assert ok and m._regions[kd]['obj'] != 50, (msg, m._regions[kd]['obj'])
 m.objective = 50; m.focus()                                                # j) углы 1-2 на такой же объектив — E704
 m._regions[kd].update(obj=50, fw=fw / 5, fh=fh / 5)
 c_ = LY.geom(m, m._regions[kd]).centroid.coords[0]
 m.goto(x=c_[0], y=c_[1])
-try:
-    SM.corner(m, 1); raise AssertionError("corner inside the same objective")
-except mc.MicroControlError as e:
-    assert 'E704' in str(e), e
-m.close(); print("Conflicts: draft->selection checks objective and overlap, moves keep the pyramid (children along), "
-                 "no merge across objectives, objective cycling skips what breaks it, corners refuse overlap: OK")
+SM.corner(m, 1); m._pending = None                                         # j) угол внутри того же объектива — можно
+m.close(); print("Conflicts: draft->selection checks objective and partial overlap (nesting of one objective is fine), "
+                 "moves keep the pyramid (children along), no merge across objectives, objective cycling: OK")
 m = mc.Microscope('sim', objective=50, folder=tempfile.mkdtemp()); m.focus()   # k) 10x внутри 50x — нельзя
 import microcontrol.manual as M
 fw, fh = m.frame_size
@@ -1718,6 +1718,8 @@ def check(tag):
         # номера: та же клетка в решётке выбранного и образца
         same_num = S_ is None or np.array_equal(np.floor(uv + 0.5), np.floor(uvS + 0.5))
         seeded = json.load(open(os.path.join(f, 'grid.json'))).get('seeded')
+        log(f"    marks {r['num']}: " + ", ".join(f"{len(json.load(open(os.path.join(s_.folder, 'grid.json'))).get('marks') or [])}"
+                                                for s_ in P_.Selection(m.sample, r).scans if os.path.exists(os.path.join(s_.folder, 'grid.json'))))
         own = L.get('own') or L.get('src')
         log(f"    grid of S{r['num']} {SM.obj(m, r)}x ({'seeded' if seeded else 'marked'}): "
             f"off its lattice {dev:.2f} um, off the sample lattice {devS:.2f} um, lattice from "
@@ -1840,17 +1842,22 @@ if any(SM.obj(m, r) == 50 and r.get('kind') != 'draft' for r in m._regions):
 manual([('maprect', *n.to_px(cen(2.2, 1.2)), *n.to_px(cen(2.8, 1.8))), -1])
 k50 = next(k for k, r in enumerate(m._regions) if SM.obj(m, r) == 50 and r.get('kind') != 'draft')
 cnt = len(m._regions)
+u50 = m._regions[k50]['uid']
+R50 = lambda: m._regions[LY.idx(m, u50)]
 manual([('maprect', *n.to_px(cen(2.3, 1.3)), *n.to_px(cen(2.7, 1.7))), -1])
-if len(m._regions) != cnt:
-    issue("a 50x area over another 50x area was created")
+inner_ = [r for r in m._regions if r.get('parent') == u50 and SM.obj(m, r) == 50]
+log(f"  50x inside 50x: {[r['num'] for r in inner_]}")
+for r in inner_:                                                    # вложено можно; дальше сценарий — без него
+    m._regions.remove(r)
+SM.persist(m)
 b1 = LY.geom(m, m._regions[k1]).bounds
 manual([('maprect', *n.to_px((b1[2] - 30, b1[1] + 10)), *n.to_px((b1[2] + 60, b1[1] + 60))), -1], 'map_50x')
 log(f"  areas now: {[(r['num'], SM.obj(m, r), r.get('kind')) for r in m._regions]}; message: {getattr(m, '_last_msg', '')}")
 check("50x drawn")
 
 step("50x: scan + stitch S50, open the view (grid comes from the 10x lattice)")
-r50 = m._regions[k50]
-m._sel = k50
+r50 = R50()
+m._sel = LY.idx(m, u50)
 m.scan()
 f50 = [x for x in m.last_scans if '_50x' in x] or m.last_scans
 f50 = f50[-1]
@@ -1870,12 +1877,12 @@ S0 = np.floor(uvc).astype(int)
 W_uv = lambda S: np.linalg.solve(np.c_[cross_stage(1, 0), cross_stage(0, 1)], S)
 wc = np.floor(W_uv(LY.geom(m, r50).centroid.coords[0])).astype(int)
 view(f50, [ord('C'), -1, ('qclick', *q5(wc[0], wc[1])), -1, ('qclick', *q5(wc[0] + 1, wc[1])), -1], 'view_marked50')
-L50 = LY.lattice_for(m, m._regions[k50], self_too=True)
+L50 = LY.lattice_for(m, R50(), self_too=True)
 log(f"  50x lattice from {L50.get('own') and os.path.basename(L50['own'])}; sample lattice src "
     f"{os.path.basename(m.sample.data['lattice']['src'])}")
 if not L50.get('own'):
     issue("own 50x marking is not used for the selected 50x")
-m._sel = k50
+m._sel = LY.idx(m, u50)
 manual([], 'map_sel50')
 check("50x own marks")
 
@@ -1883,7 +1890,7 @@ step("50x: Shift+C again -> falls back to the 10x lattice; mark differently")
 view(f50, [ord('C'), -1])
 _d = json.load(open(os.path.join(f50, 'grid.json')))
 log(f"  after Shift+C: marks {len(_d.get('marks') or [])}, seeded {_d.get('seeded')}, keys {sorted(_d)}")
-L50b = LY.lattice_for(m, m._regions[k50], self_too=True)
+L50b = LY.lattice_for(m, R50(), self_too=True)
 log(f"  lattice now from {L50b.get('own') or L50b.get('src')}")
 if os.path.abspath(f50) == os.path.abspath(L50b.get('own') or ''):
     issue("cleared 50x marks are still used")
@@ -1891,14 +1898,14 @@ view(f50, [ord('c'), ('qclick', *q5(wc[0], wc[1] + 1)), -1, ('qclick', *q5(wc[0]
 check("50x re-marked")
 
 step("50x: scan again (version 2) -> grid from its own marking")
-m._sel = k50
+m._sel = LY.idx(m, u50)
 m.scan()
 f50b = m.last_scans[-1]
 mc.stitch(f50b, verbose=False)
 view(f50b, [])
 if not Grid(f50b).ready():
     issue("second version of the 50x has no grid")
-log(f"  versions: {[os.path.basename(s.folder) for s in P_.Selection(m.sample, m._regions[k50]).scans]}")
+log(f"  versions: {[os.path.basename(s.folder) for s in P_.Selection(m.sample, R50()).scans]}")
 check("50x v2")
 
 # ---------------------------------------------------------------- 100x
@@ -1907,7 +1914,7 @@ m.objective = 100
 m.focus()
 manual([])
 n = nav()
-gb = LY.geom(m, m._regions[k50]).bounds
+gb = LY.geom(m, R50()).bounds
 manual([('maprect', *n.to_px((gb[0] + 2, gb[1] + 2)), *n.to_px((gb[2] - 2, gb[3] - 2))), -1], 'map_100x')
 k100 = next((k for k, r in enumerate(m._regions) if SM.obj(m, r) == 100 and r.get('kind') != 'draft'), None)
 if k100 is None:
@@ -1925,7 +1932,7 @@ else:
 
 step("delete the 50x (middle level) and Ctrl+Z")
 u100 = m._regions[k100]['uid'] if k100 is not None else None
-m._sel = k50
+m._sel = LY.idx(m, u50)
 manual([ord('c'), -1])
 if u100:
     r100 = m._regions[LY.idx(m, u100)]
@@ -1936,12 +1943,12 @@ if u100:
         issue("the 100x lost its parent although it lies inside the 10x")
 check("50x deleted")
 manual([26, -1])
-k50 = next((k for k, r in enumerate(m._regions) if SM.obj(m, r) == 50 and r.get('kind') != 'draft'), None)
+k50 = LY.idx(m, u50)
 if k50 is None:
     issue("Ctrl+Z did not bring the 50x back")
 elif u100:
     r100 = m._regions[LY.idx(m, u100)]
-    if r100.get('parent') != m._regions[k50]['uid']:
+    if r100.get('parent') != R50()['uid']:
         issue("after Ctrl+Z the 100x is not inside the 50x again")
 check("50x restored")
 
@@ -1963,11 +1970,17 @@ for k in [k1, k50, LY.idx(m, u100) if u100 else None]:
 V.view = _v0
 
 step("10x: clear crosses and mark again: 50x / 100x keep their own")
-L50_before = LY.lattice_for(m, m._regions[k50], self_too=True)
+u50 = next(r['uid'] for r in m._regions if r.get('kind') not in ('group', 'draft') and
+           os.path.abspath(f50).startswith(os.path.abspath(P_.Selection(m.sample, r).folder) + os.sep))
+L50_before = LY.lattice_for(m, R50(), self_too=True)
+for sc_ in P_.Selection(m.sample, R50()).scans:
+    _d = json.load(open(os.path.join(sc_.folder, 'grid.json'))) if os.path.exists(os.path.join(sc_.folder, 'grid.json')) else {}
+    log(f"  scan {sc_.folder[-30:]} seeded {_d.get('seeded')} marks {len(_d.get('marks') or [])} own {LY.own_lattice(m.sample, R50()) is not None}")
 view(f1, [ord('C'), -1, ord('c'), ('qclick', *q(1, 1)), -1, ('qclick', *q(2, 1)), -1, ('qclick', *q(1, 2)), -1])
 if not Grid(f1).ready():
     issue("Shift+C, then C, then clicks: crosses not marked")
-L50_after = LY.lattice_for(m, m._regions[k50], self_too=True)
+L50_after = LY.lattice_for(m, R50(), self_too=True)
+log(f"  50x lattice before {np.round(L50_before['e1'], 2)} {L50_before.get('own')} after {np.round(L50_after['e1'], 2)} {L50_after.get('own')}")
 if not np.allclose(L50_before['e1'], L50_after['e1']):
     issue("the 50x grid changed when the 10x was re-marked")
 for k in [k1, k50]:
@@ -1977,7 +1990,7 @@ check("final")
 
 m.close()
 log("\nISSUES:\n" + ("\n".join(ISSUES) if ISSUES else "none"))
-assert not ISSUES, ISSUES
+assert not ISSUES, (ISSUES, LOG[-30:])
 cv2.imshow = _o
 print("Levels 10x -> 50x -> 100x with undo, redo, delete and redo differently: crosses cleared and marked again, "
       "every grid follows what is selected (own marks, else the larger one around, else the sample), V opens "

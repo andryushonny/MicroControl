@@ -185,8 +185,8 @@ def _preview(folder, w):
                     kk = (img.shape[1] - 2) / ms_['size'][0] * k
                     ov = small.copy()
                     for q in ms_['px']:
-                        cv2.fillPoly(ov, [np.int32(np.round(q * kk * 16))], _SM.dim(_SM.sample_color(folder), 0.6),
-                                     cv2.LINE_AA, 4)
+                        cv2.fillPoly(ov, [np.int32(np.round(q * kk))], _SM.dim(_SM.sample_color(folder), 0.6),
+                                     cv2.LINE_8)
                     small = cv2.addWeighted(ov, 0.7, small, 0.3, 0)
             except Exception:
                 pass
@@ -360,19 +360,31 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
     ses, subs = SM.session_of(folder)
     Wv, Hv = car['size']
     Hv -= UI.MENU_H                                         # сверху — строка меню
+    try:                                                    # сетка подставлена (из чужой разметки): крестов своих нет
+        seeded_ = seeded_ or bool(json.load(open(os.path.join(folder, 'grid.json'), encoding='utf-8')).get('seeded'))
+    except (OSError, ValueError):
+        pass
     st = dict(cx=sc.size[0] / 2, cy=sc.size[1] / 2, s=None, rot=0.0, mode='look', down=None, box=None,
               poly=[], dirty=True, Wv=Wv - SM.CAR_W, Hv=Hv, straight=False, switch=None, ruler=[], mouse=None,
               msg=car.pop('msg', None) or (f"Selection {SM.sample_index(folder)} ({subs.index(folder) + 1} of {len(subs)})" if len(subs) > 1 else "")
               + (f"   Crosses moved with the stitched frames ({moved_}); F: frames onto the crosses" if moved_ else "")
               + ("   The grid comes from the crosses marked before (this selection, the larger one around it or the "
-                 "sample): no crosses to mark here; Shift+C: mark your own" if seeded_ else "")
+                 "sample): no crosses to mark here; C: mark your own" if seeded_ else "")
               + st0_msg)
+    st['seeded'] = seeded_
 
     def car_click(x, y):
         h_ = SM.hit(car.get('hits', []), x - st['Wv'], y)
         if not h_:
             return
         act, k = h_
+        mp_ = car.get('map')
+        if mp_ is not None and 0 <= k < len(mp_):           # в меню и черновики: карточка -> съёмка
+            if mp_[k][0] != 'sub':
+                st['msg'] = "Drafts: select / unselect their squares here (M); delete in the microscope window"
+                st['dirty'] = True
+                return
+            k = mp_[k][1]
         if not 0 <= k < len(subs):                          # список сменился (удалили в окне микроскопа)
             st['car_dirty'] = st['dirty'] = True
             return
@@ -601,6 +613,7 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
             d_ = {}
         if not d_.get('seeded'):
             return
+        st['seeded'] = False
         for c_ in d_.get('seeded_labels') or [tuple(k_) for k_ in g.labels]:
             g.labels.pop(tuple(c_), None)
         g.save(px_um)
@@ -613,6 +626,9 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
     def add_cross(v, snap=False):
         """Крест — ровно там, где щёлкнули (середина пикселя экрана); snap (Shift+щелчок) — к центру креста
         на снимке (поиск по шаблону «+»)."""
+        if st.get('seeded'):                                # подставленные кресты — не его: свои с нуля
+            g.cr.clear()
+            g.refined = None
         unseed()
         Mc = from_view((v[0] + 0.5, v[1] + 0.5))
         d = np.zeros(2)
@@ -647,7 +663,8 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
                     set_straight(True)
                 if _cfg.AUTO_HINTS or (getattr(g, 'scores', None) and st.get('hints')):   # подсказки — по Y
                     hints()
-            auto_fit()
+            if g.ready() and len(g.cr.marks) >= 2:          # подгонка по всем крестам — только по F, не сама
+                st['msg'] += "   F: fit the grid to all crosses"
             g.save(px_um)
             if st['straight']:
                 set_straight(True)
@@ -783,7 +800,7 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
             st['down'] = (x, y, st['cx'], st['cy'], ev, shift, False)
             st['ctrl'] = bool(flags & cv2.EVENT_FLAG_CTRLKEY)
             st['mdrag'] = None                                 # левой по отметке креста — тащить её
-            if ev == cv2.EVENT_LBUTTONDOWN and st['mode'] == 'cross' and g.cr.marks:
+            if ev == cv2.EVENT_LBUTTONDOWN and st['mode'] == 'cross' and g.cr.marks and not st.get('seeded'):
                 dists = [np.hypot(*(to_view(q) - (x + 0.5, y + 0.5))) for q in g.cr.marks]
                 k = int(np.argmin(dists))
                 if dists[k] <= 10:
@@ -817,7 +834,6 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
                     g.refined = None
                     g.save(px_um)
                     st['msg'] = f"Cross mark moved; tilt {g.cr.angle():+.3f} deg" if len(g.cr.marks) > 1 else "Cross mark moved"
-                    auto_fit()
                     g.save(px_um)
                 else:
                     st['msg'] = "Drag the mark to move it; right click removes it"
@@ -865,7 +881,7 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
                     st['lab'] = [c, ""]
                     st['msg'] = f"Square {c}: type its number X Y (now {X} {Y}), Enter = keep, Esc = cancel"
             elif not moved and ev0 == cv2.EVENT_RBUTTONDOWN:
-                if st['mode'] == 'cross' and g.cr.marks:
+                if st['mode'] == 'cross' and g.cr.marks and not st.get('seeded'):
                     dists = [np.hypot(*(to_view(q) - (x, y))) for q in g.cr.marks]
                     k = int(np.argmin(dists))
                     if dists[k] < 25:
@@ -1011,11 +1027,11 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
             w2 = res['w'] / 2 * d_['v']
             if res['w'] * scale >= 4:                        # полоса усреднения — тонкие края
                 for sg_ in (+1, -1):
-                    cv2.line(img, ip(f_map(P0 + sg_ * w2)), ip(f_map(P1 + sg_ * w2)), tuple(c_ // 2 for c_ in col), 1, cv2.LINE_AA)
-            cv2.line(img, ip(f_map(P0)), ip(f_map(P1)), col, thick, cv2.LINE_AA)
+                    cv2.line(img, ip(f_map(P0 + sg_ * w2)), ip(f_map(P1 + sg_ * w2)), tuple(c_ // 2 for c_ in col), 1, cv2.LINE_8)
+            cv2.line(img, ip(f_map(P0)), ip(f_map(P1)), col, thick, cv2.LINE_8)
             hw = max(res['w'] / 2, 4.0 / max(scale, 1e-6))
             for q in pl_edge_pts(res, k):                    # граница — засечка поперёк линии
-                cv2.line(img, ip(f_map(q - hw * d_['v'])), ip(f_map(q + hw * d_['v'])), EDGE_COL, thick, cv2.LINE_AA)
+                cv2.line(img, ip(f_map(q - hw * d_['v'])), ip(f_map(q + hw * d_['v'])), EDGE_COL, thick, cv2.LINE_8)
             if handles:
                 for q in (P0, P1):
                     cv2.drawMarker(img, ip(f_map(q)), col, cv2.MARKER_SQUARE, 9, 1)
@@ -1047,7 +1063,7 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
             for e_ in edges:
                 xe = int(round(fx(e_)))
                 if x0 <= xe <= x0 + w:
-                    cv2.line(img, (xe, y0 + 1), (xe, y0 + h - 1), EDGE_COL, 1, cv2.LINE_AA)
+                    cv2.line(img, (xe, y0 + 1), (xe, y0 + h - 1), EDGE_COL, 1, cv2.LINE_8)
                     cv2.drawMarker(img, (xe, y0 + h - 2), EDGE_COL, cv2.MARKER_TRIANGLE_UP, 7, 1)
         for ch_, c_ in ((0, (255, 140, 60)), (1, (80, 220, 80)), (2, (70, 70, 255))):
             pts = np.c_[fx(x), Y(P[:, ch_])].round().astype(np.int32)
@@ -1378,7 +1394,7 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
                 cv2.fillPoly(ov, list(np.int32(quads[use_])), (0, 215, 255))
                 img = cv2.addWeighted(ov, 0.35, img, 0.65, 0)
             if sel_ and step >= 7:                          # край выбранного — зелёной линией
-                cv2.polylines(img, list(np.int32(np.round(quads[sel_]))), True, green, 1, cv2.LINE_AA)
+                cv2.polylines(img, list(np.int32(np.round(quads[sel_]))), True, green, 1, cv2.LINE_8)
             if step >= 34 and len(cells) <= 3000:           # номер квадрата в уголке: (X, Y) по подписям
                 num = g.numbering()
                 fs = min(0.5, step / 160)
@@ -1390,9 +1406,9 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
                     cv2.putText(img, txt, (int(u), int(v)), cv2.FONT_HERSHEY_SIMPLEX, fs, col, 1, cv2.LINE_AA)
                 if st.get('lab'):                           # вводимый номер — у квадрата
                     pts = np.array([to_view(q) for q in g.corners(*st['lab'][0])])
-                    cv2.polylines(img, [np.int32(pts)], True, (0, 230, 255), 2, cv2.LINE_AA)
+                    cv2.polylines(img, [np.int32(pts)], True, (0, 230, 255), 2, cv2.LINE_8)
             if cells and step >= 7:                         # крупно: контур каждого квадрата над мозаикой
-                cv2.polylines(img, list(np.int32(np.round(quads))), True, red, 1, cv2.LINE_AA if step >= 30 else cv2.LINE_8)
+                cv2.polylines(img, list(np.int32(np.round(quads))), True, red, 1, cv2.LINE_8)
             elif cells:                                     # мелко: линии через кресты
                 # сплошные линии без сглаживания (сглаженная линия в 1 px на дробной позиции бледнеет),
                 # совсем мелко — каждая k-я, чтобы не слиться в сплошной красный
@@ -1419,7 +1435,7 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
             if dash_:
                 UI.dashed_poly(img, pv_, c_, 2 if new_ else 1)
             else:
-                cv2.polylines(img, [np.int32(np.round(pv_ * 16))], True, c_, 2, cv2.LINE_AA, 4)
+                cv2.polylines(img, [np.int32(np.round(pv_))], True, c_, 2, cv2.LINE_8)
             x_l, y_l = pv_[:, 0].min(), pv_[:, 1].min()
             if 0 <= x_l < W_img - 60 and 30 <= y_l < H_img:
                 tw_ = UI.size(lab_, 0.42)[0]
@@ -1427,7 +1443,7 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
                 UI.put(img, lab_, x_l + 5, y_l - 6, 0.42, c_)
         draw_new_drafts(img)                                  # выбранное здесь — черновиком сразу
         draw_subgrids(img)                                    # подсетки выделений и их клетки кисти
-        for k_, q in enumerate(g.cr.marks):
+        for k_, q in enumerate([] if st.get('seeded') else g.cr.marks):   # подставленные кресты — не показывать
             u_, v_ = to_view(q)
             UI.plus(img, u_, v_, yellow if k_ == st.get("mdrag") else red)
         if st['box']:
@@ -1498,8 +1514,58 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
         return np.hstack([with_prof(img), carousel_img()])
 
     def carousel_img():
-        pan_, car['hits'], car['content'] = SM.carousel(st['Hv'], _car_items(subs, folder, car), subs.index(folder),
-                                                        car['scroll'], title="Selections", go=False, hover=car.get('hxy'))
+        """Меню справа — как в окне микроскопа: снятые выделения и под каждым его черновики (и новые, ещё не
+        записанные — сразу, как выбраны квадраты), с теми же номерами и цветами."""
+        base_ = _car_items(subs, folder, car)
+        items_, cmap_ = [], []
+        try:
+            regs_ = regions_now()[0] if smp is not None else []
+        except Exception:
+            regs_ = []
+        by_ = {r_.get('uid'): r_ for r_ in regs_ if r_.get('uid')}
+        owner_ = {}
+        for k_, f_ in enumerate(subs):
+            for r_ in regs_:
+                if r_.get('kind') not in ('group', 'draft') and r_.get('uid') and \
+                        os.path.abspath(f_).startswith(os.path.abspath(P0_.sel_folder(smp.folder, r_)) + os.sep):
+                    owner_[r_['uid']] = k_
+
+        def top_(r_):
+            seen_ = set()
+            while r_ is not None and id(r_) not in seen_:
+                seen_.add(id(r_))
+                if r_.get('kind') not in ('group', 'draft') and r_.get('uid') in owner_:
+                    return owner_[r_['uid']]
+                r_ = by_.get(r_.get('parent'))
+            return None
+
+        def depth_(r_):
+            d_, seen_ = 0, set()
+            while r_ is not None and r_.get('kind') == 'draft' and id(r_) not in seen_:
+                seen_.add(id(r_))
+                d_ += 1
+                r_ = by_.get(r_.get('parent'))
+            return d_
+        sel_k = None
+        f_cur_ = subs.index(folder)
+        for k_, it_ in enumerate(base_):
+            if k_ == subs.index(folder):
+                sel_k = len(items_)
+            items_.append(it_)
+            cmap_.append(('sub', k_))
+            for r_ in regs_:
+                if r_.get('kind') == 'draft' and (top_(r_) == k_ or (r_.get('pending') and f_cur_ == k_ and top_(r_) is None)):
+                    new_ = bool(r_.get('pending'))
+                    nc_ = len(r_.get('cells') or [])
+                    items_.append(dict(title=("Draft (new)" if new_ else f"Draft {r_.get('num', '')}"),
+                                       color=(235, 235, 235) if new_ else SM.color(int(r_.get('num', 1)) - 1),
+                                       lines=[f"{nc_} square{'s' if nc_ != 1 else ''}, from the view (M)" +
+                                              ("" if not new_ else "  - saved on closing")],
+                                       depth=depth_(r_), go=False, muted=new_))
+                    cmap_.append(('draft', r_.get('uid')))
+        car['map'] = cmap_
+        pan_, car['hits'], car['content'] = SM.carousel(st['Hv'], items_, sel_k, car['scroll'], title="Selections",
+                                                        go=False, hover=car.get('hxy'))
         return pan_
 
     # история (Ctrl+Z / Ctrl+Y): после каждого действия разметка (кресты, сетка, квадраты, номера, подсказки)
@@ -1783,7 +1849,7 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
             mask_ = cv2.inRange(w_, (7, 7, 7), (255, 255, 255))  # вне кадров (чёрное) — не кладём
             if ring_:
                 cm_ = np.zeros_like(mask_)
-                cv2.fillPoly(cm_, [np.int32(np.round(to_view_arr(r2_) * 16)) for r2_ in ring_], 255, cv2.LINE_8, 4)
+                cv2.fillPoly(cm_, [np.int32(np.round(to_view_arr(r2_))) for r2_ in ring_], 255, cv2.LINE_8)
                 mask_ = cv2.bitwise_and(mask_, cm_)
             img = cv2.copyTo(w_, mask_, img)
         return img
@@ -1810,13 +1876,13 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
                         v0, v1 = to_view(q_[0]), to_view(q_[1])
                         if max(v0[0], v1[0]) < 0 or min(v0[0], v1[0]) > Ww or max(v0[1], v1[1]) < 0 or min(v0[1], v1[1]) > Hh:
                             continue
-                        cv2.line(img, (int(v0[0] * 16), int(v0[1] * 16)), (int(v1[0] * 16), int(v1[1] * 16)),
-                                 SM.dim(col_, 0.8), 1, cv2.LINE_AA, 4)
+                        cv2.line(img, (int(round(v0[0])), int(round(v0[1]))), (int(round(v1[0])), int(round(v1[1]))),
+                                 SM.dim(col_, 0.8), 1, cv2.LINE_8)
             M_ = N_ * n_
             pc_ = (rf_.get(r_['uid']) or {}).get('cells', [])
             if pc_:                                         # выбранные клетки подсетки — зелёной рамкой
                 clear_ = [to_view_arr(stage_to_mosaic(folder, LT.cell_stage(L_, a, b, M_))) for a, b in pc_]
-                cv2.polylines(img, [np.int32(np.round(q_ * 16)) for q_ in clear_], True, (90, 200, 90), 1, cv2.LINE_AA, 4)
+                cv2.polylines(img, [np.int32(np.round(q_)) for q_ in clear_], True, (90, 200, 90), 1, cv2.LINE_8)
 
     def draw_new_drafts(img):
         """Выбранные квадраты, из которых черновик ещё не сделан (окно микроскопа сделает): пунктир «Draft (new)» —
@@ -1863,10 +1929,10 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
             tv_ = lambda A_: to_view_arr(stage_to_mosaic(folder, A_))
             mask_ = np.zeros(img.shape[:2], np.uint8)
             for ext_, hs_ in UI.geom_shapes(from_json(r_['shape']), tv_):
-                cv2.fillPoly(mask_, [np.int32(np.round(ext_ * 16))], 255, cv2.LINE_8, 4)
+                cv2.fillPoly(mask_, [np.int32(np.round(ext_))], 255, cv2.LINE_8)
             for h_ in holes_:
                 for ext_, hs_ in UI.geom_shapes(h_, tv_):
-                    cv2.fillPoly(mask_, [np.int32(np.round(ext_ * 16))], 0, cv2.LINE_8, 4)
+                    cv2.fillPoly(mask_, [np.int32(np.round(ext_))], 0, cv2.LINE_8)
             tint_ = cv2.addWeighted(img, 0.72, np.full_like(img, SM.color(r_['num'] - 1)), 0.28, 0)
             cv2.copyTo(tint_, mask_, img)
 

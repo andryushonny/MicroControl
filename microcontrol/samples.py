@@ -200,9 +200,12 @@ def _geo_parent(m, k):
     c = ((r[0] + r[2]) / 2, (r[1] + r[3]) / 2)
     best = None
     for i, o in enumerate(m._regions):
-        if i == k or o.get('kind') == 'group' or (o.get('kind') != 'draft' and obj(m, o) >= obj(m, rg)):
+        if i == k or o.get('kind') == 'group' or (o.get('kind') != 'draft' and obj(m, o) > obj(m, rg)):
             continue
         q = _rect(m, o)
+        if o.get('kind') != 'draft' and obj(m, o) == obj(m, rg) and \
+                not (q[0] <= r[0] and q[1] <= r[1] and q[2] >= r[2] and q[3] >= r[3] and q != r):
+            continue                                       # того же объектива — только если целиком внутри
         if inside(q, *c):
             key = (q[2] - q[0]) * (q[3] - q[1])                 # самое маленькое, в котором лежит
             if best is None or key < best[0]:
@@ -354,10 +357,6 @@ def corner(m, which, img=None):
     fpt = dict(x=rp.x, y=rp.y, z=rp.z)
     th = [thumb(img)] if img is not None else []
     if which == 1:
-        hit_ = area_at(m, rp.x, rp.y)
-        if hit_ is not None:
-            raise MicroControlError('E704', f"Here is Selection {num(m, hit_)} ({m.objective}x): a new selection of "
-                                            f"the same objective must not overlap it (another objective may)")
         if m._pending:                                     # угол 1 заново
             m._pending['A'] = (rp.x, rp.y)
             m._pending['pts'][0] = fpt
@@ -389,11 +388,12 @@ def corner(m, which, img=None):
     except ValueError as e:
         raise MicroControlError('E704', str(e)) from None
     gn = geom(m, new)
+    from .layers import nested as _nested
     bad = [rg['num'] for rg in m._regions if rg.get('kind') not in ('group', 'draft') and obj(m, rg) == m.objective
-           and gn.intersection(geom(m, rg)).area > 1e-3]
+           and gn.intersection(geom(m, rg)).area > 1e-3 and not _nested(gn, geom(m, rg))]
     if bad:
-        raise MicroControlError('E704', f"This selection overlaps Selection {', '.join(map(str, bad))} of the same "
-                                        f"objective ({m.objective}x): choose corner 2 so that they do not overlap")
+        raise MicroControlError('E704', f"This selection partly overlaps Selection {', '.join(map(str, bad))} of the "
+                                        f"same objective ({m.objective}x): put it fully inside or fully outside")
     from .layers import conflict as _cf
     bad2_ = _cf(m, new)
     if bad2_:

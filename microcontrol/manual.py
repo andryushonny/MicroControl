@@ -126,7 +126,7 @@ def dashed(img, p0, p1, color, rect=None, dash=7, gap=5, solid=False):
         return
     u, t = (b - a) / n, 0.0
     while t < n:
-        cv2.line(img, tuple((a + u * t).astype(int)), tuple((a + u * min(t + dash, n)).astype(int)), color, 1, cv2.LINE_AA)
+        cv2.line(img, tuple((a + u * t).astype(int)), tuple((a + u * min(t + dash, n)).astype(int)), color, 1, cv2.LINE_8)
         t += dash + gap
 
 
@@ -513,9 +513,9 @@ def minimap(img, m, A, B, size=MAP_W, zcolor=None, others=(), right=0):
             ovm = sub.copy()
             for ring_ in rr_[0]:
                 pf = np.array([to(*f(x_, y_)) for x_, y_ in ring_], float)
-                pts = np.int32(np.round(pf * 16))
-                cv2.fillPoly(ovm, [pts], SM.dim(oc, 0.5), cv2.LINE_AA, 4)
-                cv2.polylines(ovm, [pts], True, oc, 1, cv2.LINE_AA, 4)
+                pts = np.int32(np.round(pf))
+                cv2.fillPoly(ovm, [pts], SM.dim(oc, 0.5), cv2.LINE_8)
+                cv2.polylines(ovm, [pts], True, oc, 1, cv2.LINE_8)
             g1 = (gx0 + int(gw), gy0 + int(gh))
             sub[gy0:g1[1], gx0:g1[0]] = cv2.addWeighted(ovm, 0.75, sub, 0.25, 0)[gy0:g1[1], gx0:g1[0]]
             continue
@@ -1022,18 +1022,18 @@ def _run(m, fullscreen=False, _keys=None):
                 continue
             mk_ = np.zeros(mp.shape[:2], np.uint8)
             for ext_, hs_ in UI.geom_shapes(_gm(m, rg_), nav.to_px):
-                cv2.fillPoly(mk_, [np.int32(np.round(ext_ * 16))], 255, cv2.LINE_8, 4)
+                cv2.fillPoly(mk_, [np.int32(np.round(ext_))], 255, cv2.LINE_8)
             for r2 in kids_:
                 for ext_, hs_ in UI.geom_shapes(_gm(m, r2), nav.to_px):
-                    cv2.fillPoly(mk_, [np.int32(np.round(ext_ * 16))], 0, cv2.LINE_8, 4)
+                    cv2.fillPoly(mk_, [np.int32(np.round(ext_))], 0, cv2.LINE_8)
             tn_ = cv2.addWeighted(mp, 0.75, np.full_like(mp, SM.col(m, k_)), 0.25, 0)
             cv2.copyTo(tn_, mk_, mp)
         if chosen_:
             ms_ = np.zeros(mp.shape[:2], np.uint8)          # выбранное: внутри — как есть, снаружи — на 15 % темнее
             for ext_, hs_ in UI.geom_shapes(_gm(m, m._regions[m._sel]), nav.to_px):
-                cv2.fillPoly(ms_, [np.int32(np.round(ext_ * 16))], 255, cv2.LINE_8, 4)
+                cv2.fillPoly(ms_, [np.int32(np.round(ext_))], 255, cv2.LINE_8)
                 for h_ in hs_:
-                    cv2.fillPoly(ms_, [np.int32(np.round(h_ * 16))], 0, cv2.LINE_8, 4)
+                    cv2.fillPoly(ms_, [np.int32(np.round(h_))], 0, cv2.LINE_8)
             if ms_.any():
                 mp = cv2.convertScaleAbs(mp, alpha=0.85)
                 cv2.copyTo(base0_, ms_, mp)
@@ -1084,11 +1084,11 @@ def _run(m, fullscreen=False, _keys=None):
         cv2.drawMarker(mp, (int(cx_), int(cy_)), (40, 230, 255), cv2.MARKER_CROSS, 10, 1, cv2.LINE_AA)
         if nv['drag']:                                      # новый участок: прямоугольник мышью
             a_, b_, c2_, d2_ = nv['drag']
-            cv2.rectangle(mp, (int(a_), int(b_)), (int(c2_), int(d2_)), (255, 255, 255), 1, cv2.LINE_AA)
+            cv2.rectangle(mp, (int(a_), int(b_)), (int(c2_), int(d2_)), (255, 255, 255), 1, cv2.LINE_8)
             S0_, S1_ = nav.to_um((a_, b_)), nav.to_um((c2_, d2_))
             cv2.putText(mp, f"{abs(S1_[0] - S0_[0]) / 1000:.2f} x {abs(S1_[1] - S0_[1]) / 1000:.2f} mm, {m.objective}x",
                         (int(min(a_, c2_)), int(max(b_, d2_)) + 16), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1,
-                        cv2.LINE_AA)
+                        cv2.LINE_8)
         nav.scale_bar(mp)
         hint_ = ("Map: click - go there, drag - new area, wheel - zoom, right drag - move, double-click - open, Tab - camera"
                  if nv['big'] else "Map (Tab: bigger)  click - go, drag - new area, wheel - zoom")
@@ -1227,11 +1227,11 @@ def _run(m, fullscreen=False, _keys=None):
         for k, ln in enumerate(d_.get('lines', [])):
             col = ((255, 230, 0), (255, 80, 255))[k % 2]
             E = nav.to_px(np.asarray(ln['ends'], float))
-            cv2.line(mp, ip(E[0]), ip(E[1]), col, 1, cv2.LINE_AA)
+            cv2.line(mp, ip(E[0]), ip(E[1]), col, 1, cv2.LINE_8)
             u = (E[1] - E[0]) / max(float(np.hypot(*(E[1] - E[0]))), 1e-6)
             v = np.array([-u[1], u[0]])
             for q in (nav.to_px(np.asarray(ln['edges'], float)) if ln.get('edges') else []):
-                cv2.line(mp, ip(q - 5 * v), ip(q + 5 * v), (0, 220, 255), 1, cv2.LINE_AA)
+                cv2.line(mp, ip(q - 5 * v), ip(q + 5 * v), (0, 220, 255), 1, cv2.LINE_8)
 
     def lattice_lines(mp, w_, h_, rsel):
         """Сетка решётки образца на карте — тонко, полупрозрачно, красным: по ней встают квадраты новых областей.
@@ -1252,10 +1252,10 @@ def _run(m, fullscreen=False, _keys=None):
         def lines(img, M_, a0, a1, b0, b1):
             for a in range(a0, a1 + 1):
                 p_ = nav.to_px(LT.to_stage(L_, [(a / M_, b0 / M_), (a / M_, b1 / M_)]))
-                cv2.line(img, tuple(np.int32(np.round(p_[0]))), tuple(np.int32(np.round(p_[1]))), (60, 60, 255), 1, cv2.LINE_AA)
+                cv2.line(img, tuple(np.int32(np.round(p_[0]))), tuple(np.int32(np.round(p_[1]))), (60, 60, 255), 1, cv2.LINE_8)
             for b in range(b0, b1 + 1):
                 p_ = nav.to_px(LT.to_stage(L_, [(a0 / M_, b / M_), (a1 / M_, b / M_)]))
-                cv2.line(img, tuple(np.int32(np.round(p_[0]))), tuple(np.int32(np.round(p_[1]))), (60, 60, 255), 1, cv2.LINE_AA)
+                cv2.line(img, tuple(np.int32(np.round(p_[0]))), tuple(np.int32(np.round(p_[1]))), (60, 60, 255), 1, cv2.LINE_8)
         if px_per_cell >= 5 and (hi_ - lo_).max() <= 400:
             lines(ov_, 1, lo_[0], hi_[0], lo_[1], hi_[1])
         if rsel is not None and rsel.get('kind') != 'group':
@@ -1272,7 +1272,7 @@ def _run(m, fullscreen=False, _keys=None):
                     lines(fine_, M_, a0, a1, b0, b1)
                     mk_ = np.zeros(mp.shape[:2], np.uint8)    # только внутри выделения
                     for ext_, hs_ in UI.geom_shapes(g_, nav.to_px):
-                        cv2.fillPoly(mk_, [np.int32(np.round(ext_ * 16))], 255, cv2.LINE_8, 4)
+                        cv2.fillPoly(mk_, [np.int32(np.round(ext_))], 255, cv2.LINE_8)
                     cv2.copyTo(fine_, mk_, ov_)
         on_ = ov_.any(2)
         if on_.any():
@@ -1286,10 +1286,10 @@ def _run(m, fullscreen=False, _keys=None):
         L_ = lattice_of(m)
         if L_ is not None:                                  # клетки — в решётке того, внутри кого тянут
             c_ = ((S0[0] + S1[0]) / 2, (S0[1] + S1[1]) / 2)
-            hold_ = [r_ for r_ in m._regions if r_.get('kind') not in ('group', 'draft') and SM.obj(m, r_) < m.objective
+            hold_ = [r_ for r_ in m._regions if r_.get('kind') not in ('group', 'draft') and SM.obj(m, r_) <= m.objective
                      and _gm(m, r_).contains(_Pt(*c_))]
             if hold_:
-                L_ = lattice_for(m, max(hold_, key=lambda r_: SM.obj(m, r_)), self_too=True) or L_
+                L_ = lattice_for(m, min(hold_, key=lambda r_: _gm(m, r_).area), self_too=True) or L_
             return new_area_cells(L_, S0, S1)
         from .layers import new_num, set_geom, box as _box
         from .errors import MicroControlError as _E
@@ -1306,11 +1306,12 @@ def _run(m, fullscreen=False, _keys=None):
         except ValueError as e:
             return str(e)
         g_ = _geom(m, r_)
+        from .layers import nested as _nested
         bad = [o['num'] for o in m._regions if o.get('kind') not in ('group', 'draft') and SM.obj(m, o) == m.objective
-               and g_.intersection(_geom(m, o)).area > 1e-3 * g_.area]
+               and g_.intersection(_geom(m, o)).area > 1e-3 * g_.area and not _nested(g_, _geom(m, o))]
         if bad:
-            return str(_E('E704', f"Selection {', '.join(map(str, bad))} ({m.objective}x) is already there. "
-                                  f"For an area inside it put a larger objective (M), then drag again"))
+            return str(_E('E704', f"Selection {', '.join(map(str, bad))} ({m.objective}x) is partly under it: "
+                                  f"draw fully inside it or fully outside"))
         from .layers import conflict as _cf
         bad2_ = _cf(m, r_)
         if bad2_:
@@ -1366,11 +1367,12 @@ def _run(m, fullscreen=False, _keys=None):
             return str(e)
         cells = [tuple(c) for c in r_['cells']]
         g_ = _geom(m, r_)
+        from .layers import nested as _nested
         bad = [o['num'] for o in m._regions if o.get('kind') not in ('group', 'draft') and SM.obj(m, o) == m.objective
-               and g_.intersection(_geom(m, o)).area > 1e-3 * g_.area]
+               and g_.intersection(_geom(m, o)).area > 1e-3 * g_.area and not _nested(g_, _geom(m, o))]
         if bad:
-            return (f"[E704] Selection {', '.join(map(str, bad))} ({m.objective}x) is already there. For an area "
-                    f"inside it put a larger objective (M), then drag again")
+            return (f"[E704] Selection {', '.join(map(str, bad))} ({m.objective}x) is partly under it: draw fully "
+                    f"inside it or fully outside")
         from .layers import conflict as _cf
         bad2_ = _cf(m, r_)
         if bad2_:
@@ -2143,13 +2145,13 @@ def _run(m, fullscreen=False, _keys=None):
                 c_k = SM.col(m, k_)
                 d_ = mdr['d'] if mdr.get('k') == k_ else np.zeros(2)
                 for ring_ in rings(m, rg_):
-                    pts = np.int32(np.round(np.array([to_v(S_ + d_) for S_ in ring_], float) * 16))   # 1/16 px
+                    pts = np.int32(np.round(np.array([to_v(S_ + d_) for S_ in ring_], float)))   # 1/16 px
                     if rg_.get('kind') == 'draft':                   # маска — пунктиром, без заливки
                         UI.dashed_poly(view[:, :Wl], pts / 16.0, c_k if k_ == m._sel else SM.dim(c_k, 0.9),
                                        2 if k_ == m._sel else 1)
                     else:
                         cv2.polylines(view[:, :Wl], [pts], True, c_k if k_ == m._sel else SM.dim(c_k, 0.85),
-                                      2 if k_ == m._sel else 1, cv2.LINE_AA, 4)
+                                      2 if k_ == m._sel else 1, cv2.LINE_8)
             pr_ = pending_ring()
             if pr_ is not None:                             # новая область: от угла 1 до столика, пунктиром
                 UI.dashed_poly(view[:, :Wl], np.array([to_v(S_) for S_ in pr_], float),
@@ -2165,7 +2167,7 @@ def _run(m, fullscreen=False, _keys=None):
                     b_ = q2 = None
                 UI.ruler(view, a_, b_, ruler_text(rul['pts'][0], q2) if q2 is not None else "")
             cm_ = np.zeros((H, Wl), np.uint8)              # дополненная реальность — только на кадре камеры
-            cv2.fillPoly(cm_, [np.int32(np.round(cam_poly_ * 16))], 255, cv2.LINE_8, 4)
+            cv2.fillPoly(cm_, [np.int32(np.round(cam_poly_))], 255, cv2.LINE_8)
             view[:, :Wl] = np.where(cm_[..., None] > 0, view[:, :Wl], base)
             if m.laser:                                    # лазер включён — видно всегда
                 t_ = f"LASER ON  {m.laser:g} mW   (I: off)"

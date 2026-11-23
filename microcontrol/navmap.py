@@ -128,16 +128,16 @@ class NavMap:
     # ------------------------------------------------------------ поверх
     def poly(self, img, ring, color, thick=1, fill=None, dashed=False):
         pf = self.to_px(ring)
-        pts = np.int32(np.round(pf * 16))
+        pts = np.int32(np.round(pf))
         if fill is not None:
             ov = img.copy()
-            cv2.fillPoly(ov, [pts], fill, cv2.LINE_AA, 4)
+            cv2.fillPoly(ov, [pts], fill, cv2.LINE_8)
             cv2.addWeighted(ov, 0.25 if not dashed else 0.12, img, 0.75 if not dashed else 0.88, 0, dst=img)
         if dashed:
             from .ui import dashed_poly
             dashed_poly(img, pf, color, thick)
         else:
-            cv2.polylines(img, [pts], True, color, thick, cv2.LINE_AA, 4)
+            cv2.polylines(img, [pts], True, color, thick, cv2.LINE_8)
 
     def labels(self, img, items, reserved=()):
         """Подписи выделений плашками, не наезжая друг на друга и на чужие выделения.

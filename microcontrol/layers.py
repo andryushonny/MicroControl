@@ -199,8 +199,14 @@ def new_num(m):
     return m._area_seq
 
 
+def nested(ga, gb):
+    """Один контур внутри другого (любой — в любом): так могут лежать и области одного объектива."""
+    return ga.buffer(EPS).contains(gb) or gb.buffer(EPS).contains(ga)
+
+
 def geometric_parent(m, reg, skip=None):
-    """Где лежит reg: самое маленькое выделение меньшего увеличения или маска, содержащая его середину."""
+    """Где лежит reg: самое маленькое выделение того же или меньшего увеличения (больше по площади)
+    или маска, содержащая его середину."""
     from .samples import obj
     g = geom(m, reg)
     if g.is_empty:
@@ -208,8 +214,11 @@ def geometric_parent(m, reg, skip=None):
     c = g.representative_point()
     best = None
     for i, o in enumerate(m._regions):
-        if o is reg or i == skip or is_group(o) or (not is_mask(o) and obj(m, o) >= obj(m, reg)):
+        if o is reg or i == skip or is_group(o) or (not is_mask(o) and obj(m, o) > obj(m, reg)):
             continue
+        if not is_mask(o) and obj(m, o) == obj(m, reg) and not (geom(m, o).area > g.area * (1 + 1e-6)
+                                                                and geom(m, o).buffer(EPS).contains(g)):
+            continue                                         # того же объектива — только если целиком внутри
         if is_mask(o) and is_mask(reg):
             continue
         go = geom(m, o)
@@ -458,7 +467,7 @@ def conflict(m, reg):
         while up is not None and (is_mask(up) or is_group(up)):
             q = idx(m, up.get('parent')) if up.get('parent') else None
             up = m._regions[q] if q is not None else None
-        if up is not None and obj(m, up) >= obj(m, reg):
+        if up is not None and obj(m, up) > obj(m, reg):
             return f"{name} ({obj(m, reg)}x) lies in Selection {up['num']} ({obj(m, up)}x): it needs a larger objective"
         todo, seen = [reg.get('uid')], set()                    # выделения внутри — только крупнее
         while todo:
@@ -468,12 +477,12 @@ def conflict(m, reg):
                     seen.add(c.get('uid'))
                     if is_mask(c) or is_group(c):
                         todo.append(c.get('uid'))
-                    elif obj(m, c) <= obj(m, reg):
+                    elif obj(m, c) < obj(m, reg):
                         return (f"{name} ({obj(m, reg)}x) holds Selection {c['num']} ({obj(m, c)}x): "
                                 "the areas inside need a larger objective")
         for c in m._regions:
             if c is not reg and not is_mask(c) and not is_group(c) and obj(m, c) == obj(m, reg) and \
-                    geom(m, c).intersection(g).area > 1e-3 * max(g.area, 1e-9):
+                    geom(m, c).intersection(g).area > 1e-3 * max(g.area, 1e-9) and not nested(geom(m, c), g):
                 return f"[E704] {name} would overlap Selection {c['num']} of the same objective ({obj(m, reg)}x)"
         if not g.is_empty:                                      # не внутри выделения крупнее себя
             pt = g.representative_point()

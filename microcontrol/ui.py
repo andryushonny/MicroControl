@@ -118,14 +118,12 @@ def round_rect(img, x0, y0, x1, y1, r, color, th=-1):
 def plus(img, x, y, color, r=10, gap=4, th=1, halo=True):
     """Отметка креста «+» с точностью до доли пикселя: (x, y) — точка в координатах окна, где пиксель u
     занимает [u, u + 1). В центре — просвет gap, чтобы было видно, что лежит ровно под отметкой."""
-    sh = 4                                                   # 1/16 пикселя
-    cx, cy = (x - 0.5) * 16, (y - 0.5) * 16
-    segs = [((cx - r * 16, cy), (cx - gap * 16, cy)), ((cx + gap * 16, cy), (cx + r * 16, cy)),
-            ((cx, cy - r * 16), (cx, cy - gap * 16)), ((cx, cy + gap * 16), (cx, cy + r * 16))]
+    cx, cy = int(round(x - 0.5)), int(round(y - 0.5))      # целые пиксели: чёткие линии, без дробных
+    segs = [((cx - r, cy), (cx - gap, cy)), ((cx + gap, cy), (cx + r, cy)),
+            ((cx, cy - r), (cx, cy - gap)), ((cx, cy + gap), (cx, cy + r))]
     for col, t in (((0, 0, 0), th + 1), (color, th)) if halo else ((color, th),):
         for a, b in segs:
-            cv2.line(img, (int(round(a[0])), int(round(a[1]))), (int(round(b[0])), int(round(b[1]))), col, t,
-                     cv2.LINE_AA, sh)
+            cv2.line(img, a, b, col, t, cv2.LINE_8)
 
 
 def ruler(img, a, b, label, color=(0, 220, 255), scale=0.5):
@@ -135,8 +133,8 @@ def ruler(img, a, b, label, color=(0, 220, 255), scale=0.5):
         return
     if b is not None:
         p, q = (int(round(a[0] - 0.5)), int(round(a[1] - 0.5))), (int(round(b[0] - 0.5)), int(round(b[1] - 0.5)))
-        cv2.line(img, p, q, (0, 0, 0), 3, cv2.LINE_AA)
-        cv2.line(img, p, q, color, 1, cv2.LINE_AA)
+        cv2.line(img, p, q, (0, 0, 0), 3, cv2.LINE_8)
+        cv2.line(img, p, q, color, 1, cv2.LINE_8)
         plus(img, b[0], b[1], color)
     plus(img, a[0], a[1], color)
     if label:
@@ -224,8 +222,8 @@ def dashed_poly(img, pts, color, thick=1, dash=9, gap=6):
         t = 0.0
         while t < L:
             p0, p1 = a + d * t, a + d * min(L, t + dash)
-            cv2.line(img, (int(round(p0[0] * 16)), int(round(p0[1] * 16))), (int(round(p1[0] * 16)), int(round(p1[1] * 16))),
-                     color, thick, cv2.LINE_AA, 4)
+            cv2.line(img, (int(round(p0[0])), int(round(p0[1]))), (int(round(p1[0])), int(round(p1[1]))),
+                     color, thick, cv2.LINE_8)
             t += dash + gap
 
 
@@ -293,9 +291,9 @@ def tint_outside(img, shapes, color, alpha):
         return img
     mask = np.zeros(img.shape[:2], np.uint8)
     for ext, holes in shapes:
-        cv2.fillPoly(mask, [np.int32(np.round(np.asarray(ext, float) * 16))], 255, cv2.LINE_8, 4)
+        cv2.fillPoly(mask, [np.int32(np.round(np.asarray(ext, float)))], 255, cv2.LINE_8)
         for h in holes or ():
-            cv2.fillPoly(mask, [np.int32(np.round(np.asarray(h, float) * 16))], 0, cv2.LINE_8, 4)
+            cv2.fillPoly(mask, [np.int32(np.round(np.asarray(h, float)))], 0, cv2.LINE_8)
     tint = cv2.addWeighted(img, 1 - alpha, np.full_like(img, color), alpha, 0)
     cv2.copyTo(tint, cv2.bitwise_not(mask), img)
     return img

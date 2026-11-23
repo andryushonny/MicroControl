@@ -238,7 +238,7 @@ def clip_to_parent(m, reg, pk=None):
     g = geom(m, reg)
     if gp.is_empty or gp.buffer(EPS).contains(g):
         return pk, False
-    L = lattice_of(m)
+    L = lattice_for(m, m._regions[pk], self_too=True)     # клетки — в решётке родителя
     if reg.get('cells') and L:
         N = LT.level(reg)
         tol = gp.buffer(0.02 * L['pitch'] / N)
@@ -500,7 +500,7 @@ def cells_op(m, regs, fn):
 def _geom_or_cells(m, t, g):
     from . import lattice as LT
     new = t.pop('_cells_new', None)
-    L = lattice_of(m)
+    L = lattice_for(m, t)
     if new and L:
         t['cells'] = [list(c) for c in new]
         set_geom(m, t, LT.cells_geom(L, new, LT.level(t)))
@@ -513,6 +513,93 @@ def lattice_of(m):
     """Решётка образца (sample.json 'lattice') или None."""
     sm = getattr(m, '_sample', None)
     return sm.data.get('lattice') if sm is not None else None
+
+
+_OWN = {}
+
+
+def own_lattice(sample, r):
+    """Своя разметка крестов выделения r: решётка по его съёмке, где кресты отмечены руками (не подставлены
+    из решётки образца); из нескольких — где сетку правили последней. None, если такой нет."""
+    from .project import Selection
+    from .mask import Grid
+    from . import lattice as LT
+    if r is None or is_group(r) or is_mask(r):
+        return None
+    try:
+        scs = Selection(sample, r).scans
+    except Exception:
+        return None
+    best = None
+    for sc in scs:
+        gp = os.path.join(sc.folder, 'grid.json')
+        try:
+            mt = os.path.getmtime(gp)
+            d = json.load(open(gp, encoding='utf-8'))
+        except (OSError, ValueError):
+            continue
+        if d.get('seeded') or len(d.get('marks') or []) < 2:
+            continue
+        t_ = float(d.get('brush_t') or 0)
+        if best is None or t_ >= best[0]:
+            best = (t_, sc.folder, mt)
+    if best is None:
+        return None
+    hit = _OWN.get(best[1])
+    if hit is not None and hit[0] == best[2]:
+        return hit[1]
+    L = None
+    try:
+        g = Grid(best[1])
+        if g.ready() and not getattr(g, 'seeded', False):
+            L = LT.from_grid(best[1], g)
+    except Exception:
+        L = None
+    _OWN[best[1]] = (best[2], L)
+    return L
+
+
+def _in_numbers(L, S):
+    """Своя решётка L — в номерах решётки образца S (та же физическая решётка: оси и номер креста — как у S)."""
+    if L is None or S is None:
+        return L
+    e1, e2 = np.array(L['e1'], float), np.array(L['e2'], float)
+    s1, s2 = np.array(S['e1'], float), np.array(S['e2'], float)
+    cs = lambda a, b: float(a @ b) / max(np.hypot(*a) * np.hypot(*b), 1e-12)
+    if abs(cs(e1, s1)) < abs(cs(e2, s1)):                   # оси названы наоборот
+        e1, e2 = e2, e1
+    e1 = e1 if cs(e1, s1) > 0 else -e1
+    e2 = e2 if cs(e2, s2) > 0 else -e2
+    if cs(e1, s1) < 0.98 or cs(e2, s2) < 0.98 or abs(np.hypot(*e1) / max(np.hypot(*s1), 1e-9) - 1) > 0.05:
+        return S                                            # не та же решётка — не смешивать
+    O = np.array(L['O'], float)
+    E = np.c_[s1, s2]
+    n = np.round(np.linalg.solve(E, O - np.array(S['O'], float)))
+    O2 = O - n[0] * e1 - n[1] * e2
+    return dict(L, O=O2.tolist(), e1=e1.tolist(), e2=e2.tolist(), numbered=S.get('numbered', False),
+                pitch=float(np.hypot(*e1)), own=L.get('src'))
+
+
+def lattice_in(sample, regs, r, self_too=False):
+    """Решётка, в которой думает человек, выбрав в меню выделение r: своя разметка крестов r (self_too) или
+    ближайшего родителя, где кресты отмечены; нет нигде — решётка образца. В номерах решётки образца."""
+    S = sample.data.get('lattice') if sample is not None else None
+    by = {x.get('uid'): x for x in regs}
+    cur = r if self_too else (by.get(r.get('parent')) if r is not None else None)
+    seen = set()
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        if cur.get('kind') != 'draft':
+            L = own_lattice(sample, cur)
+            if L is not None:
+                return _in_numbers(L, S)
+        cur = by.get(cur.get('parent'))
+    return S
+
+
+def lattice_for(m, r, self_too=False):
+    """lattice_in для окна микроскопа (выделение r из m._regions)."""
+    return lattice_in(getattr(m, '_sample', None), m._regions, r, self_too)
 
 
 def next_objective(o):
@@ -569,10 +656,21 @@ def update_lattice(m):
         key_ = (L['numbered'], -obj_of(m, r), float(d.get('marks_t') or 0)) if L else None
         if L and (best is None or key_ > best[1]):           # с номерами; затем — меньший объектив (поле шире: наклон
             best = (L, key_)                                 # и шаг точнее на весь образец); затем — отмеченная последней
-    if best is None:
-        return False
     old = m.sample.data.get('lattice')
-    if old and old.get('numbered') and not best[0]['numbered'] and old.get('src') != best[0].get('src'):
+
+    def alive(L_):                                      # съёмка, по которой решётка, ещё размечена
+        try:
+            return bool(L_ and L_.get('src') and os.path.isdir(L_['src']) and Grid(L_['src']).ready())
+        except Exception:
+            return False
+    if best is None:
+        if old is not None and not alive(old):          # кресты стёрли (Shift+C) или съёмку удалили: решётки нет
+            m.sample.data.pop('lattice', None)
+            m.sample.save()
+            return True
+        return False
+    if old and old.get('numbered') and not best[0]['numbered'] and old.get('src') != best[0].get('src') \
+            and alive(old):
         return False                                    # номера другой съёмки остаются; своя сетка заменяет свою
     if old is None or any(not np.allclose(old[k], best[0][k], atol=1e-3) for k in ('O', 'e1', 'e2')) \
             or old.get('numbered') != best[0]['numbered']:
@@ -607,12 +705,13 @@ def sync_brush(m):
     for par, f, d in _latest_grids(m):
         seen1.add(par['uid'])
         seenR.update((d.get('refine') or {}).keys())
+        Lp = lattice_for(m, par, self_too=True) or L             # решётка этого выделения
         if d.get('selected'):                                    # квадраты литографии
             g = Grid(f)
             if g.ready():
                 q = np.array([g.cr.point(i + 0.5, j + 0.5) for i, j in g.selected])
                 if len(q):
-                    uv = LT.to_uv(L, mosaic_to_stage(f, q))
+                    uv = LT.to_uv(Lp, mosaic_to_stage(f, q))
                     pg = geom(m, par)
                     from shapely.geometry import Point
                     S_ = mosaic_to_stage(f, q)
@@ -636,18 +735,20 @@ def sync_brush(m):
                 from shapely.geometry import Point
                 rg_ = geom(m, r).buffer(EPS)                      # середина клетки — в родителе (как у квадратов)
                 Nn = (int(np.prod(r.get('factors') or [])) if r.get('factors') else 1) * n
-                cs = {c for c in cs if rg_.contains(Point(*LT.to_stage(L, [((c[0] + 0.5) / Nn, (c[1] + 0.5) / Nn)])[0]))}
+                Lr = lattice_for(m, r, self_too=True) or L
+                cs = {c for c in cs if rg_.contains(Point(*LT.to_stage(Lr, [((c[0] + 0.5) / Nn, (c[1] + 0.5) / Nn)])[0]))}
                 want.setdefault((uid, fac), set()).update(cs)
     for (puid, fac), cells in sorted(want.items(), key=lambda t: len(t[0][1])):   # сначала мельче уровень
         if idx(m, puid) is None:                                 # родитель ушёл в этом же проходе
             continue
         par = m._regions[idx(m, puid)]
+        Lq = lattice_for(m, par, self_too=True) or L             # клетки — в решётке того, внутри кого они
         if fac and par.get('cells'):                             # родитель мог измениться в этом же проходе
             from shapely.geometry import Point
             n_, pc_ = fac[-1], {tuple(c) for c in par['cells']}
             Nn_, pgb_ = int(np.prod(fac)), geom(m, par).buffer(EPS)
             cells = {c for c in cells if (c[0] // n_, c[1] // n_) in pc_ and
-                     pgb_.contains(Point(*LT.to_stage(L, [((c[0] + 0.5) / Nn_, (c[1] + 0.5) / Nn_)])[0]))}
+                     pgb_.contains(Point(*LT.to_stage(Lq, [((c[0] + 0.5) / Nn_, (c[1] + 0.5) / Nn_)])[0]))}
         src = f"{puid}@{'x'.join(map(str, fac)) or '1'}"
         mine = [r for r in m._regions if r.get('src') == src]
         used = set()
@@ -655,7 +756,7 @@ def sync_brush(m):
         pgeo = geom(m, par)
 
         def shape_of(fg_):                                       # клетки, обрезанные по краю родителя
-            g_ = LT.cells_geom(L, fg_, N)
+            g_ = LT.cells_geom(Lq, fg_, N)
             return g_.intersection(pgeo) if not pgeo.is_empty and not pgeo.buffer(EPS).contains(g_) else g_
         for fg in LT.figures(cells):
             if shape_of(fg).is_empty:                            # снаружи родителя целиком — не черновик
@@ -761,7 +862,7 @@ def remove_brush_cells(m, reg):
     from .mask import Grid
     if not reg.get('src') or not reg.get('cells'):
         return
-    L = lattice_of(m)
+    L = lattice_for(m, reg)
     puid, lev = reg['src'].split('@')
     gone = {tuple(c) for c in reg['cells']}
     for par, f, d in _latest_grids(m):

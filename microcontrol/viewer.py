@@ -304,10 +304,22 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
     from . import lattice as LT
     smp0 = P0_.sample_obj(folder)
     LAT = smp0.data.get('lattice') if smp0 is not None else None
+    if smp0 is not None and LAT is not None:                # решётка этого выделения: своя разметка (другие его
+        try:                                                # съёмки) или ближайшего родителя, иначе — образца
+            from .layers import lattice_in, _sel_dir
+            regs0_ = smp0.data.get('selections', [])
+            me_ = next((r_ for r_ in regs0_ if r_.get('kind') not in ('group', 'draft') and
+                        os.path.abspath(folder).startswith(os.path.abspath(_sel_dir(folder, r_)) + os.sep)), None)
+            if me_ is not None:
+                LAT = lattice_in(smp0, regs0_, me_, self_too=True) or LAT
+        except Exception:
+            pass
     seeded_, st0_msg = False, ""
-    if not g.ready() and LAT is not None and LAT.get('numbered'):   # решётка образца с номерами есть: кресты не нужны
+    if not g.ready() and not g.cr.marks and LAT is not None:   # решётка выделения (или образца) есть: кресты не нужны
         try:
             LT.seed_grid(folder, g, LAT)
+            if not LAT.get('numbered'):                     # номеров нет — подписи не выдумывать
+                g.labels = {}
             g.save(px_um)
             d_ = json.load(open(os.path.join(folder, 'grid.json'), encoding='utf-8'))
             d_['seeded'] = True
@@ -344,7 +356,8 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
               poly=[], dirty=True, Wv=Wv - SM.CAR_W, Hv=Hv, straight=False, switch=None, ruler=[], mouse=None,
               msg=car.pop('msg', None) or (f"Selection {SM.sample_index(folder)} ({subs.index(folder) + 1} of {len(subs)})" if len(subs) > 1 else "")
               + (f"   Crosses moved with the stitched frames ({moved_}); F: frames onto the crosses" if moved_ else "")
-              + ("   The grid comes from the sample lattice (marked once): no crosses to mark here" if seeded_ else "")
+              + ("   The grid comes from the crosses marked before (this selection, the larger one around it or the "
+                 "sample): no crosses to mark here; Shift+C: mark your own" if seeded_ else "")
               + st0_msg)
 
     def car_click(x, y):
@@ -2076,7 +2089,9 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
                 st['mode'], st['ruler'] = 'ruler', []
                 st['msg'] = "Ruler: click two points (a third click starts again). R or Esc: off"
         elif ch == 'c':                                      # C: отмечать кресты (ещё раз C — выйти)
-            if st['mode'] == 'cross':
+            if st['mode'] == 'cross' and not g.cr.marks:     # крестов ещё нет (только что Shift+C) — остаться
+                st['msg'] = "Click a cross, then its neighbour in the same row (C again — when done)"
+            elif st['mode'] == 'cross':
                 st['mode'] = 'look'
                 st['msg'] = ""
             else:

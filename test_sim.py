@@ -1582,3 +1582,403 @@ M47.run(m, fullscreen=False, _keys=[-1, -1, 27, 27]); cv2.imshow = _im0; m.close
 assert _draw
 print(f"Profiles across the arms: width {wid[0]:.2f} / {wid[1]:.2f} px (true 6), dust does not pull the snap; "
       "P window: two lines tilted by their ends, edges by hand, band by the wheel, saved for the manual map: OK")
+
+# ------------------------------------------------------------------ 48. Уровни 10x -> 50x -> 100x: создать, отменить, вернуть, удалить, создать иначе; кресты стереть и отметить другие; сетка — выбранного в меню
+
+import sys, os, tempfile, json, time, traceback, numpy as np, cv2
+import microcontrol as mc
+import microcontrol.manual as M
+import microcontrol.viewer as V
+from microcontrol import samples as SM, layers as LY, lattice as LT, project as P_
+from microcontrol.mask import Grid
+from microcontrol.snap import stage_to_mosaic, mosaic_to_stage
+
+OUT = tempfile.mkdtemp()
+os.makedirs(OUT, exist_ok=True)
+for f_ in os.listdir(OUT):
+    os.remove(os.path.join(OUT, f_))
+cv2.getWindowImageRect = lambda w: (0, 0, 1400, 900)
+shots = []
+_o = cv2.imshow
+cv2.imshow = lambda w, img: (shots.append(img), _o(w, img))
+LOG, ISSUES = [], []
+step_n = [0]
+
+
+def log(s):
+    LOG.append(s)
+
+
+def issue(s):
+    log("  !! " + s)
+    ISSUES.append(f"[{step_n[0]}] {s}")
+
+
+def shot(name):
+    if shots:
+        cv2.imwrite(os.path.join(OUT, f"{step_n[0]:02d}_{name}.png"), shots[-1])
+
+
+m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp())
+m.focus()
+w = m._world
+T, PT = np.radians(w.turn_deg), w.pitch
+
+
+def cross_stage(i, j):
+    return np.array([np.cos(T) * PT * i - np.sin(T) * PT * j, np.sin(T) * PT * i + np.cos(T) * PT * j])
+
+
+def manual(keys, name=None):
+    try:
+        M.run(m, fullscreen=False, _keys=[-1] + keys + [-1, -1])
+    except Exception as e:
+        issue(f"manual crashed: {type(e).__name__}: {e}")
+        traceback.print_exc()
+    if name:
+        shot(name)
+
+
+def view(folder, keys, name=None):
+    try:
+        V.view(folder, _keys=[-1] + keys + [-1, 27, 27])
+    except SystemExit:
+        pass
+    except Exception as e:
+        issue(f"view crashed: {type(e).__name__}: {e}")
+        traceback.print_exc()
+    if name:
+        shot(name)
+    LY.sync_brush(m)
+    SM.persist(m)
+
+
+def nav():
+    return m._nav
+
+
+def sel_k(num):
+    return next((k for k, r in enumerate(m._regions) if r['num'] == num), None)
+
+
+def latest(r):
+    try:
+        sc = P_.Selection(m.sample, r).latest
+        return sc.folder if sc else None
+    except Exception:
+        return None
+
+
+def check(tag):
+    """Целостность после шага."""
+    regs = m._regions
+    uids = [r['uid'] for r in regs]
+    nums = [r['num'] for r in regs]
+    if len(set(uids)) != len(uids):
+        issue(f"{tag}: duplicate uid")
+    if len(set(nums)) != len(nums):
+        issue(f"{tag}: duplicate numbers {sorted(nums)}")
+    for r in regs:
+        if r.get('parent'):
+            k = LY.idx(m, r['parent'])
+            if k is None:
+                issue(f"{tag}: {r['num']} has a missing parent")
+                continue
+            p = regs[k]
+            if p.get('kind') == 'group':
+                continue
+            if r.get('kind') != 'draft' and SM.obj(m, r) <= SM.obj(m, p):
+                issue(f"{tag}: {r['num']} ({SM.obj(m, r)}x) inside {p['num']} ({SM.obj(m, p)}x)")
+            if not LY.geom(m, p).buffer(0.5).contains(LY.geom(m, r)):
+                issue(f"{tag}: {r['num']} sticks out of its parent {p['num']}")
+    # сетки: кресты каждой последней съёмки ложатся на решётку выбранного (своя / родителя / образца)
+    for r in regs:
+        if r.get('kind') in ('draft', 'group'):
+            continue
+        f = latest(r)
+        if not f or not os.path.exists(os.path.join(f, 'grid.json')):
+            continue
+        try:
+            g = Grid(f)
+        except Exception as e:
+            issue(f"{tag}: grid of {r['num']} unreadable: {e}")
+            continue
+        if not g.ready():
+            continue
+        L = LY.lattice_for(m, r, self_too=True)
+        if L is None:
+            issue(f"{tag}: {r['num']} has a grid but no lattice")
+            continue
+        q = np.array([g.cr.point(i, j) for i in range(0, 3) for j in range(0, 3)])
+        uv = LT.to_uv(L, mosaic_to_stage(f, q))
+        dev = float(np.abs(uv - np.round(uv)).max()) * L['pitch']
+        S_ = m.sample.data.get('lattice')
+        uvS = LT.to_uv(S_, mosaic_to_stage(f, q)) if S_ else uv
+        devS = float(np.abs(uvS - np.round(uvS)).max()) * S_['pitch'] if S_ else 0
+        # номера: та же клетка в решётке выбранного и образца
+        same_num = S_ is None or np.array_equal(np.floor(uv + 0.5), np.floor(uvS + 0.5))
+        seeded = json.load(open(os.path.join(f, 'grid.json'))).get('seeded')
+        own = L.get('own') or L.get('src')
+        log(f"    grid of S{r['num']} {SM.obj(m, r)}x ({'seeded' if seeded else 'marked'}): "
+            f"off its lattice {dev:.2f} um, off the sample lattice {devS:.2f} um, lattice from "
+            f"{os.path.basename(os.path.dirname(os.path.dirname(own))) if own else '?'}")
+        if dev > 1.0:
+            issue(f"{tag}: crosses of S{r['num']} are {dev:.2f} um off the lattice of the selection")
+        if not same_num:
+            issue(f"{tag}: S{r['num']}: numbers differ from the sample lattice")
+
+
+def step(title):
+    step_n[0] += 1
+    log(f"\n== {step_n[0]}. {title}")
+
+
+R0 = len(m._regions)
+fw, fh = m.frame_size
+# ---------------------------------------------------------------- 10x: создать, отменить, вернуть, удалить, создать иначе
+step("10x: draw an area, Ctrl+Z, Ctrl+Y")
+manual([])
+n = nav()
+manual([('maprect', *n.to_px((-60, -50)), *n.to_px((300, 200))), -1], 'map_new10')
+log(f"  areas: {[(r['num'], SM.obj(m, r)) for r in m._regions]}")
+manual([26, -1])
+log(f"  after Ctrl+Z: {len(m._regions)}")
+if len(m._regions) != 0:
+    issue("Ctrl+Z did not remove the new area")
+manual([25, -1])
+if len(m._regions) != 1:
+    issue("Ctrl+Y did not bring the area back")
+check("10x undo/redo")
+
+step("10x: delete (C) and draw a different one")
+m._sel = 0
+manual([ord('c'), -1])
+if m._regions:
+    issue("C did not delete the selected area")
+manual([('maprect', *n.to_px((-80, -60)), *n.to_px((340, 240))), -1], 'map_redraw10')
+k1 = 0
+r1 = m._regions[k1]
+log(f"  area S{r1['num']} {SM.obj(m, r1)}x, {LY.geom(m, r1).bounds}")
+check("10x redraw")
+
+step("10x: scan + stitch")
+m._sel = k1
+f1 = m.scan()
+f1 = m.last_scans[-1] if m.last_scans else f1
+mc.stitch(f1, verbose=False)
+log(f"  scan {os.path.basename(f1)}")
+check("10x scanned")
+
+step("10x view: mark crosses 0,0 1,0 0,1")
+q = lambda i, j: tuple(stage_to_mosaic(f1, cross_stage(i, j))[0])
+view(f1, [ord('c'), ('qclick', *q(0, 0)), -1, ('qclick', *q(1, 0)), -1, ('qclick', *q(0, 1)), -1], 'view_marked10')
+g1 = Grid(f1)
+log(f"  grid ready {g1.ready()}, crosses {len(g1.cr.marks)}; sample lattice {'yes' if m.sample.data.get('lattice') else 'no'}")
+check("10x marked")
+
+step("10x view: Shift+C (clear crosses)")
+view(f1, [ord('C'), -1])
+g1 = Grid(f1)
+S_ = m.sample.data.get('lattice')
+log(f"  grid ready {Grid(f1).ready()}; sample lattice still {'there' if S_ else 'gone'}")
+if not Grid(f1).ready() and S_ is not None and S_.get('src') == os.path.abspath(f1):
+    issue("crosses cleared, but the sample lattice from them stays (red grid on the map, new squares follow it)")
+manual([], 'map_after_clear10')
+check("10x cleared")
+
+step("10x view: mark other crosses 2,1 3,1 2,2")
+view(f1, [ord('c'), ('qclick', *q(2, 1)), -1, ('qclick', *q(3, 1)), -1, ('qclick', *q(2, 2)), -1])
+check("10x re-marked")
+
+step("10x view: Ctrl+Z twice, Ctrl+Y once")
+view(f1, [26, -1, 26, -1, 25, -1])
+log(f"  crosses {len(Grid(f1).cr.marks)}, ready {Grid(f1).ready()}")
+check("10x undo crosses")
+
+step("10x view: select 3 squares (M), right click one off, select another")
+g1 = Grid(f1)
+from microcontrol.storage import ScanData
+W1, H1 = json.load(open(os.path.join(f1, 'join', 'size.json'))) if os.path.exists(os.path.join(f1, 'join', 'size.json')) else (None, None)
+inside = []
+for i in range(-4, 5):
+    for j in range(-4, 5):
+        p_ = g1.cr.point(i + 0.5, j + 0.5)
+        S__ = mosaic_to_stage(f1, p_)[0]
+        if LY.geom(m, m._regions[k1]).buffer(-60).contains(__import__('shapely.geometry', fromlist=['Point']).Point(*S__)):
+            inside.append((i, j))
+log(f"  squares fully inside: {inside}")
+c_ = lambda ij: tuple(g1.cr.point(ij[0] + 0.5, ij[1] + 0.5))
+a_, b_, c3, d4 = (inside + inside)[:4]
+view(f1, [ord('m'), ('qclick', *c_(a_)), -1, ('qclick', *c_(b_)), -1, ('qclick', *c_(c3)), -1,
+          ('qrclick', *c_(b_)), -1, ('qclick', *c_(d4)), -1], 'view_squares10')
+want_sel = {a_, c3, d4}
+if Grid(f1).selected != want_sel:
+    issue(f"squares in the view {sorted(Grid(f1).selected)} != clicked {sorted(want_sel)}")
+dr = [r for r in m._regions if r.get('kind') == 'draft']
+log(f"  drafts: {[(r['num'], len(r.get('cells') or [])) for r in dr]}; selected in view {sorted(Grid(f1).selected)}")
+check("10x squares")
+
+# ---------------------------------------------------------------- 50x
+step("50x: draw inside S1, Ctrl+Z, Ctrl+Y, delete, draw elsewhere, overlap, over the edge")
+m.objective = 50
+m.focus()
+manual([])
+n = nav()
+L1 = LY.lattice_for(m, m._regions[k1], self_too=True)
+uv1 = np.floor(LT.to_uv(L1, [LY.geom(m, m._regions[k1]).centroid.coords[0]])[0]).astype(int)
+cen = lambda a, b: LT.to_stage(L1, [(uv1[0] - 1 + a, uv1[1] - 1 + b)])[0]
+manual([('maprect', *n.to_px(cen(1.2, 1.2)), *n.to_px(cen(1.8, 1.8))), -1])
+n50 = [r for r in m._regions if SM.obj(m, r) == 50 and r.get('kind') != 'draft']
+log(f"  50x areas: {[(r['num'], r.get('cells')) for r in n50]}")
+manual([26, -1])
+manual([25, -1])
+k50 = next(k for k, r in enumerate(m._regions) if SM.obj(m, r) == 50 and r.get('kind') != 'draft')
+m._sel = k50
+manual([ord('c'), -1])
+if any(SM.obj(m, r) == 50 and r.get('kind') != 'draft' for r in m._regions):
+    issue("50x area not deleted by C")
+manual([('maprect', *n.to_px(cen(2.2, 1.2)), *n.to_px(cen(2.8, 1.8))), -1])
+k50 = next(k for k, r in enumerate(m._regions) if SM.obj(m, r) == 50 and r.get('kind') != 'draft')
+cnt = len(m._regions)
+manual([('maprect', *n.to_px(cen(2.3, 1.3)), *n.to_px(cen(2.7, 1.7))), -1])
+if len(m._regions) != cnt:
+    issue("a 50x area over another 50x area was created")
+b1 = LY.geom(m, m._regions[k1]).bounds
+manual([('maprect', *n.to_px((b1[2] - 30, b1[1] + 10)), *n.to_px((b1[2] + 60, b1[1] + 60))), -1], 'map_50x')
+log(f"  areas now: {[(r['num'], SM.obj(m, r), r.get('kind')) for r in m._regions]}; message: {getattr(m, '_last_msg', '')}")
+check("50x drawn")
+
+step("50x: scan + stitch S50, open the view (grid comes from the 10x lattice)")
+r50 = m._regions[k50]
+m._sel = k50
+m.scan()
+f50 = [x for x in m.last_scans if '_50x' in x] or m.last_scans
+f50 = f50[-1]
+mc.stitch(f50, verbose=False)
+view(f50, [], 'view_seeded50')
+d50 = json.load(open(os.path.join(f50, 'grid.json')))
+log(f"  seeded {d50.get('seeded')}, labels {len(Grid(f50).labels)}")
+if not Grid(f50).ready():
+    issue("new 50x scan inside a marked 10x has no grid")
+check("50x seeded")
+
+step("50x view: mark own crosses (Shift+C, then 2 crosses)")
+q5 = lambda i, j: tuple(stage_to_mosaic(f50, cross_stage(i, j))[0])
+uvc = LT.to_uv(L1, [LY.geom(m, r50).centroid.coords[0]])[0]
+S0 = np.floor(uvc).astype(int)
+# ближайшие кресты физической решётки: по сим-миру (индексы мира, не номера образца)
+W_uv = lambda S: np.linalg.solve(np.c_[cross_stage(1, 0), cross_stage(0, 1)], S)
+wc = np.floor(W_uv(LY.geom(m, r50).centroid.coords[0])).astype(int)
+view(f50, [ord('C'), -1, ('qclick', *q5(wc[0], wc[1])), -1, ('qclick', *q5(wc[0] + 1, wc[1])), -1], 'view_marked50')
+L50 = LY.lattice_for(m, m._regions[k50], self_too=True)
+log(f"  50x lattice from {L50.get('own') and os.path.basename(L50['own'])}; sample lattice src "
+    f"{os.path.basename(m.sample.data['lattice']['src'])}")
+if not L50.get('own'):
+    issue("own 50x marking is not used for the selected 50x")
+m._sel = k50
+manual([], 'map_sel50')
+check("50x own marks")
+
+step("50x: Shift+C again -> falls back to the 10x lattice; mark differently")
+view(f50, [ord('C'), -1])
+_d = json.load(open(os.path.join(f50, 'grid.json')))
+log(f"  after Shift+C: marks {len(_d.get('marks') or [])}, seeded {_d.get('seeded')}, keys {sorted(_d)}")
+L50b = LY.lattice_for(m, m._regions[k50], self_too=True)
+log(f"  lattice now from {L50b.get('own') or L50b.get('src')}")
+if os.path.abspath(f50) == os.path.abspath(L50b.get('own') or ''):
+    issue("cleared 50x marks are still used")
+view(f50, [ord('c'), ('qclick', *q5(wc[0], wc[1] + 1)), -1, ('qclick', *q5(wc[0] + 1, wc[1] + 1)), -1])
+check("50x re-marked")
+
+step("50x: scan again (version 2) -> grid from its own marking")
+m._sel = k50
+m.scan()
+f50b = m.last_scans[-1]
+mc.stitch(f50b, verbose=False)
+view(f50b, [])
+if not Grid(f50b).ready():
+    issue("second version of the 50x has no grid")
+log(f"  versions: {[os.path.basename(s.folder) for s in P_.Selection(m.sample, m._regions[k50]).scans]}")
+check("50x v2")
+
+# ---------------------------------------------------------------- 100x
+step("100x: draw inside the 50x, scan, view")
+m.objective = 100
+m.focus()
+manual([])
+n = nav()
+gb = LY.geom(m, m._regions[k50]).bounds
+manual([('maprect', *n.to_px((gb[0] + 2, gb[1] + 2)), *n.to_px((gb[2] - 2, gb[3] - 2))), -1], 'map_100x')
+k100 = next((k for k, r in enumerate(m._regions) if SM.obj(m, r) == 100 and r.get('kind') != 'draft'), None)
+if k100 is None:
+    issue("100x area inside the 50x not created")
+else:
+    log(f"  100x S{m._regions[k100]['num']} parent {LY.idx(m, m._regions[k100].get('parent'))} (50x is {k50})")
+    m._sel = k100
+    m.scan()
+    f100 = m.last_scans[-1]
+    mc.stitch(f100, verbose=False)
+    view(f100, [], 'view_seeded100')
+    if not Grid(f100).ready():
+        issue("new 100x scan has no grid")
+    check("100x seeded")
+
+step("delete the 50x (middle level) and Ctrl+Z")
+u100 = m._regions[k100]['uid'] if k100 is not None else None
+m._sel = k50
+manual([ord('c'), -1])
+if u100:
+    r100 = m._regions[LY.idx(m, u100)]
+    pk = LY.idx(m, r100.get('parent'))
+    log(f"  100x parent now: {m._regions[pk]['num'] if pk is not None else None}")
+    inS1 = LY.geom(m, m._regions[k1]).buffer(0.5).contains(LY.geom(m, r100))
+    if inS1 and (pk is None or m._regions[pk]['uid'] != m._regions[k1]['uid']):
+        issue("the 100x lost its parent although it lies inside the 10x")
+check("50x deleted")
+manual([26, -1])
+k50 = next((k for k, r in enumerate(m._regions) if SM.obj(m, r) == 50 and r.get('kind') != 'draft'), None)
+if k50 is None:
+    issue("Ctrl+Z did not bring the 50x back")
+elif u100:
+    r100 = m._regions[LY.idx(m, u100)]
+    if r100.get('parent') != m._regions[k50]['uid']:
+        issue("after Ctrl+Z the 100x is not inside the 50x again")
+check("50x restored")
+
+step("V opens the latest scan of what is selected in the menu")
+opened = []
+_v0 = V.view
+V.view = lambda f, **kw: opened.append(f)
+for k in [k1, k50, LY.idx(m, u100) if u100 else None]:
+    if k is None:
+        continue
+    m._sel = k
+    opened.clear()
+    manual([ord('v'), -1])
+    want = latest(m._regions[k])
+    ok = opened and os.path.abspath(opened[0]) == os.path.abspath(want)
+    log(f"  S{m._regions[k]['num']}: opened {os.path.basename(opened[0]) if opened else None}, latest {os.path.basename(want)}")
+    if not ok:
+        issue(f"V with S{m._regions[k]['num']} selected opened something else")
+V.view = _v0
+
+step("10x: clear crosses and mark again: 50x / 100x keep their own")
+L50_before = LY.lattice_for(m, m._regions[k50], self_too=True)
+view(f1, [ord('C'), -1, ord('c'), ('qclick', *q(1, 1)), -1, ('qclick', *q(2, 1)), -1, ('qclick', *q(1, 2)), -1])
+if not Grid(f1).ready():
+    issue("Shift+C, then C, then clicks: crosses not marked")
+L50_after = LY.lattice_for(m, m._regions[k50], self_too=True)
+if not np.allclose(L50_before['e1'], L50_after['e1']):
+    issue("the 50x grid changed when the 10x was re-marked")
+for k in [k1, k50]:
+    m._sel = k
+    manual([], f'map_sel_{SM.obj(m, m._regions[k])}x_final')
+check("final")
+
+m.close()
+log("\nISSUES:\n" + ("\n".join(ISSUES) if ISSUES else "none"))
+assert not ISSUES, ISSUES
+cv2.imshow = _o
+print("Levels 10x -> 50x -> 100x with undo, redo, delete and redo differently: crosses cleared and marked again, "
+      "every grid follows what is selected (own marks, else the larger one around, else the sample), V opens "
+      "the selected: OK")

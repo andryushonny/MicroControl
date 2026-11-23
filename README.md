@@ -65,6 +65,7 @@ Both windows close with **Shift+Esc** or the window's ×. A single `Esc` only ca
 
 - Press `C` and click **two neighbouring crosses in one row**. From them the program knows the tilt and the size of the squares, turns the picture level and draws the red grid over everything. The mark lands exactly where you click; `Shift`+click snaps it to the cross centre, a mark can be dragged. The grid is fitted to all crosses at once; `F` then puts every frame onto the crosses (see *Accuracy for lithography*).
 - **Numbers:** press `N`, click a square and type the number written next to it (`12 7`). Do this for two squares in different rows and columns — then every square has its real number.
+- **The grid is always the grid of what is selected in the menu on the right.** Its own crosses if they are marked in its scan; otherwise the crosses of the larger area around it (50x inside 10x); otherwise the sample lattice. The red grid on the map, the squares of a new area drawn inside it and the grid of its next scan all follow this. `Shift+C` clears the crosses (then just click new ones); cleared crosses are no longer used anywhere.
 
 ### 4. Choose squares — the mask
 
@@ -84,7 +85,7 @@ Squares selected in the viewer become a **Draft** — a sketch that is never sca
 | | |
 |---|---|
 | ![Map zoomed in: 10x overview, Draft 2 with its 1/4 grid, Selection 4 (50x) and Selection 5 (100x) inside it](docs/img/map_zoom.jpg) | ![The 50x scan: its grid comes from the sample lattice — tilt and pitch match the overview, no crosses marked](docs/img/view_50x.jpg) |
-| *Layers on the map: 10x → Draft (grid 1/4) → 50x → 100x, the camera in the corner* | *50x scan: the grid is taken from the sample lattice (no crosses to mark), 1/4 and 1/8 cells* |
+| *Layers on the map: 10x → Draft (grid 1/4) → 50x → 100x, the camera in the corner* | *50x scan: the grid comes from the crosses marked before — its own, else the 10x around it (no crosses to mark), 1/4 and 1/8 cells* |
 | ![Export of the sample: the tilted scan is drawn square to the lattice, crosses with numbers from 1,1](docs/img/export.jpg) | ![Export, close-up: 10x picture, Draft 2 squares, 50x cells 1/4 and 100x cells 1/8 with their addresses](docs/img/export_zoom.jpg) |
 | *Drawing for AutoCAD: the 2.5° tilted chip comes out square to the lattice, crosses from 1,1* | *Close-up: every cell is a closed square on its own layer, address 16,10 > 2,3 > 1,1* |
 

@@ -1219,9 +1219,10 @@ def _run(m, fullscreen=False, _keys=None):
         """Сетка решётки образца на карте — тонко, полупрозрачно, красным: по ней встают квадраты новых областей.
         Выбрано выделение с подсеткой (2-5) — внутри него ещё и она (новая область в нём — из её клеток);
         черновик из клеток — его клетки."""
-        from .layers import lattice_of, geom as _gm
+        from .layers import lattice_of, lattice_for, geom as _gm
         from . import lattice as LT
-        L_ = lattice_of(m)
+        L_ = (lattice_for(m, m._regions[m._sel], self_too=True)        # сетка выбранного в меню: своя разметка
+              if m._sel is not None and m._sel < len(m._regions) else lattice_of(m))   # или родителя, или образца
         if L_ is None:
             return
         cs_ = nav.to_um(np.array([(0, 0), (w_, 0), (0, h_), (w_, h_)], float))
@@ -1262,9 +1263,15 @@ def _run(m, fullscreen=False, _keys=None):
     def new_area(S0, S1):
         """Новый участок на текущем объективе. Решётка образца есть — клетками: квадраты литографии или подсетка
         выделения, в котором тянули (его клетки уровня N·n, строго внутри него); нет — прямоугольником (обзор)."""
-        from .layers import lattice_of
+        from .layers import lattice_of, lattice_for, geom as _gm
+        from shapely.geometry import Point as _Pt
         L_ = lattice_of(m)
-        if L_ is not None:
+        if L_ is not None:                                  # клетки — в решётке того, внутри кого тянут
+            c_ = ((S0[0] + S1[0]) / 2, (S0[1] + S1[1]) / 2)
+            hold_ = [r_ for r_ in m._regions if r_.get('kind') not in ('group', 'draft') and SM.obj(m, r_) < m.objective
+                     and _gm(m, r_).contains(_Pt(*c_))]
+            if hold_:
+                L_ = lattice_for(m, max(hold_, key=lambda r_: SM.obj(m, r_)), self_too=True) or L_
             return new_area_cells(L_, S0, S1)
         from .layers import new_num, set_geom, box as _box
         from .errors import MicroControlError as _E

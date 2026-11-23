@@ -788,7 +788,7 @@ The camera is read in a separate thread: the window is redrawn at once (pan, zoo
 | `T` · `O` · `[` `]` | turn the camera picture 180° · check directions with the camera · arrows (and the mini map with them) the other way (all remembered) |
 | `H` · `Shift+Esc` | all keys · exit |
 
-**Step fields** (top left, under the coordinates): Step X, Step Y, Step Z, µm. Only multiples of 5 µm are allowed; the number is rounded to the nearest multiple of 5 and capped by the per-command limit (`max_move` for X, Y; for Z the smaller of `max_move_z`, `max_move_down`). The steps are kept between entries into manual mode within a session.
+**Step fields** (top left, under the coordinates): Step X, Step Y, Step Z, µm. X and Y values are rounded to the nearest multiple of 5 µm. Z accepts whole micrometres starting at 1 µm. The fields are capped at `max_move` for X and Y and `max_move_z` for Z. The driver rounds the requested move to whole motor steps and rejects a move that rounds to zero steps. The steps are kept between entries into manual mode within a session.
 
 **Directions.** The left/right and up/down arrows move the field of view on the screen regardless of the camera rotation: the program picks the stage axis itself (with `swap_xy` the horizontal is the $Y$ axis, the vertical is $X$) and the sign. If a direction on the screen is reversed, fix it with `m.mirror_x = True` or `m.mirror_y = True` (remembered for the microscope).
 

@@ -39,7 +39,7 @@ from . import ui as UI
 WIN = "MicroControl"
 HELP = ["Shift+Esc: Exit (or close the window)", "P: Hide / show the left panel",
         "Arrows: Move by Step X / Step Y   E / Q (PgUp / PgDn): Stage up / down by Step Z (Shift: x5)",
-        "Tab or click a field: steps (multiple of 5 um), exposure (ms), objective; Enter",
+        "Click to edit steps (X / Y: 5 um increments, Z: 1 um), exposure or objective. Enter to save",
         "G: Steps X, Y = one frame", "M: Next objective (4x, 10x, 20x, 50x, 100x)",
         "1 / 2: Corners of a selection, one after another (their Z is kept as focus points); a higher objective may mark inside a lower one",
         "F: Autofocus   K: Keep Z here as a focus point of this selection",
@@ -1953,14 +1953,20 @@ def _run(m, fullscreen=False, _keys=None):
             except MicroControlError as e:
                 msg = str(e)
             return
-        v = float(int(float(buf)))
+        v = int(float(buf))
         lim = step_limit(m, ax)
-        v5 = float(max(5, min(round(v / 5) * 5, lim // 5 * 5)))
-        steps[ax] = v5
-        msg = f"Step {ax.upper()} = {v5:g} um" + (f" (rounded to a multiple of 5)" if v5 != v and v5 < lim // 5 * 5 else "") + \
-              (f" (the limit is {lim:g} um)" if v > lim else "")
-        msg_t = time.monotonic()
-        L.event('MAN-004', f"Manual step {ax.upper()} = {v5:g} um.")
+        increment = 1 if ax == 'z' else 5
+        max_step = math.floor(lim / increment) * increment
+        step = max(increment, min(round(v / increment) * increment, max_step))
+        steps[ax] = step
+        msg = f"Step {ax.upper()} = {step:g} um"
+        if v > lim:
+            msg += f" (the limit is {lim:g} um)"
+        elif ax == 'z' and not m._u2p(step):
+            msg += f" (one motor step is {m.motor_step:.2f} um)"
+        elif step != v and step < max_step and ax in 'xy':
+            msg += " (rounded to a multiple of 5)"
+        L.event('MAN-004', f"Manual step {ax.upper()} = {step:g} um.")
 
     rul = m.__dict__.setdefault("_ruler", dict(on=False, pts=[]))   # линейка (L): точки на образце, настоящие мкм
     back_v = None
@@ -2773,12 +2779,11 @@ def _run(m, fullscreen=False, _keys=None):
                 msg = r.get('Changed', r.get('Result', r.get('Reason', '')))
                 msg = f"Orientation: {msg}" + (". If the arrow keys now go the wrong way: [ - left / right, "
                                                "] - up / down" if 'Changed' in r else "")
-            elif ch == 'e' or key in PGUP:
-                dz = steps['z'] * (SHIFT if raw == 'E' else 1)
-                m.move(dz=dz); msg = f"Stage up {dz:g} um"
-            elif ch == 'q' or key in PGDN:
-                dz = steps['z'] * (SHIFT if raw == 'Q' else 1)
-                m.move(dz=-dz); msg = f"Stage down {dz:g} um"
+            elif ch in ('e', 'q') or key in PGUP or key in PGDN:
+                up = ch == 'e' or key in PGUP
+                dz = steps['z'] * (SHIFT if raw in ('E', 'Q') else 1)
+                r = m.move(dz=dz if up else -dz)
+                msg = r.get('Note', f"Stage {'up' if up else 'down'} {dz:g} um")
             elif ch == 'm':
                 from .config import OBJECTIVES
                 obs = sorted(OBJECTIVES)

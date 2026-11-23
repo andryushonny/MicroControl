@@ -1028,6 +1028,7 @@ def _run(m, fullscreen=False, _keys=None):
                 mp = cv2.convertScaleAbs(mp, alpha=0.85)
                 cv2.copyTo(base0_, ms_, mp)
         lattice_lines(mp, w_, h_, m._regions[m._sel] if chosen_ else None)   # сетка, по которой встанут квадраты
+        profile_lines(mp)                                   # линии профилей из просмотра (P) и края на них
         for k_, rg_ in sorted(enumerate(m._regions), key=lambda t: SM.obj(m, t[1])):
             if rg_.get('kind') == 'group' or SM.hidden(m, k_):
                 continue
@@ -1187,6 +1188,32 @@ def _run(m, fullscreen=False, _keys=None):
         car['step'] = 0 if not shot else (1 if not kids else (2 if any(r_ not in shot for r_ in kids) else 3))
         car['step_t'] = time.monotonic()
         return car['step']
+
+    pl_file = {}
+
+    def profile_lines(mp):
+        """Линии профилей, закреплённые в просмотре (P): голубая и сиреневая, края — жёлтые засечки.
+        Берутся из profile_lines.json образца (мкм столика)."""
+        pth = os.path.join(m.sample.folder, 'profile_lines.json') if getattr(m, 'sample', None) else None
+        if not pth or not os.path.exists(pth):
+            return
+        try:
+            mt = os.path.getmtime(pth)
+            if pl_file.get('t') != mt:
+                with open(pth, encoding='utf-8') as fh:
+                    pl_file.update(t=mt, d=json.load(fh))
+            d_ = pl_file['d']
+        except Exception:
+            return
+        ip = lambda q: (int(round(q[0])), int(round(q[1])))
+        for k, ln in enumerate(d_.get('lines', [])):
+            col = ((255, 230, 0), (255, 80, 255))[k % 2]
+            E = nav.to_px(np.asarray(ln['ends'], float))
+            cv2.line(mp, ip(E[0]), ip(E[1]), col, 1, cv2.LINE_AA)
+            u = (E[1] - E[0]) / max(float(np.hypot(*(E[1] - E[0]))), 1e-6)
+            v = np.array([-u[1], u[0]])
+            for q in (nav.to_px(np.asarray(ln['edges'], float)) if ln.get('edges') else []):
+                cv2.line(mp, ip(q - 5 * v), ip(q + 5 * v), (0, 220, 255), 1, cv2.LINE_AA)
 
     def lattice_lines(mp, w_, h_, rsel):
         """Сетка решётки образца на карте — тонко, полупрозрачно, красным: по ней встают квадраты новых областей.

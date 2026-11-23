@@ -566,9 +566,9 @@ def update_lattice(m):
         if not g.ready() or getattr(g, 'seeded', False) or d.get('seeded'):
             continue
         L = LT.from_grid(f, g)
-        key_ = (L['numbered'], float(d.get('marks_t') or 0), -obj_of(m, r)) if L else None
-        if L and (best is None or key_ > best[1]):           # с номерами; затем — где кресты отметили последними
-            best = (L, key_)
+        key_ = (L['numbered'], -obj_of(m, r), float(d.get('marks_t') or 0)) if L else None
+        if L and (best is None or key_ > best[1]):           # с номерами; затем — меньший объектив (поле шире: наклон
+            best = (L, key_)                                 # и шаг точнее на весь образец); затем — отмеченная последней
     if best is None:
         return False
     old = m.sample.data.get('lattice')

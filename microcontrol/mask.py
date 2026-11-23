@@ -511,6 +511,41 @@ def _edges1d(p):
     return sub(a), sub(b), float(st)
 
 
+def edges_any(p, smooth=0.8):
+    """Два края полоски где угодно в профиле p (полоска светлее или темнее фона): из самых сильных подъёмов
+    и спадов производной — пара (левый < правый) с наибольшей слабейшей из двух силой. Доли пикселя —
+    парабола по 3 точкам производной. -> (левый, правый) в индексах p или None."""
+    p = np.asarray(p, np.float32)
+    if len(p) < 6:
+        return None
+    if smooth:
+        p = cv2.GaussianBlur(p.reshape(1, -1), (0, 0), smooth).ravel()
+    d = np.diff(p)
+
+    def peaks(v):
+        k = np.where((v[1:-1] >= v[:-2]) & (v[1:-1] > v[2:]) & (v[1:-1] > 0))[0] + 1
+        return k[np.argsort(-v[k])][:6]
+
+    def sub(k):
+        if 0 < k < len(d) - 1:
+            y0, y1, y2 = d[k - 1], d[k], d[k + 1]
+            den = y0 - 2 * y1 + y2
+            return k + 0.5 + (0.5 * (y0 - y2) / den if abs(den) > 1e-9 else 0.0)
+        return k + 0.5
+    best = None
+    for sg in (1, -1):                                   # светлая полоска: подъём, затем спад; тёмная — наоборот
+        up, dn = peaks(sg * d), peaks(-sg * d)
+        for a_ in up:
+            for b_ in dn:
+                if b_ - a_ >= 2:
+                    st_ = min(sg * d[a_], -sg * d[b_])
+                    if best is None or st_ > best[0]:
+                        best = (st_, a_, b_)
+    if best is None:
+        return None
+    return sub(best[1]), sub(best[2])
+
+
 def _edge_center(g, c, L, t, ang=0.0):
     """Уточнение центра креста по краям плеч: поперёк каждого плеча — профили, в каждом два края полоски,
     середина между ними; по серединам горизонтальных плеч — одна прямая, вертикальных — другая; центр —

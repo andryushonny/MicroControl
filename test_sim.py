@@ -1538,8 +1538,47 @@ for q in ((40, 40), (200, 60), (60, 190), (190, 200)):                    # тё
 d2, _ = snap_cross(spots, 100, angle=10.0)
 assert np.hypot(*((np.array(im.shape[::-1]) - 1) / 2 + d2 - (120.3, 119.6))) < 0.5, d2
 m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp()); m.focus(); m.goto(x=150, y=150); m.exposure = 20.0
-fw, fh = m.frame_size; m.area = mc.Area(0, 0, 2 * fw, 2 * fh); f = m.scan(); mc.stitch(f, verbose=False); m.close()
+fw, fh = m.frame_size; m.area = mc.Area(0, 0, 2 * fw, 2 * fh); f = m.scan(); mc.stitch(f, verbose=False)
 fo = next((os.path.join(f, d_) for d_ in sorted(os.listdir(f)) if os.path.exists(os.path.join(f, d_, 'join'))), f)
-mc.view(fo, _keys=[-1, ord('p'), -1] + [('move', 100 + 40 * k, 100 + 30 * k) for k in range(8)] +
-        [('click', 200, 180), -1, ('drag', 700, 137, 680, 137), -1, ('rclick', 700, 137), -1, ('click', 200, 180), -1, 27, 27])
-print(f"Profiles across the arms: width {wid[0]:.2f} / {wid[1]:.2f} px (true 6), dust does not pull the snap; P window: OK")
+box_ = {}
+def _grab(st):
+    box_['st'] = st
+def _keys47():
+    yield -1; yield ord('p'); yield -1
+    for k in range(8):
+        yield ('move', 100 + 40 * k, 100 + 30 * k); yield -1
+    yield ('click', 200, 180); yield -1
+    yield ('call', _grab); yield -1
+    st = box_['st']; res = st['prof_pin']
+    assert res is not None and len(res['prof']) == 2
+    P1 = res['segs'][0][1]
+    yield ('qdrag', float(P1[0]), float(P1[1]), float(P1[0]), float(P1[1]) + 20); yield -1      # наклонить линию A
+    assert abs(res['segs'][0][1][1] - P1[1] - 20) < 1.0, res['segs'][0]
+    px0, py0, w_, h_, xa, xb = st['prof_plots'][1]
+    yield ('drag', px0 + w_ // 2, py0 + 30, px0 + w_ // 2 - 15, py0 + 30); yield -1           # край B рукой
+    assert res['user'][1] is not None
+    r_ = st['prof_rect']; w0 = res['w']
+    yield ('wheel', r_[0] + 80, r_[1] + 100, +1); yield -1                                # над лупой — полоса
+    assert res['w'] > w0
+    yield ('wheel', px0 + 50, py0 + 40, +1); yield -1                                     # над графиком — масштаб Y
+    yl = st['prof_y']; assert yl is not None
+    yield ('wheel', px0 + 50, py0 + 40, +1); yield -1
+    assert st['prof_y'][1] - st['prof_y'][0] < yl[1] - yl[0]
+    yr = st['prof_yrect']
+    yield ('click', (yr[0] + yr[2]) // 2, (yr[1] + yr[3]) // 2); yield -1
+    assert st['prof_y'] is None
+    yield ('rclick', px0 + 20, py0 + 30); yield -1
+    assert res['user'][1] is None
+    yield 27; yield 27
+mc.view(fo, _keys=_keys47())
+from microcontrol import project as P_
+assert os.path.exists(os.path.join(P_.sample_of(fo), 'profile_lines.json'))
+import microcontrol.manual as M47
+cv2.getWindowImageRect = lambda w: (0, 0, 1280, 900)
+_draw = []
+_im0 = cv2.imshow
+cv2.imshow = lambda w, img: (_draw.append(img), _im0(w, img))
+M47.run(m, fullscreen=False, _keys=[-1, -1, 27, 27]); cv2.imshow = _im0; m.close()
+assert _draw
+print(f"Profiles across the arms: width {wid[0]:.2f} / {wid[1]:.2f} px (true 6), dust does not pull the snap; "
+      "P window: two lines tilted by their ends, edges by hand, band by the wheel, saved for the manual map: OK")

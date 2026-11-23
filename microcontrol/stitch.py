@@ -33,10 +33,145 @@ def _whiten(a, sigma):
     return -cv2.Laplacian(cv2.GaussianBlur(a, (0, 0), sigma), cv2.CV_32F) if sigma > 0 else a - a.mean()
 
 
-def _pair(st, ia, ib, d, W, H, pad, sigma, max_shift, other=None):
+def _pcm_peaks(A_, B_, k=5, c=(0.0, 0.0), rad=None, pw=0.25):
+    """Корреляция с несколькими пиками (идея Preibisch et al., 2009: у шума и повторяющегося узора самый
+    высокий пик не всегда верный — проверяются k лучших). Спектр делится на |C|^pw, а не на |C| (чистая
+    фазовая корреляция): после обеления высокие частоты — шум и рисунок сенсора, привязанный к кадру, и при
+    pw = 1 их пик встаёт на предсказание столика. c, rad — где искать (сдвиг по столику и его ошибка).
+    -> [(sx, sy)] с долей пикселя, B(x) = A(x - s)."""
+    h, w = A_.shape
+    FA, FB = cv2.dft(A_, flags=cv2.DFT_COMPLEX_OUTPUT), cv2.dft(B_, flags=cv2.DFT_COMPLEX_OUTPUT)
+    C = cv2.mulSpectrums(FB, FA, 0, conjB=True)
+    mag = cv2.magnitude(C[..., 0], C[..., 1])
+    mag = cv2.pow(mag, pw) + 1e-9 * float(mag.max() ** pw + 1e-30) if pw else 1.0
+    C[..., 0] /= mag
+    C[..., 1] /= mag
+    r = cv2.idft(C, flags=cv2.DFT_REAL_OUTPUT | cv2.DFT_SCALE)
+    r = np.fft.fftshift(r)
+    oy_, ox_ = 0, 0
+    if rad is not None:                                         # только окно вокруг ожидаемого сдвига
+        cx_, cy_ = int(round(c[0] + w // 2)), int(round(c[1] + h // 2))
+        R_ = int(np.ceil(rad)) + 3
+        oy_, ox_ = max(0, cy_ - R_), max(0, cx_ - R_)
+        r = r[oy_:min(h, cy_ + R_ + 1), ox_:min(w, cx_ + R_ + 1)]
+        if r.size == 0:
+            return []
+    r_ = cv2.GaussianBlur(r, (3, 3), 0)
+    dil = cv2.dilate(r_, np.ones((5, 5), np.uint8))
+    cand = np.argwhere((r_ >= dil) & (r_ > 0))
+    if not len(cand):
+        return []
+    v_ = r_[cand[:, 0], cand[:, 1]]
+    o_ = np.argsort(-v_)[:k]
+    cand = cand[o_[v_[o_] >= 0.3 * v_[o_[0]]]]                    # слабые пики — не кандидаты
+    out = []
+    hh, ww_ = r.shape
+    for y, x in cand:                                           # доля пикселя — центр масс 3 x 3
+        y0, y1, x0, x1 = max(0, y - 1), min(hh, y + 2), max(0, x - 1), min(ww_, x + 2)
+        wv = np.clip(r[y0:y1, x0:x1], 0, None)
+        if wv.sum() <= 0:
+            fy, fx = float(y), float(x)
+        else:
+            yy, xx = np.mgrid[y0:y1, x0:x1]
+            fy, fx = float((wv * yy).sum() / wv.sum()), float((wv * xx).sum() / wv.sum())
+        out.append((fx + ox_ - w // 2, fy + oy_ - h // 2))
+    return out
+
+
+def _ncc_err(a, b, ox, oy):
+    """1 - NCC общей части: точка a-окна (i) <-> b-окна (i + o)."""
+    M = np.float32([[1, 0, ox], [0, 1, oy]])                    # bb(i) = b(i + o)
+    bb = cv2.warpAffine(b, M, (a.shape[1], a.shape[0]), flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP,
+                        borderValue=np.nan)
+    ok = ~np.isnan(bb)
+    if ok.sum() < 256:
+        return 2.0
+    va, vb = a[ok] - a[ok].mean(), bb[ok] - bb[ok].mean()
+    return 1.0 - float((va * vb).sum() / (np.sqrt((va ** 2).sum() * (vb ** 2).sum()) + 1e-9))
+
+
+def _lk(a, b, ox, oy, it=4):
+    """Доли пикселя без смещения к целому: Лукас — Канаде по общей части. a(i) <-> b(i + o);
+    bb(i) = b(i + o), шаг δ = (GᵀG)⁻¹ Gᵀ (a - bb), G = ∇bb (яркость и контраст выровнены). -> (ox, oy) или None."""
+    o = np.array([ox, oy], float)
+    for _ in range(it):
+        M = np.float32([[1, 0, o[0]], [0, 1, o[1]]])
+        bb = cv2.warpAffine(b, M, (a.shape[1], a.shape[0]), flags=cv2.INTER_CUBIC | cv2.WARP_INVERSE_MAP,
+                            borderValue=np.nan)
+        ok = ~np.isnan(bb)
+        ok[:2], ok[-2:], ok[:, :2], ok[:, -2:] = False, False, False, False
+        ok &= np.roll(ok, 1, 0) & np.roll(ok, -1, 0) & np.roll(ok, 1, 1) & np.roll(ok, -1, 1)
+        if ok.sum() < 256:
+            return None
+        bb0 = np.where(np.isnan(bb), 0, bb).astype(np.float32)
+        gx = cv2.Sobel(bb0, cv2.CV_32F, 1, 0, ksize=3) / 8
+        gy = cv2.Sobel(bb0, cv2.CV_32F, 0, 1, ksize=3) / 8
+        av, bv, gxv, gyv = a[ok], bb0[ok], gx[ok], gy[ok]
+        sa, sb = av.std() + 1e-9, bv.std() + 1e-9
+        r = (av - av.mean()) / sa - (bv - bv.mean()) / sb
+        gxv, gyv = gxv / sb, gyv / sb
+        G = np.array([[gxv @ gxv, gxv @ gyv], [gxv @ gyv, gyv @ gyv]], float)
+        if np.linalg.cond(G) > 1e4:                             # одно направление без деталей
+            return None
+        d = np.linalg.solve(G, [gxv @ r, gyv @ r])              # bb(i + d) ≈ a(i)
+        if np.hypot(*d) > 2.0:
+            return None
+        o += d
+        if np.hypot(*d) < 0.01:
+            break
+    return o
+
+
+def _solve_graph(I, J, meas, w, base, lam=0.01, x0=None, iters=400, rel=0.0):
+    """Положения кадров по швам: min Σ w²·|x_J - x_I - meas|² + rel²·Σ|x_J - x_I - (base_J - base_I)|²
+    + lam²·|x - base|² — сопряжённые градиенты по разреженному графу (без плотных матриц: тысячи кадров
+    за доли секунды). rel — столик как «шов» каждой пары: держит шаг между соседями, а не место кадра
+    (ошибка столика плавная: соседи сдвинуты вместе)."""
+    if rel > 0:
+        I, J = np.r_[I, I], np.r_[J, J]
+        meas = np.r_[meas, base[J[len(J) // 2:]] - base[I[len(I) // 2:]]]
+        w = np.r_[w, np.full(len(I) // 2, rel)]
+    n = len(base)
+    ww, l2 = w ** 2, lam ** 2
+
+    def Lop(x):
+        d = (x[J] - x[I]) * ww[:, None]
+        y = l2 * x
+        np.add.at(y, J, d)
+        np.add.at(y, I, -d)
+        return y
+    rhs = l2 * base
+    m_ = meas * ww[:, None]
+    np.add.at(rhs, J, m_)
+    np.add.at(rhs, I, -m_)
+    diag = np.full(n, l2)
+    np.add.at(diag, J, ww)
+    np.add.at(diag, I, ww)
+    x = (base if x0 is None else x0).astype(float).copy()
+    r = rhs - Lop(x)
+    z = r / diag[:, None]
+    pdir = z.copy()
+    rz = float((r * z).sum())
+    nb = float(np.sqrt((rhs ** 2).sum())) + 1e-12
+    for _ in range(iters):
+        if np.sqrt((r ** 2).sum()) < 1e-7 * nb:
+            break
+        Ap = Lop(pdir)
+        al = rz / max(float((pdir * Ap).sum()), 1e-30)
+        x += al * pdir
+        r -= al * Ap
+        z = r / diag[:, None]
+        rz2 = float((r * z).sum())
+        pdir = z + (rz2 / max(rz, 1e-30)) * pdir
+        rz = rz2
+    return x
+
+
+def _pair(st, ia, ib, d, W, H, pad, sigma, max_shift, other=None, peaks=5, fine=False):
     """Сдвиг кадра ib относительно ia (px, левый верхний угол b минус a) по полосам перекрытия.
     d — предсказание по столику; полосы берутся с запасом pad в каждом кадре отдельно (у краёв —
     сколько есть), дополняются до одного размера. other — подставной кадр вместо ib (тест перестановок).
+    fine=True — предсказание уже точное (второй раунд): только уточнение Лукаса — Канаде.
     Возвращает (сдвиг, ошибка = 1 - NCC совмещённых полос) или (None, 2.0)."""
     dx, dy = int(round(d[0])), int(round(d[1]))
     # как в ASHLAR: общая часть по предсказанию, в обоих кадрах одного размера
@@ -47,26 +182,112 @@ def _pair(st, ia, ib, d, W, H, pad, sigma, max_shift, other=None):
         return None, 2.0
     a = _whiten(_gray(st.frame(ia, (ax0, ay0, ax1, ay1))), sigma)
     b = _whiten(_gray(st.frame(ib if other is None else other, (bx0, by0, bx1, by1))), sigma)
-    # окно Ханна на каждую полосу, затем дополнение нулями вдвое: корреляция без «заворота»
-    h, w = 2 * max(a.shape[0], b.shape[0]), 2 * max(a.shape[1], b.shape[1])
+    if fine:
+        o = _lk(a, b, ax0 - bx0 - d[0], ay0 - by0 - d[1], it=6)
+        if o is None:
+            return None, 2.0
+        dt = np.array([ax0 - bx0 - o[0], ay0 - by0 - o[1]])
+        if np.hypot(*(dt - d)) > max_shift:
+            return None, 2.0
+        return dt, _ncc_err(a, b, o[0], o[1])
+    # грубо: полосы уменьшены (до ~40 тыс. пикселей), окно Ханна, дополнение нулями вдвое — без «заворота»
+    f = max(1, int(np.ceil(np.sqrt(max(a.size, b.size) / 3e4))))
+    ac, bc = (a, b) if f == 1 else (cv2.resize(a, None, fx=1 / f, fy=1 / f, interpolation=cv2.INTER_AREA),
+                                    cv2.resize(b, None, fx=1 / f, fy=1 / f, interpolation=cv2.INTER_AREA))
+    h, w = (cv2.getOptimalDFTSize(2 * max(ac.shape[0], bc.shape[0])),  # размер, удобный для БПФ (2^a 3^b 5^c)
+            cv2.getOptimalDFTSize(2 * max(ac.shape[1], bc.shape[1])))
     A_, B_ = np.zeros((h, w), np.float32), np.zeros((h, w), np.float32)
-    A_[:a.shape[0], :a.shape[1]] = (a - a.mean()) * cv2.createHanningWindow(a.shape[::-1], cv2.CV_32F)
-    B_[:b.shape[0], :b.shape[1]] = (b - b.mean()) * cv2.createHanningWindow(b.shape[::-1], cv2.CV_32F)
-    (sx, sy), _ = cv2.phaseCorrelate(A_, B_)                   # B_(x) = A_(x - s)
-    dt = np.array([ax0 - bx0 - sx, ay0 - by0 - sy])            # истинный сдвиг b относительно a
-    if np.hypot(*(dt - (dx, dy))) > max_shift:
-        return None, 2.0
-    # NCC на общей части: точка a-окна (i) <-> b-окна (i + ax0 - bx0 - dt)
-    ox, oy = ax0 - bx0 - dt[0], ay0 - by0 - dt[1]
-    M = np.float32([[1, 0, ox], [0, 1, oy]])                    # bb(i) = b(i + o)
-    bb = cv2.warpAffine(b, M, (a.shape[1], a.shape[0]), flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP,
-                        borderValue=np.nan)
-    ok = ~np.isnan(bb)
-    if ok.sum() < 256:
-        return None, 2.0
-    va, vb = a[ok] - a[ok].mean(), bb[ok] - bb[ok].mean()
-    ncc = float((va * vb).sum() / (np.sqrt((va ** 2).sum() * (vb ** 2).sum()) + 1e-9))
-    return dt, 1.0 - ncc
+    A_[:ac.shape[0], :ac.shape[1]] = (ac - ac.mean()) * cv2.createHanningWindow(ac.shape[::-1], cv2.CV_32F)
+    B_[:bc.shape[0], :bc.shape[1]] = (bc - bc.mean()) * cv2.createHanningWindow(bc.shape[::-1], cv2.CV_32F)
+    best = (None, 2.0)
+    for sx, sy in _pcm_peaks(A_, B_, peaks, ((ax0 - bx0 - dx) / f, (ay0 - by0 - dy) / f), max_shift / f + 2):                    # B_(x) = A_(x - s): несколько пиков —
+        dt = np.array([ax0 - bx0 - f * sx, ay0 - by0 - f * sy])  # каждый проверяется совпадением картинки
+        if np.hypot(*(dt - (dx, dy))) > max_shift + f:
+            continue
+        e_ = _ncc_err(a, b, ax0 - bx0 - dt[0], ay0 - by0 - dt[1])
+        if e_ < best[1]:
+            best = (dt, e_)
+    if best[0] is None:
+        return best
+    dt = best[0]
+    o = _lk(a, b, ax0 - bx0 - dt[0], ay0 - by0 - dt[1])
+    if o is not None:
+        dt2 = np.array([ax0 - bx0 - o[0], ay0 - by0 - o[1]])
+        if np.hypot(*(dt2 - dt)) < f + 1.0:
+            e2 = _ncc_err(a, b, o[0], o[1])
+            if e2 <= best[1] + 0.01:
+                best = (dt2, e2)
+    return best
+
+
+def seams(folder):
+    """Швы последней сшивки: dict(I, J, meas, w, w0, base) или None (сшивка другим движком / старая)."""
+    sp = os.path.join(folder, 'join', 'seams.npz')
+    if not os.path.exists(sp):
+        return None
+    z = np.load(sp)
+    if 'base' not in z.files:
+        return None
+    return {k: z[k] for k in z.files}
+
+
+def seams_edit(folder, ovr=None):
+    """Швы, включённые / выключенные руками (J: щелчок по шву): {(I, J): True | False}. ovr=None — прочитать,
+    иначе — записать."""
+    fp = os.path.join(folder, 'join', 'seams_edit.json')
+    if ovr is None:
+        try:
+            return {(int(a), int(b)): bool(v) for a, b, v in json.load(open(fp, encoding='utf-8'))}
+        except Exception:
+            return {}
+    with open(fp, 'w', encoding='utf-8') as f:
+        json.dump(sorted([int(a), int(b), bool(v)] for (a, b), v in ovr.items()), f)
+    return dict(ovr)
+
+
+def resolve(z, ovr=None):
+    """Положения кадров заново по швам z (seams()) с правкой ovr (seams_edit) — за доли секунды (сопряжённые
+    градиенты). Шов, выключенный программой и включённый руками, — с исходным весом. -> (pos, res, w)."""
+    I, J, meas = z['I'].astype(int), z['J'].astype(int), z['meas'].astype(float)
+    w = z['wq' if 'wq' in z else 'w'].astype(float).copy()
+    for k in range(len(I)):
+        v = (ovr or {}).get((int(I[k]), int(J[k])))
+        if v is False:
+            w[k] = 0.0
+        elif v is True and w[k] <= 0:
+            w[k] = max(float(z['w0'][k]), 0.2)
+    pos = _solve_graph(I, J, meas, w, z['base'].astype(float), 0.01, rel=float(z['lam']) if 'lam' in z else 0.0)
+    return pos, np.hypot(*(pos[J] - pos[I] - meas).T), w
+
+
+def _pair_full(st, ia, ib, d, W, H, sigma, min_ov=0.15, peaks=8):
+    """Как в MIST: сдвиг ib относительно ia по кадрам целиком, без опоры на столик (столик ошибся сильнее
+    перекрытия: люфт на большом объективе, сбой). d — предсказание (только чтобы из равных выбрать ближний).
+    -> (сдвиг, 1 - NCC) или (None, 2.0)."""
+    a = _whiten(_gray(st.frame(ia)), sigma)
+    b = _whiten(_gray(st.frame(ib)), sigma)
+    f = max(1, int(np.ceil(np.sqrt(a.size / 3e4))))
+    ac, bc = (a, b) if f == 1 else (cv2.resize(a, None, fx=1 / f, fy=1 / f, interpolation=cv2.INTER_AREA),
+                                    cv2.resize(b, None, fx=1 / f, fy=1 / f, interpolation=cv2.INTER_AREA))
+    h, w = cv2.getOptimalDFTSize(2 * ac.shape[0]), cv2.getOptimalDFTSize(2 * ac.shape[1])
+    A_, B_ = np.zeros((h, w), np.float32), np.zeros((h, w), np.float32)
+    A_[:ac.shape[0], :ac.shape[1]] = ac - ac.mean()
+    B_[:bc.shape[0], :bc.shape[1]] = bc - bc.mean()
+    best = (None, 2.0, 0.0)
+    for sx, sy in _pcm_peaks(A_, B_, peaks):                    # b(u) = a(u + dt): dt = -s
+        dt = -f * np.array([sx, sy])
+        ov = (W - abs(dt[0])) * (H - abs(dt[1])) / float(W * H)
+        if abs(dt[0]) >= W or abs(dt[1]) >= H or ov < min_ov:
+            continue
+        o = _lk(a, b, -dt[0], -dt[1], it=6)                     # a(i) <-> b(i + o), o = -dt
+        if o is None:
+            continue
+        dt = -o
+        e_ = _ncc_err(a, b, o[0], o[1])
+        if e_ < best[1] - 0.02 or (e_ < best[1] + 0.02 and best[0] is not None
+                                   and np.hypot(*(dt - d)) < np.hypot(*(best[0] - d))):
+            best = (dt, e_, ov)
+    return best[0], best[1]
 
 
 @_per_sample
@@ -137,6 +358,8 @@ def stitch(folder, engine='builtin', max_shift_um=40.0, sigma=None, alpha=0.01, 
         for i in range(n):
             wr.writerow([i, f"{pos[i, 0]:.2f}", f"{pos[i, 1]:.2f}", "1.0000"])
     sm = info.pop('_seams', None)
+    if os.path.exists(os.path.join(out, 'seams_edit.json')):   # правки швов прежней сшивки — к ней
+        os.remove(os.path.join(out, 'seams_edit.json'))
     sp = os.path.join(out, 'seams.npz')                     # швы — для сшивки по крестам (anchor.py)
     if sm is not None:
         from .optics import load_dist, dist_vec
@@ -195,11 +418,18 @@ def _builtin(st, pred, p, W, H, max_shift, sigma, alpha, verbose, A=None):
     pad = int(max_shift)
     # 1) соседи
     pairs, area = [], []
+    cell = {}                                                   # сетка W x H: соседи — только из 3 x 3 клеток
+    key = np.floor(pred / (W, H)).astype(int)
+    for i, (kx, ky) in enumerate(key):
+        cell.setdefault((kx, ky), []).append(i)
     for a in range(n):
-        d = pred[a + 1:] - pred[a]
-        for b in np.flatnonzero((np.abs(d[:, 0]) < W - 16) & (np.abs(d[:, 1]) < H - 16)) + a + 1:
-            pairs.append((a, int(b)))
-            area.append((W - abs(d[b - a - 1, 0])) * (H - abs(d[b - a - 1, 1])))
+        kx, ky = key[a]
+        near = [b for ddx in (-1, 0, 1) for ddy in (-1, 0, 1) for b in cell.get((kx + ddx, ky + ddy), ()) if b > a]
+        for b in sorted(near):
+            d = pred[b] - pred[a]
+            if abs(d[0]) < W - 16 and abs(d[1]) < H - 16:
+                pairs.append((a, int(b)))
+                area.append((W - abs(d[0])) * (H - abs(d[1])))
     if pairs:                                                   # уголки по диагонали — малы и ненадёжны
         area = np.array(area)
         pairs = [q for q, ar in zip(pairs, area) if ar >= 0.3 * area.max()]
@@ -209,11 +439,26 @@ def _builtin(st, pred, p, W, H, max_shift, sigma, alpha, verbose, A=None):
     meas, err = [], []
     nf = min(300, 3 * len(pairs))
     pr = Progress(len(pairs) + nf, "Stitch: seams", unit='comparisons') if verbose else None
-    for k_, (a, b) in enumerate(pairs):
-        dt, e = _pair(st, a, b, pred[b] - pred[a], W, H, pad, sigma, max_shift)
-        meas.append(pred[b] - pred[a] if dt is None else dt); err.append(e)
-        if pr:
-            pr.update(1, f"seam {k_ + 1} of {len(pairs)}: frames {a + 1} + {b + 1}")
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    lock_ = threading.Lock()
+    fr0_ = st.frame
+
+    def frame_locked(*a_, **k_):                                # чтение кадров — по одному (кэш, HDF5), счёт — параллельно
+        with lock_:
+            return fr0_(*a_, **k_)
+    st.frame = frame_locked
+    try:
+        nw_ = max(1, min(8, (os.cpu_count() or 2) - 1))
+        with ThreadPoolExecutor(max_workers=nw_) as ex_:
+            futs_ = [ex_.submit(_pair, st, a, b, pred[b] - pred[a], W, H, pad, sigma, max_shift) for a, b in pairs]
+            for k_, ((a, b), fu_) in enumerate(zip(pairs, futs_)):
+                dt, e = fu_.result()
+                meas.append(pred[b] - pred[a] if dt is None else dt); err.append(e)
+                if pr:
+                    pr.update(1, f"seam {k_ + 1} of {len(pairs)}: frames {a + 1} + {b + 1}")
+    finally:
+        st.frame = fr0_
     meas, err = np.array(meas), np.array(err)
     # 3) тест перестановок: та же геометрия, но вместо соседа — далёкий кадр (заведомо ложная пара)
     rng = np.random.default_rng(0)
@@ -230,62 +475,160 @@ def _builtin(st, pred, p, W, H, max_shift, sigma, alpha, verbose, A=None):
     if pr:
         pr.stage("solving frame positions")
     thr = float(np.quantile(fake, alpha)) if len(fake) >= 20 else 0.7
-    ok = err < min(thr, 0.99)
-    # 4) модель столик -> пиксели по принятым парам: d = A·Δp
     I = np.array([q[0] for q in pairs]); J = np.array([q[1] for q in pairs])
-    dp = p[J] - p[I]
-    Ast = -np.asarray(A, float) if A is not None else \
-        np.linalg.lstsq(p - p.mean(0), pred - pred.mean(0), rcond=None)[0].T   # -A по столику (один ряд — тоже)
-    model = Ast
-    # люфт: с какой стороны столик подъехал к кадру (знак последнего движения по каждой оси)
-    sg = np.zeros((n, 2))
-    last = np.zeros(2)
-    for k in range(1, n):
-        dk = np.sign(p[k] - p[k - 1])
-        last = np.where(dk != 0, dk, last)
-        sg[k] = last
-    sg[0] = sg[1] if n > 1 else 0
-    dsg = sg[J] - sg[I]
-    Bl = np.zeros((2, 2))                                       # px на смену направления по X и по Y
-    okm = err < max(min(thr, 0.99), 0.3)                         # модель — по всем правдоподобным швам: выбросы
-    if okm.sum() >= 3 and np.linalg.matrix_rank(dp[okm]) == 2:  # уберёт МНК ниже (d = M·Δp + Bl·Δs; один ряд — нет)
-        ok_ = ok
-        ok = okm
-        cols = [dp[ok]] + ([dsg[ok]] if np.abs(dsg[ok]).sum() > 0 else [])
-        if len(cols) > 1 and (np.linalg.matrix_rank(np.hstack(cols)) < np.hstack(cols).shape[1]
-                              or len(dp[ok]) < np.hstack(cols).shape[1] + 2):
-            cols = cols[:1]                                     # люфт неотличим от шага (2 ряда): без него
-        X_ = np.hstack(cols)
-        inl = np.ones(len(X_), bool)
-        for _ in range(4):                                      # ложные швы (совпадение шума) — прочь
-            sol = np.linalg.lstsq(X_[inl], meas[ok][inl], rcond=None)[0]
-            rs_ = np.hypot(*(X_ @ sol - meas[ok]).T)
-            new = rs_ < max(3.0, 3.0 * 1.48 * float(np.median(rs_[inl])))
-            if new.sum() < 3 or (new == inl).all():
+    # 3б) не нашёлся по полосам у предсказания — по кадрам целиком (столик ошибся больше перекрытия)
+    failed = np.flatnonzero(err >= min(thr, 0.99))
+    full = 0
+    if len(failed):
+        if pr:
+            pr.stage(f"{len(failed)} seams not found near the stage position: whole frames")
+        for k in sorted(failed, key=lambda k_: pairs[k_]):
+            a, b = pairs[k]
+            dt, e = _pair_full(st, a, b, pred[b] - pred[a], W, H, sigma)
+            if dt is not None and e < err[k] - 0.05:
+                meas[k], err[k] = dt, e
+                full += 1
+
+    def solve_all(meas, err):
+        ok = err < min(thr, 0.99)
+        # 4) модель столик -> пиксели по принятым парам: d = A·Δp
+        dp = p[J] - p[I]
+        Ast = -np.asarray(A, float) if A is not None else \
+            np.linalg.lstsq(p - p.mean(0), pred - pred.mean(0), rcond=None)[0].T   # -A по столику (один ряд — тоже)
+        model = Ast
+        # люфт: с какой стороны столик подъехал к кадру (знак последнего движения по каждой оси)
+        sg = np.zeros((n, 2))
+        last = np.zeros(2)
+        for k in range(1, n):
+            dk = np.sign(p[k] - p[k - 1])
+            last = np.where(dk != 0, dk, last)
+            sg[k] = last
+        sg[0] = sg[1] if n > 1 else 0
+        try:                                                    # записанное сканом направление подъезда — точнее
+            d_ = np.array([[float(r_['dir_x']), float(r_['dir_y'])] for r_ in st.index])
+            if d_.shape == sg.shape and np.isfinite(d_).all() and np.abs(d_).max() > 0:
+                sg = np.sign(d_)
+        except (KeyError, TypeError, ValueError):
+            pass
+        dsg = sg[J] - sg[I]
+        Bl = np.zeros((2, 2))                                       # px на смену направления по X и по Y
+        okm = err < max(min(thr, 0.99), 0.3)                         # модель — по всем правдоподобным швам: выбросы
+        if okm.sum() >= 3 and np.linalg.matrix_rank(dp[okm]) == 2:  # уберёт МНК ниже (d = M·Δp + Bl·Δs; один ряд — нет)
+            ok_ = ok
+            ok = okm
+            X_, axes = dp[ok], []                                 # люфт — по каждой оси, если он отличим от шага
+            for j_ in (0, 1):
+                c_ = dsg[ok][:, j_:j_ + 1]
+                if np.abs(c_).sum() > 0 and len(X_) >= X_.shape[1] + 3 and \
+                        np.linalg.matrix_rank(np.hstack([X_, c_])) == X_.shape[1] + 1:
+                    X_ = np.hstack([X_, c_])
+                    axes.append(j_)
+            inl = np.ones(len(X_), bool)
+            for _ in range(4):                                      # ложные швы (совпадение шума) — прочь
+                sol = np.linalg.lstsq(X_[inl], meas[ok][inl], rcond=None)[0]
+                rs_ = np.hypot(*(X_ @ sol - meas[ok]).T)
+                new = rs_ < max(3.0, 3.0 * 1.48 * float(np.median(rs_[inl])))
+                if new.sum() < 3 or (new == inl).all():
+                    break
+                inl = new
+            model = sol[:2].T
+            for i_, j_ in enumerate(axes):                          # шов: β·Δs (Δs = ±2), кадр: β·s (s = ±1)
+                Bl[:, j_] = sol[2 + i_]
+            ok = ok_
+        base = p @ model.T + sg @ Bl.T
+        base += (pred - base).mean(0)
+        # 5) взвешенный МНК с подавлением выбросов (веса Коши по невязке): шов, не согласный с остальными,
+        #    теряет вес; кадр без надёжных швов держится моделью столика
+        # веса — по точности: σ шва растёт с 1 - NCC (0.01 -> 0.2 px, 0.45 -> 4.6 px); столик держит кадр с σ_st —
+        # его разброс относительно модели по самим швам (как «повторяемость» в MIST)
+        w0 = np.where(err < 1.0, 1.0 / (0.1 + 10.0 * err), 0.0)
+        w0[~ok] = np.minimum(w0[~ok], 0.2)
+        rm_ = np.hypot(*(meas - (base[J] - base[I])).T)[ok & (err < 0.1)]
+        sig_st = float(np.clip(1.48 * np.median(rm_), 0.3, max(max_shift, 0.3))) if len(rm_) >= 5 \
+            else max(max_shift, 0.3)
+        lam = 1.0 / sig_st                                          # σ шага столика между соседями
+        w = w0.copy()
+        pos = base.copy()
+        for cs in (1e9, 30.0, 15.0, 8.0, 5.0, 3.0, 2.0, 2.0):         # масштаб Коши уменьшается постепенно
+            pos = _solve_graph(I, J, meas, w, base, 0.01, x0=pos, rel=lam)
+            res = np.hypot(*(pos[J] - pos[I] - meas).T)
+            w = w0 / (1.0 + (res / cs) ** 2)
+        # как в BigStitcher: худший из ещё сильных швов — прочь, если он сильно хуже остальных; и снова
+        dropped = 0
+        for _ in range(max(1, len(pairs) // 5)):
+            strong_ = np.flatnonzero(w > 0.25 * w0.clip(1e-9))
+            if len(strong_) < 3:
                 break
-            inl = new
-        model = sol[:2].T
-        if len(cols) > 1:
-            Bl = sol[2:].T / 2.0                                # Δs = ±2 при смене направления
-        ok = ok_
-    base = p @ model.T + sg @ Bl.T
-    base += (pred - base).mean(0)
-    # 5) взвешенный МНК с подавлением выбросов (веса Коши по невязке): шов, не согласный с остальными,
-    #    теряет вес; кадр без надёжных швов держится моделью столика
-    w0 = np.where(err < 1.0, np.clip(1.0 - err, 0.05, 1.0), 0.0)
-    w0[ok] = np.maximum(w0[ok], 0.5)
-    w = w0.copy()
-    pos = base.copy()
-    for cs in (1e9, 30.0, 15.0, 8.0, 5.0, 3.0, 2.0, 2.0):         # масштаб Коши уменьшается постепенно
-        k = len(pairs)
-        M = np.zeros((k + n, n))
-        M[np.arange(k), J] = w
-        M[np.arange(k), I] = -w
-        M[k + np.arange(n), np.arange(n)] = 0.01
-        for c in range(2):
-            pos[:, c] = np.linalg.lstsq(M, np.r_[w * meas[:, c], 0.01 * base[:, c]], rcond=None)[0]
-        res = np.hypot(*(pos[J] - pos[I] - meas).T)
-        w = w0 / (1.0 + (res / cs) ** 2)
+            rs_ = res[strong_]
+            k_ = int(np.argmax(rs_))
+            if rs_[k_] <= max(2.5, 3.0 * float(np.mean(rs_))):
+                break
+            w0[strong_[k_]] = 0.0
+            w = w0 / (1.0 + (res / 2.0) ** 2)
+            pos = _solve_graph(I, J, meas, w, base, 0.01, x0=pos, rel=lam)
+            res = np.hypot(*(pos[J] - pos[I] - meas).T)
+            dropped += 1
+        return pos, res, w, w0, dropped, model, Bl, base, ok, Ast, lam
+
+    pos, res, w, w0, dropped, model, Bl, base, ok, Ast, lam = solve_all(meas, err)
+    # 6) модель столика (с люфтом) точна до пикселей: шов, далёкий от неё, — чаще всего соседний период узора
+    #    (кресты решётки на размытом кадре) или совпадение шума. Такой шов меряется заново в узком окне вокруг
+    #    модели; не нашёлся и там — прочь
+    rm = np.hypot(*(meas - (base[J] - base[I])).T)
+    gm = (w0 > 0) & (err < 1.0)
+    sig_m = 1.48 * float(np.median(rm[gm & (err < 0.1)])) if (gm & (err < 0.1)).sum() >= 5 else max_shift
+    thr_m = float(min(max_shift, max(4.0, 5.0 * sig_m)))
+    far = np.flatnonzero(rm > thr_m)
+    refound = 0
+    banned = np.zeros(len(pairs), bool)                         # не сошлись с моделью: второй раунд их не трогает
+    tent = []                                                   # найдены по кадрам целиком: проверка новой моделью
+    if len(far) and thr_m < max_shift:
+        if pr:
+            pr.stage(f"{len(far)} seams far from the stage model: measured again near it")
+        for k in sorted(far, key=lambda k_: pairs[k_]):
+            a, b = pairs[k]
+            db = base[b] - base[a]
+            dt, e = _pair(st, a, b, db, W, H, int(thr_m) + 4, sigma, thr_m)
+            if dt is not None and np.hypot(*(dt - db)) <= thr_m:
+                meas[k], err[k] = dt, e
+                refound += 1
+                continue
+            dt, e = _pair_full(st, a, b, db, W, H, sigma)          # может, модель не знает люфта по этой оси
+            if dt is not None and e < min(thr, 0.99):
+                meas[k], err[k] = dt, e
+                tent.append(k)
+            else:
+                err[k] = 2.0
+                banned[k] = True
+        pos, res, w, w0, dropped, model, Bl, base, ok, Ast, lam = solve_all(meas, err)
+        if tent:                                                # с новой моделью: сошлись — остаются, нет — прочь
+            tent = np.array(tent)
+            bad_ = tent[np.hypot(*(meas[tent] - (base[J[tent]] - base[I[tent]])).T) > thr_m]
+            refound += len(tent) - len(bad_)
+            if len(bad_):
+                err[bad_] = 2.0
+                banned[bad_] = True
+                pos, res, w, w0, dropped, model, Bl, base, ok, Ast, lam = solve_all(meas, err)
+    # 7) второй раунд (как в BigStitcher): где столик ошибся сильно (люфт) или шов не сошёлся с остальными —
+    #    шов меряется заново, предсказание — уже по найденным положениям, окно поиска узкое
+    dpred = np.hypot(*((pos[J] - pos[I]) - (pred[J] - pred[I])).T)
+    redo = np.flatnonzero(((dpred > 3.0) | (res > 1.0) | ((w0 == 0) & (err < 1.5))) & ~banned)
+    redone = 0
+    if len(redo):
+        if pr:
+            pr.stage(f"second round: {len(redo)} seams")
+        ms2 = min(max_shift, max(10.0, 3.0 * float(np.median(np.abs(res[res < 3.0]))) if (res < 3.0).any() else 10.0))
+        for k in sorted(redo, key=lambda k_: pairs[k_]):          # по порядку кадров: кэш
+            a, b = pairs[k]
+            dt, e = _pair(st, a, b, pos[b] - pos[a], W, H, int(ms2) + 4, sigma, ms2, fine=True)
+            if dt is None:
+                dt, e = _pair(st, a, b, pos[b] - pos[a], W, H, int(ms2) + 4, sigma, ms2)
+            if dt is not None and e <= err[k] + 0.02 and \
+                    np.hypot(*(dt - (base[b] - base[a]))) <= thr_m:    # и не дальше от модели, чем окно
+                meas[k], err[k] = dt, e
+                redone += 1
+        if redone:
+            pos, res, w, w0, dropped, model, Bl, base, ok, Ast, lam = solve_all(meas, err)
     keep = (w0 > 0) & (res < 3.0)
     if pr:
         pr.stage(f"{int(keep.sum())} of {len(pairs)} seams accepted")
@@ -294,11 +637,13 @@ def _builtin(st, pred, p, W, H, max_shift, sigma, alpha, verbose, A=None):
     R_ = np.linalg.solve(Ast, model)                              # поворот камеры относительно принятой ориентации
     ang = np.degrees(np.arctan2(R_[1, 0] - R_[0, 1], R_[0, 0] + R_[1, 1]))
     sc = np.sqrt(abs(np.linalg.det(model)))
-    bl_um = np.hypot(*Bl.T) * 2 * (st.meta.get('pixel_size_um') or 1.0)
-    return pos, dict(_seams=dict(I=I, J=J, meas=meas, w=np.where(keep, w, 0.0)),
-                     pairs=len(pairs), accepted=int(keep.sum()), threshold=round(thr, 3),
+    bl_um = np.hypot(*Bl) * 2 * (st.meta.get('pixel_size_um') or 1.0)
+    return pos, dict(_seams=dict(I=I, J=J, meas=meas, w=np.where(keep, np.clip(1.0 - err, 0.05, 1.0) / (1.0 + (res / 2.0) ** 2), 0.0),   # для крестов (anchor): 0..1
+                                    wq=np.where(keep, w, 0.0), w0=w0, err=err, base=base, lam=lam),
+                     pairs=len(pairs), accepted=int(keep.sum()), threshold=round(thr, 3), dropped=dropped, second_round=redone, whole_frames=full,
+                     model_window_px=round(thr_m, 1), far_from_model=int(len(far)), refound_near_model=refound,
                      backlash_um=[round(float(v), 2) for v in bl_um],
-                     residual_px=f"{np.nanmedian(res_k):.2f} median, {np.nanmax(res_k):.2f} max",
+                     residual_px=f"{np.nanmedian(res_k):.2f} median, {np.nanmax(res_k):.2f} max", stage_sigma_px=round(1.0 / lam, 2),
                      camera=f"turn {ang:+.2f} deg, {sc:.4f} px/step", model=model.tolist())
 
 

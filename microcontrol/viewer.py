@@ -122,7 +122,7 @@ HELP_MODE = {
     'look': "S: stitch (preview)  C: crosses  F: frames onto the crosses  N: numbers  T: level  M: select cells (Drafts)  2-5: finer grid of a selection  Y: hints  R: ruler  E: export",
     'cross': "Click: cross exactly there (2 in a row = tilt)  Shift+click: snap to centre  Drag a mark: move  Right click: remove  Shift+C: again  F: frames onto the crosses  C / Esc: done",
     'select': "Click: square  Drag: box  Shift: unselect  Right click: remove a square (Shift: the whole area)  A: all  X: none  Esc: done",
-    'stitch': "Click a frame: its row  Shift+click: its column  Arrows: move it 1 px  Shift+arrows: 10 px  Backspace: automatic stitch  J: save",
+    'stitch': "Click a seam dot: seam off/on  Click a frame: its row  Shift+click: its column  Arrows: 1 px  Shift+arrows: 10 px  Backspace: automatic  J: save",
     'paint': "Drag a rectangle: select all squares in it  Shift+drag: unselect  Click: one square  Right click: remove one (Shift: whole area)  A: all  X: none  Esc: done",
     'label': "Click a square, type its number X Y  Enter: set  Esc: done",
     'ruler': "Click two points: the distance (a third click starts again)  Drag: move  R or Esc: off",
@@ -148,7 +148,9 @@ HELP_ALL = [
     ("", "Right click on green: remove that square (or cell)   Shift + right click: the whole green area"),
     ("Hints", "Y: yellow hints on / off   Shift+Y: select them   < / >: sensitivity -/+ 5   U: type it"),
     ("Export", "E: export the selected squares (PNG + DXF)"),
-    ("Stitch", "J: edit the stitch by hand - click a frame: its row (Shift+click: its column), arrows: move it by 1 px "
+    ("Stitch", "J: edit the stitch by hand - seams are dots coloured by their error (green < 0.5 px, yellow < 1.5, red; "
+               "grey = off): click a dot to switch the seam off or on, the frames are placed again at once; "
+               "click a frame: its row (Shift+click: its column), arrows: move it by 1 px "
                "(Shift: 10), Backspace: back to the automatic stitch, J: save.  K: straight edges (crop the steps)"),
     ("Profiles", "P: two profile lines (cyan, pink) with R, G, B along them, averaged over a band: edges, width, contrast"),
     ("", "Drag the line ends on the map: any tilt and length (Shift: 15 deg)   Click: pin   In the window: drag the edges, wheel: band"),
@@ -896,7 +898,9 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
                     g.save(px_um)
                 st['msg'] = f"Selected {len(g.selected)} squares"
             elif not moved and ev0 == cv2.EVENT_LBUTTONDOWN:
-                if st['mode'] == 'stitch':                  # J: ряд (Shift — столбец) кадра под мышью
+                if st['mode'] == 'stitch' and seam_at((x, y)) is not None:   # J: точка шва — выключить / включить
+                    seam_toggle(seam_at((x, y)))
+                elif st['mode'] == 'stitch':                  # J: ряд (Shift — столбец) кадра под мышью
                     sel_, ids_ = stitch_frames_at(from_view((x + 0.5, y + 0.5)), column=sh0)
                     if ids_:
                         st['edit'].update(sel=sel_, ids=ids_)
@@ -1427,6 +1431,53 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
         img[mk_ == 0] = 20
         return img
 
+    def seams_load():
+        """J: швы последней сшивки — на картинке, цвет по невязке; щелчок по точке шва — выключить / включить."""
+        from .stitch import seams as _seams, seams_edit, resolve
+        ed_ = st['edit']
+        z_ = _seams(folder)
+        if z_ is None or len(z_['I']) == 0 or int(z_['I'].max(initial=0)) >= len(sc.P) \
+                or int(z_['J'].max(initial=0)) >= len(sc.P):
+            ed_['z'] = None
+            return
+        ovr_ = seams_edit(folder)
+        pz_, res_, w_ = resolve(z_, ovr_)
+        sh_ = np.median(sc.P - pz_, 0)                          # от координат сшивки — к картинке
+        ed_.update(z=z_, ovr=ovr_, res=res_, w=w_, sh=sh_, man=sc.P - (pz_ + sh_))   # man: руками и по крестам
+
+    def seam_at(xy):
+        """Шов, чья точка (середина) под мышью (в пикселях окна), или None."""
+        ed_ = st.get('edit') or {}
+        z_ = ed_.get('z')
+        if z_ is None:
+            return None
+        c_ = np.array([sc.W / 2, sc.H / 2])
+        best_ = None
+        for k_ in range(len(z_['I'])):
+            m_ = to_view((sc.P[z_['I'][k_]] + sc.P[z_['J'][k_]]) / 2 + c_)
+            d_ = np.hypot(m_[0] - xy[0], m_[1] - xy[1])
+            if d_ <= 7 and (best_ is None or d_ < best_[0]):
+                best_ = (d_, k_)
+        return None if best_ is None else best_[1]
+
+    def seam_toggle(k_):
+        """Шов k: выключить (включён) / включить (выключен) — и сразу положения кадров заново по всем швам."""
+        from .stitch import resolve
+        ed_ = st['edit']
+        z_ = ed_['z']
+        key_ = (int(z_['I'][k_]), int(z_['J'][k_]))
+        on_ = ed_['w'][k_] > 0
+        ed_['ovr'][key_] = not on_
+        pz_, res_, w_ = resolve(z_, ed_['ovr'])
+        sc.P[:] = pz_ + ed_['sh'] + ed_['man']
+        ed_.update(res=res_, w=w_, moved=True, seams_changed=True)
+        sc.over = None
+        a_, b_ = key_
+        r_ = res_[w_ > 0]
+        st['msg'] = (f"Seam {a_ + 1} + {b_ + 1} {'off' if on_ else 'on'}: frames placed again by "
+                     f"{int((w_ > 0).sum())} seams, error {np.median(r_) if len(r_) else 0:.2f} px median, "
+                     f"{r_.max() if len(r_) else 0:.2f} max. J: save, Backspace: undo all")
+
     def stitch_frames_at(Mc, column=False):
         """Кадры ряда (или столбца) того кадра, что под точкой Mc."""
         P_, W_, H_ = sc.P, sc.W, sc.H
@@ -1458,6 +1509,9 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
         if not ed_.get('moved'):
             return "Stitch not changed"
         jd_ = os.path.join(folder, 'join')
+        if ed_.get('seams_changed') and ed_.get('z') is not None:
+            from .stitch import seams_edit
+            seams_edit(folder, ed_['ovr'])
         jp_ = os.path.join(jd_, 'positions_all.csv')
         bk_ = os.path.join(jd_, 'positions_auto.csv')
         if os.path.exists(jp_) and not os.path.exists(bk_):
@@ -1578,6 +1632,24 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
             b_ = to_view(st['ruler'][1]) if len(st['ruler']) == 2 else st.get('mouse')
             q2 = st['ruler'][1] if len(st['ruler']) == 2 else (from_view(b_) if b_ is not None else None)
             UI.ruler(img, a_, b_, ruler_text(st['ruler'][0], q2) if q2 is not None else "")
+        if st['mode'] == 'stitch' and (st.get('edit') or {}).get('z') is not None:   # швы: цвет по невязке
+            ed_ = st['edit']
+            z_, c_ = ed_['z'], np.array([sc.W / 2, sc.H / 2])
+            for k_ in range(len(z_['I'])):
+                a_ = to_view(sc.P[z_['I'][k_]] + c_)
+                b_ = to_view(sc.P[z_['J'][k_]] + c_)
+                m_ = ((a_[0] + b_[0]) / 2, (a_[1] + b_[1]) / 2)
+                if not (-20 < m_[0] < img.shape[1] + 20 and -20 < m_[1] < img.shape[0] + 20):
+                    continue
+                r_ = ed_['res'][k_]
+                col_ = (110, 110, 110) if ed_['w'][k_] <= 0 else (80, 200, 80) if r_ < 0.5 else \
+                    (0, 210, 255) if r_ < 1.5 else (60, 60, 255)
+                if np.hypot(b_[0] - a_[0], b_[1] - a_[1]) > 24:
+                    cv2.line(img, (int(round(a_[0])), int(round(a_[1]))), (int(round(b_[0])), int(round(b_[1]))),
+                             col_, 1, cv2.LINE_8)
+                cv2.circle(img, (int(round(m_[0])), int(round(m_[1]))), 3, col_, -1, cv2.LINE_8)
+                if ed_['w'][k_] <= 0:
+                    cv2.circle(img, (int(round(m_[0])), int(round(m_[1]))), 5, col_, 1, cv2.LINE_8)
         if st['mode'] == 'stitch' and (st.get('edit') or {}).get('ids'):   # кадры, которые двигают
             for i_ in st['edit']['ids']:
                 p_ = sc.P[i_]
@@ -2364,6 +2436,10 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
             ed_ = st['edit']
             sc.P[:] = ed_['orig']
             ed_['moved'] = False
+            se_ = os.path.join(folder, 'join', 'seams_edit.json')
+            if os.path.exists(se_) and os.path.exists(os.path.join(folder, 'join', 'positions_auto.csv')):
+                os.remove(se_)
+            seams_load()
             bk_ = os.path.join(folder, 'join', 'positions_auto.csv')
             if os.path.exists(bk_):                         # и сохранённые раньше правки — тоже
                 import shutil as _sh
@@ -2387,8 +2463,10 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
             else:
                 st['mode'] = 'stitch'
                 st['edit'] = dict(orig=sc.P.copy(), ids=[], sel=None, moved=False)
-                st['msg'] = ("Edit the stitch: click a frame - its row (Shift+click: its column); arrows move it by 1 px "
-                             "(Shift: 10); Backspace: back to the automatic stitch; J: save")
+                seams_load()
+                st['msg'] = ("Edit the stitch: dots are seams (green good, yellow so-so, red bad, grey off) - click one "
+                             "to switch it off or on; click a frame - its row (Shift+click: its column), arrows move it "
+                             "by 1 px (Shift: 10); Backspace: back to the automatic stitch; J: save")
         elif ch == 'k':                                     # K: ровные края (без ступенек) / вся мозаика
             st['crop'] = not st.get('crop', True)
             st['inner'] = None

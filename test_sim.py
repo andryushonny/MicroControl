@@ -1490,7 +1490,8 @@ gq = meas_gray(img4[..., :3]); errs = []; r_ = int(15 / res)
 for X in range(12, 16):
     for Y in range(7, 10):
         q = (np.array([X - 1, Y - 1], float) - uv0) * 100 / res - 0.5; x, y = int(round(q[0])), int(round(q[1]))
-        if x - 2 * r_ >= 0 and y - 2 * r_ >= 0 and x + 2 * r_ < gq.shape[1] and y + 2 * r_ < gq.shape[0]:
+        if x - 2 * r_ >= 0 and y - 2 * r_ >= 0 and x + 2 * r_ < gq.shape[1] and y + 2 * r_ < gq.shape[0] and \
+                img4[y - r_:y + r_ + 1, x - r_:x + r_ + 1, 3].min() == 255:   # крест целиком на мозаике (не срезан краем)
             d, resp = snap_cross(gq[y - 2 * r_:y + 2 * r_ + 1, x - 2 * r_:x + 2 * r_ + 1], r_)
             if resp > 0.1:
                 errs.append(np.hypot(*(np.array([x, y]) + d - q)) * res)
@@ -2016,3 +2017,110 @@ m.last_scans = []; m.goto(x=2000, y=1500)
 M.run(m, fullscreen=False, _keys=[-1, ord('1'), -1, ord('s'), -1, -1])                 # угол 1 новой: не снимать
 assert m.last_scans == [] and m._pending is not None, (m.last_scans, m._pending)
 m.close(); print("Scan takes what is selected on the right: one card, a whole group; a new area without corner 2 waits: OK")
+
+# ------------------------------------------------------------------ 50. Сшивка тысяч кадров: доли пикселя, ошибка столика не тянет шов, люфт, разреженный решатель; швы в просмотре (J)
+import importlib, csv as _csv
+ST = importlib.import_module('microcontrol.stitch')
+rng = np.random.default_rng(3)
+big = cv2.GaussianBlur(rng.random((900, 1400)).astype(np.float32), (0, 0), 2.0)
+class _St:
+    def __init__(s, imgs): s.imgs = imgs
+    def frame(s, i, roi=None):
+        im = s.imgs[i] if roi is None else s.imgs[i][roi[1]:roi[3], roi[0]:roi[2]]
+        return np.clip(im * 255, 0, 255).astype(np.uint8)
+e_sub = []
+for t in np.linspace(0, 1, 6):
+    tr = np.array([576 + t, 3.3 * t])
+    b_ = cv2.warpAffine(big, np.float32([[1, 0, -(100 + tr[0])], [0, 1, -(100 + tr[1])]]), (640, 480), flags=cv2.INTER_CUBIC)
+    for off in ((0, 0), (5, -6)):                                         # столик ошибся на 5, -6 px
+        dt, _ = ST._pair(_St([big[100:580, 100:740], b_]), 0, 1, tr + off, 640, 480, 40, 0.0, 40)
+        e_sub.append(np.hypot(*(dt - tr)))
+assert max(e_sub) < 0.03, e_sub
+# разреженный решатель: 3000 кадров, швы с шумом -> то же, что плотный МНК (на 300), и быстро
+nx_, ny_ = 60, 50
+X_ = np.array([[i * 500.0, j * 400.0] for j in range(ny_) for i in range(nx_)]) + rng.normal(0, 3, (nx_ * ny_, 2))
+I_, J_ = [], []
+for j in range(ny_):
+    for i in range(nx_):
+        k = j * nx_ + i
+        if i + 1 < nx_: I_.append(k); J_.append(k + 1)
+        if j + 1 < ny_: I_.append(k); J_.append(k + nx_)
+I_, J_ = np.array(I_), np.array(J_)
+M_ = X_[J_] - X_[I_] + rng.normal(0, 0.1, (len(I_), 2)); w_ = np.ones(len(I_))
+base_ = np.array([[i * 500.0, j * 400.0] for j in range(ny_) for i in range(nx_)])
+t0 = time.time(); P_ = ST._solve_graph(I_, J_, M_, w_, base_, 0.01, rel=0.3); t_cg = time.time() - t0
+e_ = (P_ - P_.mean(0)) - (X_ - X_.mean(0))
+assert np.percentile(np.hypot(*e_.T), 95) < 1.0 and t_cg < 5, (np.percentile(np.hypot(*e_.T), 95), t_cg)
+# скан с люфтом 3 шага: истина — положения столика в момент снимка
+m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp()); w = m._world
+w.backlash = {'x': 3, 'y': 3}
+rec_, th_ = [], []
+_f0 = w._frame
+def _fr(*a, **k):
+    p_ = w.p; sp_, sm_ = w._p, w.motion
+    w._p, w.motion = {**sp_, **p_}, None
+    try:
+        im_ = _f0(*a, **k)
+    finally:
+        w._p, w.motion = sp_, sm_
+    rec_.append((p_['x'], p_['y']))
+    th_.append(cv2.resize(cv2.cvtColor(im_, cv2.COLOR_BGR2GRAY), (64, 48), interpolation=cv2.INTER_AREA).astype(np.float32))
+    return im_
+w._frame = _fr
+m.focus(); fw, fh = m.frame_size
+m.area = mc.Area(0, 0, 5 * fw * 0.9, 3 * fh * 0.9); f = m.scan()
+r_ = mc.stitch(f, verbose=False)
+fo = f if os.path.exists(os.path.join(f, 'join')) else next(os.path.join(f, d_) for d_ in sorted(os.listdir(f)) if os.path.exists(os.path.join(f, d_, 'join')))
+from microcontrol.storage import ScanData, meta_A
+st_ = ScanData(fo); H_, W_ = st_.shape[:2]; A_ = meta_A(st_.meta, W_, H_)
+T_ = []
+for i in range(len(st_)):                                                 # снимок кадра i — тот, что совпадает картинкой
+    raw_ = st_._jpg(st_.index[i]['file'])
+    t_ = cv2.resize(cv2.cvtColor(raw_, cv2.COLOR_BGR2GRAY), (64, 48), interpolation=cv2.INTER_AREA).astype(np.float32)
+    T_.append(rec_[int(np.argmin([np.abs(q_ - t_).mean() for q_ in th_]))])
+st_.close()
+T_ = -(np.array(T_, float) @ A_.T)
+P_ = np.array([[float(q['x_px']), float(q['y_px'])] for q in _csv.DictReader(open(os.path.join(fo, 'join', 'positions_all.csv')))])
+e_ = (P_ - P_.mean(0)) - (T_ - T_.mean(0)); e_ -= np.median(e_, 0)
+info_ = json.load(open(os.path.join(fo, 'join', 'stitch.json')))
+assert np.hypot(*e_.T).max() < 1.0, (np.hypot(*e_.T).max(), info_)
+from microcontrol.sim import UM_PER_STEP
+assert all(abs(v - 3 * UM_PER_STEP) < 0.5 for v in info_['backlash_um']), info_['backlash_um']
+# J: швы точками; щелчок — выключить, ещё раз — включить; выключить и сохранить; заново — помнится; Backspace — как было
+z_ = ST.seams(fo); assert z_ is not None
+k_ = int(np.argmax(z_['w']))
+box_ = {}
+def _keys50(save):
+    yield -1; yield ord('j'); yield -1
+    yield ('call', lambda st: box_.update(st=st)); yield -1
+    ed_ = box_['st']['edit']; assert ed_.get('z') is not None
+    c_ = (ed_['orig'][z_['I'][k_]] + ed_['orig'][z_['J'][k_]]) / 2 + (W_ / 2, H_ / 2)
+    P0_ = ed_['orig'].copy()
+    yield ('qclick', float(c_[0]), float(c_[1])); yield -1
+    key_ = (int(z_['I'][k_]), int(z_['J'][k_]))
+    assert ed_['ovr'].get(key_) is False and ed_['w'][k_] == 0 and ed_['moved'], (ed_['ovr'], key_)
+    d_ = np.abs(box_['st']['edit']['res']).max()
+    if not save:
+        yield ('qclick', float(c_[0]), float(c_[1])); yield -1
+        assert ed_['ovr'].get(key_) is True and ed_['w'][k_] > 0
+        yield 27; yield 27
+    else:
+        yield ord('j'); yield -1; yield -1; yield 27; yield 27
+mc.view(fo, _keys=_keys50(False))
+mc.view(fo, _keys=_keys50(True))
+se_ = json.load(open(os.path.join(fo, 'join', 'seams_edit.json')))
+assert [int(z_['I'][k_]), int(z_['J'][k_]), False] in se_, se_
+assert os.path.exists(os.path.join(fo, 'join', 'positions_auto.csv'))
+def _keys50b():
+    yield -1; yield ord('j'); yield -1
+    yield ('call', lambda st: box_.update(st=st)); yield -1
+    ed_ = box_['st']['edit']
+    assert ed_['ovr'].get((int(z_['I'][k_]), int(z_['J'][k_]))) is False and ed_['w'][k_] == 0
+    yield 8; yield -1; yield -1; yield 27; yield 27
+mc.view(fo, _keys=_keys50b())
+assert not os.path.exists(os.path.join(fo, 'join', 'seams_edit.json')) and \
+    not os.path.exists(os.path.join(fo, 'join', 'positions_auto.csv'))
+m.close()
+print(f"Stitch: seam to {max(e_sub):.3f} px (stage off by 8 px: same), 3000 frames solved in {t_cg:.2f} s, scan with "
+      f"backlash: frames to {np.hypot(*e_.T).max():.2f} px, backlash {info_['backlash_um']} um found; J: seam dots "
+      "off / on, saved, remembered, Backspace back to automatic: OK")

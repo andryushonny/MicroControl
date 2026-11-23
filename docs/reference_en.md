@@ -519,28 +519,50 @@ The whole mosaic is never assembled in memory: the viewer and the export take on
 
 ### 12.1. Overlap stitching (`mc.stitch`)
 
-The method follows ASHLAR (Muhlich et al., *Bioinformatics* 38, 4613, 2022; MIT licence), without Java.
+Built on the ideas of ASHLAR (Muhlich et al., *Bioinformatics* 38, 4613, 2022), MIST (Chalfoun et al., *Sci. Rep.* 7, 4988, 2017) and BigStitcher (Hörl et al., *Nat. Methods* 16, 870, 2019; Preibisch et al., *Bioinformatics* 25, 1463, 2009); our own implementation, without Java. Designed for hundreds and thousands of frames.
 
-1. **Neighbours** — pairs of frames whose rectangles predicted by the stage overlap by at least 30 % of the largest overlap (diagonal corners are dropped).
-2. **Pair shift** — phase correlation over the common part of the frames. The strips are filtered by a Laplacian of Gaussian ($\sigma = 1$ px for a pixel < 0.5 µm: details stay, the smooth background goes), multiplied by a Hann window and zero-padded twice (no wrap-around of the correlation). The seam error $e = 1 - \mathrm{NCC}$ after alignment. A shift farther than `max_shift_um` = 40 µm from the prediction is dropped.
-3. **Permutation test.** The same geometry, but a distant frame instead of the neighbour: errors of surely false pairs. The threshold is their 1st percentile.
-4. **Stage → pixels model** from the accepted seams: $\mathbf{d}_{ij} = M\,\Delta\mathbf{p}_{ij} + B\,\Delta\mathbf{s}_{ij}$. $M$ ($2\times2$) accounts for the camera rotation relative to the stage axes, an inexact motor step and skew; $\mathbf{s}_k = (\mathrm{sign}\Delta x, \mathrm{sign}\Delta y)$ is the side from which the stage approached frame $k$, $B$ the backlash (offset when the direction changes, reported in µm). A frame without reliable seams is placed by this model.
-5. **Positions** — weighted least squares
+1. **Neighbours** — pairs of frames whose rectangles predicted by the stage overlap by at least 30 % of the largest overlap (diagonal corners are dropped). Found through a grid of frame-sized cells, not all against all.
+2. **Pair shift, coarse.** The strips of the common part are filtered by a Laplacian of Gaussian (details stay, the smooth background goes), reduced to about $3\cdot10^4$ px, multiplied by a Hann window and zero-padded twice. Correlation with a partly normalised spectrum
+   ```math
+   r = \mathcal{F}^{-1}\!\left[\frac{F_B F_A^{*}}{|F_B F_A^{*}|^{0.25}}\right]
+   ```
+   Pure phase correlation (power 1) raises the high frequencies where, after the filter, only noise and the sensor pattern are left; they are tied to the frame, and their peak sits at the stage prediction. With power 0.25 the found shift does not depend on the stage error. The 5 highest peaks within `max_shift_um` = 40 µm of the prediction are candidates; each is checked by the match of the pictures ($e = 1 - \mathrm{NCC}$), the best one wins (repeating patterns, noise).
+3. **Pair shift, fine** — Lucas–Kanade on the full-resolution common part:
+   ```math
+   \boldsymbol\delta = (G^{\top}G)^{-1}G^{\top}(a - \tilde b),\qquad G = \nabla\tilde b,
+   ```
+   where $\tilde b$ is frame $b$ moved by the current shift (brightness and contrast equalised); 2–6 steps. No pull towards whole pixels (phase correlation peaks have it: up to 0.18 px per seam, it adds up along a row): on a test texture the error is 0.003 px.
+4. **Permutation test.** The same geometry, but a distant frame instead of the neighbour: errors of surely false pairs. The threshold is their 1st percentile. A seam not found near the prediction is searched over the **whole frames** without the stage (as in MIST): the stage may be off by more than the overlap (backlash at 50x and 100x).
+5. **Stage → pixels model** from the accepted seams: $\mathbf{d}_{ij} = M\,\Delta\mathbf{p}_{ij} + B\,\Delta\mathbf{s}_{ij}$. $M$ ($2\times2$) accounts for the camera rotation, an inexact motor step and skew; $\mathbf{s}_k$ is the side from which the stage approached frame $k$ (written by the scan, `dir_x`, `dir_y`), $B$ the backlash per axis (only where it can be told from the step). Frame position by the model: $\hat{\mathbf{r}}_k = M\mathbf{p}_k + B\mathbf{s}_k$.
+6. **Seams far from the model.** The model is accurate to a pixel or two, so a seam more than $\max(4, 5\sigma_m)$ px from it ($\sigma_m = 1.48\,\mathrm{med}\,|\mathbf{d}_{ij} - (\hat{\mathbf{r}}_j - \hat{\mathbf{r}}_i)|$) is usually the neighbouring period of a pattern (crosses on a blurred frame) or a match of noise. It is measured again in a narrow window around the model; seams found over the whole frames stay only if they agree with the model built with them (a backlash axis the first model did not know); the rest are dropped.
+7. **Positions** — sparse weighted least squares (conjugate gradients with a diagonal preconditioner, no dense matrices: 3000 frames in 0.2 s):
+   ```math
+   \min \sum_{(i,j)} \frac{\bigl|\mathbf{r}_j - \mathbf{r}_i - \mathbf{d}_{ij}\bigr|^2}{\sigma_{ij}^2}
+   + \sum_{(i,j)} \frac{\bigl|\mathbf{r}_j - \mathbf{r}_i - (\hat{\mathbf{r}}_j - \hat{\mathbf{r}}_i)\bigr|^2}{\sigma_{st}^2}
+   + \varepsilon^2\sum_i \bigl|\mathbf{r}_i - \hat{\mathbf{r}}_i\bigr|^2,
+   ```
+   $\sigma_{ij} = 0.1 + 10\,e_{ij}$ px (a weak match is a coarse measurement), $\sigma_{st}$ — scatter of the stage step against the model, measured on the good seams (the "repeatability" of MIST), $\varepsilon = 0.01$. The stage holds the **step between neighbours**, not the place of a frame: its error is smooth, neighbours move together. Outliers: Cauchy weights with the scale going from $\infty$ down to 2 px; then, as in BigStitcher, the worst of the strong seams is removed while it is much worse than the rest.
+8. **Second round.** Where the stage was far off or a seam disagrees with the others, the seam is measured again starting from the found positions (Lucas–Kanade only; the full search if it fails), and the positions are solved again.
 
-```math
-\min \sum_{(i,j)} w_{ij}\,\bigl|\mathbf{r}_j - \mathbf{r}_i - \mathbf{d}_{ij}\bigr|^2 + \varepsilon\sum_i \bigl|\mathbf{r}_i - M\mathbf{p}_i\bigr|^2,\qquad \varepsilon = 0.01,
-```
+The seams are saved (`join/seams.npz`): the viewer places the frames again from them in a fraction of a second when a seam is switched off or on (`J`, 12.2).
 
-with outlier suppression: $w_{ij} = w^0_{ij}/\bigl(1 + (\rho_{ij}/c)^2\bigr)$, $\rho$ the seam residual, $c$ decreasing from $\infty$ to 2 px (first a rough solution, then inconsistent seams lose weight). $w^0 = 1 - e$. A frame without reliable seams is held by the stage model.
+Simulator check (10x, backlash 3 steps = 16.7 µm, positions against the true stage positions):
 
-Simulator check (substrate turned by 1.2°, motor step off by +1.5 / +1.2 %, drift ±1 step per move, 42 frames): frame position error by the stage — up to 63 px; after stitching — 3.3 px (RMS), seams 0.15 px (median). Real ASHLAR (`mc.stitch(folder, engine='ashlar')`, needs `pip install ashlar` and Java) on the same frames — 9.8 px.
+| scan | error before (median / p95 / max, px) | now |
+|---|---|---|
+| 10x, 208 frames | 0.99 / 135 / 136 | 0.11 / 0.22 / 0.28 |
+| 10x, 1044 frames (458 blurred: tilted sample) | 3.2 / 41 / 199 | 0.40 / 1.3 / 1.6 |
+| 50x, 56 frames, backlash 1 step | 4.0 / 183 / 185 | 0.32 / 0.72 / 0.80 |
+| 100x, 77 frames, backlash 1 step | 175 / 247 / 371 | 0.68 / 1.65 / 1.99 |
+
+Time: 1044 frames of 640 × 480 in 65 s on 2 cores. Backlash found: 16.7 µm (true 16.7). Real ASHLAR: `mc.stitch(folder, engine='ashlar')` (needs `pip install ashlar` and Java).
 
 **Optical corrections** (applied when frames are read for stitching, viewing and export):
 - *illumination*: field $F_c(x, y)$ for each colour $c$ — median of up to 60 frames, each divided by its own median, smoothed, $\langle F_c\rangle = 1$; frame $I'_c = I_c/F_c$ (`join/flatfield.npy`);
 - *frame brightness*: gains $a_i$ per frame and colour from the overlaps, $I''_i = a_i I'_i$ (`join/gains.npy`); both are computed at every stitch, `flat=False` — without them;
 - *distortion* (12.5), if it was measured for this microscope and objective.
 
-Result: `join/positions_all.csv`, `join/stitch.json`, `join/preview_all.jpg` (reduced mosaic), `viewer/levels/` (frames reduced 2, 4, 8 times — for the viewer on large scans).
+Result: `join/positions_all.csv`, `join/stitch.json`, `join/seams.npz` (seams), `join/preview_all.jpg` (reduced mosaic), `viewer/levels/` (frames reduced 2, 4, 8 times — for the viewer on large scans).
 
 ### 12.2. Marking in the viewer (`mc.view`)
 
@@ -557,7 +579,7 @@ Result: `join/positions_all.csv`, `join/stitch.json`, `join/preview_all.jpg` (re
 | `2`…`5` · `1` | over a selection: its own grid 2–5 times denser (`M` then selects its cells) · no finer grid |
 | `Y` · `Shift+Y` · `<` `>` | hints · take the hints · sensitivity |
 | `T` | picture level / as shot |
-| `J` · `K` | edit the stitch by hand: click a frame — its row (Shift+click — its column), arrows move it by 1 px (Shift — 10 px), Backspace — back to the automatic stitch, `J` — save (the automatic one stays in `join/positions_auto.csv`) · straight edges: the steps at the borders are cut off (again — the whole mosaic) |
+| `J` · `K` | edit the stitch by hand: seams are dots coloured by their error (green < 0.5 px, yellow < 1.5 px, red; grey — off), a click on a dot switches the seam off or on and the frames are placed again at once from the others; click a frame — its row (Shift+click — its column), arrows move it by 1 px (Shift — 10 px), Backspace — back to the automatic stitch, `J` — save (the automatic one stays in `join/positions_auto.csv`, the seams switched by hand — in `join/seams_edit.json`) · straight edges: the steps at the borders are cut off (again — the whole mosaic) |
 | `P` | profiles window (as Plot Profile in ImageJ, Profile in Gwyddion): two lines, cyan and pink, with R, G, B along them averaged over a band. On a cross they lie across its arms and cross each other. Drag the squares at their ends on the map — any tilt and length (`Shift` — 15° steps), the `x` in the middle — move a line, the diamond — both. Click — pin / unpin. In the window: a zoomed preview with the lines and edges, width in µm, contrast, angles; drag the yellow edges; wheel on a plot — Y scale (the same for both, click `Y` — auto), elsewhere — band width; right click — auto edges. The edges are drawn as ticks on the map, in the preview and on the map of the manual mode |
 | `R` | ruler: two clicks — the distance |
 | `E` | export: square pictures + the drawing (DWG / DXF), progress in the window |

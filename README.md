@@ -84,12 +84,14 @@ Squares selected in the viewer become a **Draft** — a sketch that is never sca
 
 | | |
 |---|---|
-| ![Map zoomed in: 10x overview, Draft 2 with its 1/4 grid, Selection 4 (50x) and Selection 5 (100x) inside it](docs/img/map_zoom.jpg) | ![The 50x scan: its grid comes from the sample lattice — tilt and pitch match the overview, no crosses marked](docs/img/view_50x.jpg) |
+| ![Big map (Tab): 10x overview with drafts, 50x and 100x inside, the red grid of the selected area, the camera in the corner](docs/img/map_zoom.jpg) | ![The 50x scan: its grid comes from the sample lattice — tilt and pitch match the overview, no crosses marked](docs/img/view_50x.jpg) |
 | *Layers on the map: 10x → Draft (grid 1/4) → 50x → 100x, the camera in the corner* | *50x scan: the grid comes from the crosses marked before — its own, else the 10x around it (no crosses to mark), 1/4 and 1/8 cells* |
 | ![Export of the sample: the tilted scan is drawn square to the lattice, crosses with numbers from 1,1](docs/img/export.jpg) | ![Export, close-up: 10x picture, Draft 2 squares, 50x cells 1/4 and 100x cells 1/8 with their addresses](docs/img/export_zoom.jpg) |
 | *Drawing for AutoCAD: the 2.5° tilted chip comes out square to the lattice, crosses from 1,1* | *Close-up: every cell is a closed square on its own layer, address 16,10 > 2,3 > 1,1* |
 
 ## Accuracy for lithography
+
+![Profiles (P): two lines across the arms of a cross, R, G, B along them, the edges in yellow on the map, in the preview and on the plots](docs/img/profiles.jpg)
 
 The drawing is used to write a circuit over the flakes, so every picture in it is placed **by the crosses around it**, not by the stage. What matters, and what the program does about it:
 

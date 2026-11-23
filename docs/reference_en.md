@@ -564,6 +564,8 @@ Result: `join/positions_all.csv`, `join/stitch.json`, `join/preview_all.jpg` (re
 | `Ctrl+Z` · `Ctrl+Y` | undo · redo any change |
 | `Esc` · `H` · `Shift+Esc` | leave the mode · all keys · exit |
 
+![Profiles (P): two lines across the arms of a cross, R, G, B along them, the edges in yellow on the map, in the preview and on the plots](img/profiles.jpg)
+
 The lattice is always **square**: $\mathbf{v}_2$ is $\mathbf{v}_1$ turned by 90° (no skew, no "projection"); there are four unknowns — origin $\mathbf{O}$, pitch and tilt — found by least squares from the marks. Two neighbouring crosses are enough; far crosses reduce the tilt error in proportion to the distance. The `F` key optionally fits the same square lattice to all crosses of the mosaic. Simulator check (tilt 3.5°): 2 neighbouring crosses and 2 far ones — pitch 99.998 µm, tilt 3.494°. Marks and selection are stored in `grid.json` (in mosaic pixels; after a new stitch the marks must be made again).
 
 **Cross centre** is found by a "+" template with a dark rim (it fits thin dark crosses as well as raised light ones with an outline); each candidate is checked for the cross symmetry under 90° and 180° rotation — the lithography numbers next to a cross are not symmetric this way and do not pull the centre. The cross size (arm, px) is chosen automatically when the lattice is fitted to all crosses: the one with which the found centres lie best on the lattice, stored in `grid.json` (`arm_px`). Check on sample images with numbers at the crosses: lattice over 13 crosses — 0.52 px RMS, over 11 crosses — 1.1 px. On a whole 4x frame the crosses deviate from a straight lattice by up to ~7 px towards the edges — this is lens distortion (`mc.distortion`).
@@ -730,7 +732,7 @@ The `F` (feed) parameter is not supported (`E902`): the speed is set by the cont
 
 | | |
 |---|---|
-| ![Map zoomed in: 10x overview, Draft 2 with its 1/4 grid, Selection 4 (50x) and Selection 5 (100x) inside it](img/map_zoom.jpg) | ![The 50x scan: its grid comes from the sample lattice — tilt and pitch match the overview, no crosses marked](img/view_50x.jpg) |
+| ![Big map (Tab): 10x overview with drafts, 50x and 100x inside, the red grid of the selected area, the camera in the corner](img/map_zoom.jpg) | ![The 50x scan: its grid comes from the sample lattice — tilt and pitch match the overview, no crosses marked](img/view_50x.jpg) |
 | *Layers on the map: 10x → Draft (grid 1/4) → 50x → 100x, the camera in the corner* | *50x scan: the grid comes from the crosses marked before — its own, else the 10x around it (no crosses to mark), 1/4 and 1/8 cells* |
 | ![Export of the sample: the tilted scan is drawn square to the lattice, crosses with numbers from 1,1](img/export.jpg) | ![Export, close-up: 10x picture, Draft 2 squares, 50x cells 1/4 and 100x cells 1/8 with their addresses](img/export_zoom.jpg) |
 | *Drawing for AutoCAD: the 2.5° tilted chip comes out square to the lattice, crosses from 1,1* | *Close-up: every cell is a closed square on its own layer, address 16,10 > 2,3 > 1,1* |

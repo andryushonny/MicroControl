@@ -782,6 +782,7 @@ def _run(m, fullscreen=False, _keys=None):
         y -= UI.MENU_H + UI.TOOL_H
         if nv['press'] is not None or nv['pan'] is not None or \
                 (nv['mr'] is not None and in_rect(nv['mr'], x, y) and (not nv['big'] or not in_rect(nv['inset'], x, y))
+                 and not (nv['big'] and nv.get('pbox') and in_rect(nv['pbox'], x, y))
                  and not zm['pan'] and not mdr['on']):            # большая карта или маленькая в углу
             mx_, my_ = x - nv['mr'][0], y - nv['mr'][1]                # карта (как в стратегиях: щёлкнул — поехал)
             if ev == cv2.EVENT_LBUTTONDBLCLK:
@@ -1065,6 +1066,14 @@ def _run(m, fullscreen=False, _keys=None):
         pr_ = pending_ring()
         if pr_ is not None:                                 # новая область (угол 1 — столик): пунктир её цвета
             nav.poly(mp, pr_, SM.col(m, len(m._regions)), 2, dashed=True)
+        for _n, k_, p_ in SM.numbered(m):                  # точки фокуса — точками цвета своей области
+            if k_ >= 0 and (SM.hidden(m, k_) or m._regions[k_].get('kind') == 'group'):
+                continue
+            q_ = nav.to_px((p_['x'], p_['y']))
+            if 0 <= q_[0] < mp.shape[1] and 0 <= q_[1] < mp.shape[0]:
+                c_ = SM.col(m, k_ if k_ >= 0 else len(m._regions))
+                cv2.circle(mp, (int(round(q_[0])), int(round(q_[1]))), 3, (20, 20, 20), -1, cv2.LINE_AA)
+                cv2.circle(mp, (int(round(q_[0])), int(round(q_[1]))), 2, c_, -1, cv2.LINE_AA)
         nav.poly(mp, cam, (40, 230, 255), 2)                # камера здесь
         cx_, cy_ = nav.to_px(cam.mean(0))
         cv2.drawMarker(mp, (int(cx_), int(cy_)), (40, 230, 255), cv2.MARKER_CROSS, 10, 1, cv2.LINE_AA)
@@ -1603,8 +1612,6 @@ def _run(m, fullscreen=False, _keys=None):
             export_drawing()
         elif what[1] == "Settings":
             m._panel_hidden = not getattr(m, '_panel_hidden', False)
-            if nv['big'] and not m._panel_hidden:
-                nv['big'] = m._nav_big = False
 
     def menu_do(item):
         """Пункт меню: открыть / создать проект и образец, сведения, съёмки, просмотр, подсказка."""
@@ -2130,6 +2137,9 @@ def _run(m, fullscreen=False, _keys=None):
             FS = 0.55 * sc
             th0 = UI.size("Xg", FS)[1]
             LH = th0 + 16
+            nav_early = nv['big']                            # большая карта — под панелью, а не панель в углу
+            if nav_early:
+                draw_nav(view, Wl, th0 + 20, img.shape)
             rects = {}
             ops = []                                         # (что рисовать) — сначала размеры, потом панель
             x_l = 22
@@ -2237,6 +2247,7 @@ def _run(m, fullscreen=False, _keys=None):
                 th_ = int(72 * sc)
                 rects.clear()                                # невидимые поля не нажимаются
                 rects['panel'] = (0, 12, tw_, 12 + th_)
+                nv['pbox'] = rects['panel']
                 hv_ = hov_(rects['panel'])
                 UI.panel(view, 0, 12, tw_, 12 + th_, 0.9)
                 UI.round_rect(view, -8, 12, tw_, 12 + th_, 8, UI.ACCENT if hv_ else UI.LINE, 1)
@@ -2249,6 +2260,7 @@ def _run(m, fullscreen=False, _keys=None):
                 ops = []
             else:
                 UI.panel(view, 8, 8, right + 44, y - LH + 16, 0.82, UI.LINE)
+                nv['pbox'] = (8, 8, right + 44, y - LH + 16)  # щелчки по панели — ей, не карте под ней
                 bs_ = int(26 * sc)
                 rects['panel'] = (right + 34 - bs_, 16, right + 34, 16 + bs_)    # кнопка «спрятать»
                 hv_ = hov_(rects['panel'])
@@ -2293,7 +2305,8 @@ def _run(m, fullscreen=False, _keys=None):
             bh_ = th0 + 20
             UI.panel(view, 0, H - bh_, Wl, H, 0.82)
             UI.facts(view, [t_.strip() for t_ in line.split("    ") if t_.strip()] + ["H: keys"], 14, H - 10, FS)
-            draw_nav(view, Wl, bh_, img.shape)
+            if not nav_early:
+                draw_nav(view, Wl, bh_, img.shape)
             if msg and time.monotonic() - msg_t < 5:
                 UI.toast(view, msg, Wl / 2, H - bh_ - 20, FS, 'err' if msg.startswith('[E') else 'ok', Wl - 60)
             items = car_items()

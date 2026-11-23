@@ -673,12 +673,12 @@ def update_lattice(m):
         except Exception:
             return False
     if best is None:
-        if old is not None and not alive(old):          # кресты стёрли (Shift+C) или съёмку удалили: решётки нет
+        if old is not None and not old.get('stage') and not alive(old):   # кресты стёрли или съёмку удалили
             m.sample.data.pop('lattice', None)
             m.sample.save()
             return True
         return False
-    if old and old.get('numbered') and not best[0]['numbered'] and old.get('src') != best[0].get('src') \
+    if old and not old.get('stage') and old.get('numbered') and not best[0]['numbered'] and old.get('src') != best[0].get('src') \
             and alive(old):
         return False                                    # номера другой съёмки остаются; своя сетка заменяет свою
     if old is None or any(not np.allclose(old[k], best[0][k], atol=1e-3) for k in ('O', 'e1', 'e2')) \

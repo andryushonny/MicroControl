@@ -1888,6 +1888,14 @@ def _run(m, fullscreen=False, _keys=None):
                 cv2.imshow(WIN, np.vstack([menu_img(W), pic_]))
                 cv2.waitKey(1)
             _view(f_, fullscreen=fullscreen, _keys=keys)          # в тестах — те же нажатия
+            try:                                           # решётку по столику просмотр мог записать в образец
+                sm_ = getattr(m, '_sample', None)
+                if sm_ is not None and sm_.data.get('lattice') is None:
+                    L_disk_ = json.load(open(sm_.file, encoding='utf-8')).get('lattice')
+                    if L_disk_ is not None:
+                        sm_.data['lattice'] = L_disk_
+            except Exception:
+                pass
         except Exception as e:                             # просмотр закрылся с ошибкой — окно микроскопа живёт
             err_ = e
         finally:

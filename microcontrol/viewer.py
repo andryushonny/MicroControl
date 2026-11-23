@@ -289,6 +289,58 @@ def _view(folder, fullscreen=False, sensitivity=None, _keys=None):
     cv2.waitKey(1)
 
 
+def _seed(folder, g, LAT, smp0, sc, px_um):
+    """Сетка без своих крестов — из решётки LAT (выделения, большего вокруг, образца или по столику):
+    подставлена (seeded), кисть прежних съёмок перенесена, затем притянута к крестам этих кадров, если они есть.
+    -> (Grid, сообщение)."""
+    from . import lattice as LT
+    from .mask import Grid
+    import time as _t
+    msg_ = ""
+    LT.seed_grid(folder, g, LAT)
+    if not LAT.get('numbered'):                             # номеров нет — подписи не выдумывать
+        g.labels = {}
+    g.save(px_um)
+    d_ = json.load(open(os.path.join(folder, 'grid.json'), encoding='utf-8'))
+    d_['seeded'] = True
+    d_['brush_t'] = _t.time()                               # новая съёмка — теперь главная для кисти
+    d_['seeded_labels'] = [list(c_) for c_ in g.labels]
+    try:                                                    # кисть прежних съёмок — в новую сетку
+        from .layers import brush_into_grid
+        g2_ = Grid(folder)
+        rf0_ = brush_into_grid(smp0.data.get('selections', []), LAT, folder, g2_) if smp0 is not None else None
+        d_['selected'] = [list(c) for c in sorted(g2_.selected)]
+        if rf0_:
+            d_['refine'] = rf0_
+    except Exception:
+        pass
+    with open(os.path.join(folder, 'grid.json'), 'w', encoding='utf-8') as f_:
+        json.dump(d_, f_, indent=1)
+    g = Grid(folder)
+    if not LAT.get('stage'):
+        try:                                                # по координатам столика — на кресты этих кадров
+            nfx_, dfx_ = g.snap_to_crosses(lambda x, y, w, h: sc.render(x, y, 1.0, w, h), sc.size, px_um,
+                                           render_s=lambda x, y, s_, w, h: sc.render(x, y, s_, w, h))
+            if nfx_:
+                g.save(px_um)
+                msg_ = (f"   The grid snapped to {nfx_} crosses of this scan "
+                        f"(moved by {np.hypot(*dfx_) * px_um:.2f} um); F: frames onto the crosses")
+        except Exception:
+            pass
+    return g, msg_
+
+
+def stage_lattice(smp0, pitch):
+    """Решётка по координатам столика (крестов нет): квадраты pitch мкм от точки 0, 0. Запоминается в образце,
+    пока не отметят настоящие кресты (тогда решётка — по ним)."""
+    L = dict(O=[0.0, 0.0], e1=[float(pitch), 0.0], e2=[0.0, float(pitch)], pitch=float(pitch), numbered=False,
+             stage=True, src=None)
+    if smp0 is not None and smp0.data.get('lattice') is None:
+        smp0.data['lattice'] = L
+        smp0.save()
+    return L
+
+
 def _view_one(folder, fullscreen, sensitivity, keys, car):
     """Открыть сшитый скан. Перемещение — левая кнопка (в режимах выделения — правая или средняя), колесо — масштаб.
     G — отметить кресты (щелчок у креста: центр находится сам по симметрии креста); соседний крест по ряду,
@@ -325,36 +377,8 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
     seeded_, st0_msg = False, ""
     if not g.ready() and not g.cr.marks and LAT is not None:   # решётка выделения (или образца) есть: кресты не нужны
         try:
-            LT.seed_grid(folder, g, LAT)
-            if not LAT.get('numbered'):                     # номеров нет — подписи не выдумывать
-                g.labels = {}
-            g.save(px_um)
-            d_ = json.load(open(os.path.join(folder, 'grid.json'), encoding='utf-8'))
-            d_['seeded'] = True
-            d_['brush_t'] = _t.time()                           # новая съёмка — теперь главная для кисти
-            d_['seeded_labels'] = [list(c_) for c_ in g.labels]
-            try:                                                # кисть прежних съёмок — в новую сетку
-                from .layers import brush_into_grid
-                g2_ = Grid(folder)
-                rf0_ = brush_into_grid(smp0.data.get('selections', []), LAT, folder, g2_)
-                d_['selected'] = [list(c) for c in sorted(g2_.selected)]
-                if rf0_:
-                    d_['refine'] = rf0_
-            except Exception:
-                pass
-            with open(os.path.join(folder, 'grid.json'), 'w', encoding='utf-8') as f_:
-                json.dump(d_, f_, indent=1)
-            g = Grid(folder)
+            g, st0_msg = _seed(folder, g, LAT, smp0, sc, px_um)
             seeded_ = True
-            try:                                                # по координатам столика — на кресты этих кадров
-                nfx_, dfx_ = g.snap_to_crosses(lambda x, y, w, h: sc.render(x, y, 1.0, w, h), sc.size, px_um,
-                                               render_s=lambda x, y, s_, w, h: sc.render(x, y, s_, w, h))
-                if nfx_:
-                    g.save(px_um)
-                    st0_msg = (f"   The grid snapped to {nfx_} crosses of this scan "
-                               f"(moved by {np.hypot(*dfx_) * px_um:.2f} um); F: frames onto the crosses")
-            except Exception:
-                pass
         except Exception:
             pass
     ses, subs = SM.session_of(folder)
@@ -2184,9 +2208,23 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
                 st['msg'] = ("Click a cross, then its neighbour in the same row: the picture turns level. "
                              "Shift+C: start again")
         elif ch in 'mb' and ch:                              # M (и B по привычке): выбирать клетки
+            if not g.ready() and not g.cr.marks:            # крестов нет — квадраты по координатам столика
+                try:
+                    P_um_ = float(sc.st.meta.get('mask_pitch') or 100.0)
+                    while P_um_ > 5 and P_um_ > min(sc.size) * px_um / 3:     # хотя бы 3 квадрата поперёк
+                        P_um_ /= 2
+                    L_st_ = (smp0.data.get('lattice') if smp0 is not None else None) or stage_lattice(smp0, P_um_)
+                    g, m_ = _seed(folder, g, L_st_, smp0, sc, px_um)
+                    st['seeded'] = True
+                    if L_st_.get('stage'):
+                        st['msg'] = (f"No crosses here: squares of {L_st_['pitch']:g} um by the stage coordinates. "
+                                     "C: mark crosses for the exact grid")
+                except Exception as e_:
+                    st['msg'] = f"No grid: {e_}"
             st['mode'] = 'select' if g.ready() else st['mode']
-            st['msg'] = ("Select: click = square (again = off), drag = box (Shift = unselect); right click = remove "
-                         "one, Shift + right click = the whole area; they become Drafts") if g.ready() \
+            st['msg'] = (st['msg'] + "   " if 'No crosses here' in (st['msg'] or '') else "") + (
+                "Select: click = square (again = off), drag = box (Shift = unselect); right click = remove "
+                "one, Shift + right click = the whole area; they become Drafts") if g.ready() \
                 else "Mark at least 2 crosses first (C)"
         elif key == 25 or raw == 'Y':                       # Ctrl+Y / Shift+Y: жёлтое -> зелёное
             if g.ready():

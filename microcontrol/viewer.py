@@ -16,7 +16,7 @@ from collections import OrderedDict
 import cv2
 import numpy as np
 from .storage import ScanData, THUMB, meta_A
-from .util import wheel_delta, wheel_gesture, open_window, window_size, exit_key, EXIT, set_icon
+from .util import wheel_delta, wheel_gesture, open_window, window_size, exit_key, EXIT, set_icon, shift_held
 from .undo import History, undo_key
 from . import ui as UI
 from . import log as L
@@ -122,6 +122,7 @@ HELP_MODE = {
     'look': "S: stitch (preview)  C: crosses  F: frames onto the crosses  N: numbers  T: level  M: select cells (Drafts)  2-5: finer grid of a selection  Y: hints  R: ruler  E: export",
     'cross': "Click: cross exactly there (2 in a row = tilt)  Shift+click: snap to centre  Drag a mark: move  Right click: remove  Shift+C: again  F: frames onto the crosses  C / Esc: done",
     'select': "Click: square  Drag: box  Shift: unselect  Right click: remove a square (Shift: the whole area)  A: all  X: none  Esc: done",
+    'stitch': "Click a frame: its row  Shift+click: its column  Arrows: move it 1 px  Shift+arrows: 10 px  Backspace: automatic stitch  J: save",
     'paint': "Drag a rectangle: select all squares in it  Shift+drag: unselect  Click: one square  Right click: remove one (Shift: whole area)  A: all  X: none  Esc: done",
     'label': "Click a square, type its number X Y  Enter: set  Esc: done",
     'ruler': "Click two points: the distance (a third click starts again)  Drag: move  R or Esc: off",
@@ -147,6 +148,8 @@ HELP_ALL = [
     ("", "Right click on green: remove that square (or cell)   Shift + right click: the whole green area"),
     ("Hints", "Y: yellow hints on / off   Shift+Y: select them   < / >: sensitivity -/+ 5   U: type it"),
     ("Export", "E: export the selected squares (PNG + DXF)"),
+    ("Stitch", "J: edit the stitch by hand - click a frame: its row (Shift+click: its column), arrows: move it by 1 px "
+               "(Shift: 10), Backspace: back to the automatic stitch, J: save.  K: straight edges (crop the steps)"),
     ("Profiles", "P: two profile lines (cyan, pink) with R, G, B along them, averaged over a band: edges, width, contrast"),
     ("", "Drag the line ends on the map: any tilt and length (Shift: 15 deg)   Click: pin   In the window: drag the edges, wheel: band"),
 ]
@@ -287,6 +290,17 @@ def _view(folder, fullscreen=False, sensitivity=None, _keys=None):
         window_size(WIN, remember=True)                                    # запомнить размер для следующего окна
     cv2.destroyWindow(WIN)
     cv2.waitKey(1)
+
+
+_ARROWS = {2424832: (-1, 0), 65361: (-1, 0), 2555904: (1, 0), 65363: (1, 0),
+           2490368: (0, -1), 65362: (0, -1), 2621440: (0, 1), 65364: (0, 1)}
+
+
+def _arrow(key):
+    """Стрелка -> (dx, dy) или None (с Shift / Ctrl на Linux в старших битах — тоже)."""
+    if key is None or key < 0:
+        return None
+    return _ARROWS.get(key) or _ARROWS.get(key & 0xFFFF)
 
 
 def _seed(folder, g, LAT, smp0, sc, px_um):
@@ -882,7 +896,13 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
                     g.save(px_um)
                 st['msg'] = f"Selected {len(g.selected)} squares"
             elif not moved and ev0 == cv2.EVENT_LBUTTONDOWN:
-                if st.get('prof') and st['mode'] == 'look':
+                if st['mode'] == 'stitch':                  # J: ряд (Shift — столбец) кадра под мышью
+                    sel_, ids_ = stitch_frames_at(from_view((x + 0.5, y + 0.5)), column=sh0)
+                    if ids_:
+                        st['edit'].update(sel=sel_, ids=ids_)
+                        st['msg'] = (f"{sel_[0].capitalize()} {sel_[1]} ({len(ids_)} frames) chosen: arrows move it "
+                                     "by 1 px, Shift+arrows by 10 px. Shift+click: a column")
+                elif st.get('prof') and st['mode'] == 'look':
                     prof_click(x, y)
                 elif st['mode'] == 'cross':
                     add_cross((x, y), snap=sh0)
@@ -1378,6 +1398,85 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
         pl_save()
         st['dirty'] = True
 
+    def inner_rect():
+        """Прямоугольник, целиком покрытый кадрами (без ступенек по краям) — мозаика, px."""
+        P_, W_, H_ = sc.P, sc.W, sc.H
+        try:
+            rows_ = [int(r_['row']) for r_ in sc.st.index]
+            cols_ = [int(r_['col']) for r_ in sc.st.index]
+        except Exception:
+            return None
+        R_, C_ = np.array(rows_), np.array(cols_)
+        xl = max(P_[C_ == C_.min(), 0].max(), 0.0)
+        xr = min(P_[C_ == C_.max(), 0].min() + W_, sc.size[0])
+        yt = max(P_[R_ == R_.min(), 1].max(), 0.0)
+        yb = min(P_[R_ == R_.max(), 1].min() + H_, sc.size[1])
+        return (xl, yt, xr, yb) if xr - xl > W_ / 4 and yb - yt > H_ / 4 else None
+
+    def crop_edges(img):
+        """K: всё вне прямоугольника без ступенек — пустым (как вне мозаики): края ровные."""
+        if not st.get('crop', True) or st['mode'] == 'stitch':
+            return img
+        r_ = st.get('inner') or inner_rect()
+        st['inner'] = r_
+        if r_ is None:
+            return img
+        q_ = np.array([to_view(p_) for p_ in ((r_[0], r_[1]), (r_[2], r_[1]), (r_[2], r_[3]), (r_[0], r_[3]))])
+        mk_ = np.zeros(img.shape[:2], np.uint8)
+        cv2.fillPoly(mk_, [np.int32(np.round(q_))], 255)
+        img[mk_ == 0] = 20
+        return img
+
+    def stitch_frames_at(Mc, column=False):
+        """Кадры ряда (или столбца) того кадра, что под точкой Mc."""
+        P_, W_, H_ = sc.P, sc.W, sc.H
+        hit_ = [i for i in range(len(P_)) if P_[i, 0] <= Mc[0] < P_[i, 0] + W_ and P_[i, 1] <= Mc[1] < P_[i, 1] + H_]
+        if not hit_:
+            return None, []
+        i0 = hit_[-1]
+        key_ = 'col' if column else 'row'
+        v_ = sc.st.index[i0][key_]
+        return (key_, v_), [i for i, r_ in enumerate(sc.st.index) if r_[key_] == v_]
+
+    def stitch_move(dx, dy):
+        ed_ = st.get('edit')
+        if not ed_ or not ed_.get('ids'):
+            st['msg'] = "Click a frame first: its row moves (Shift+click: its column)"
+            return
+        sc.P[ed_['ids']] += (dx, dy)
+        sc.over = None                                      # обзор — уже не тот: кадры рисуются сами
+        sc.cache.clear() if False else None
+        ed_['moved'] = True
+        sh_ = sc.P[ed_['ids'][0]] - ed_['orig'][ed_['ids'][0]]
+        st['msg'] = (f"{ed_['sel'][0].capitalize()} {ed_['sel'][1]}: moved by {sh_[0]:+.0f}, {sh_[1]:+.0f} px "
+                     f"({sh_[0] * px_um:+.2f}, {sh_[1] * px_um:+.2f} um). J: save, Backspace: undo all")
+
+    def stitch_save():
+        """Позиции кадров после правки — в join/positions_all.csv (прежние автоматические — positions_auto.csv),
+        обзор пересобирается; кресты и сетка идут за кадрами при следующем открытии."""
+        ed_ = st.get('edit') or {}
+        if not ed_.get('moved'):
+            return "Stitch not changed"
+        jd_ = os.path.join(folder, 'join')
+        jp_ = os.path.join(jd_, 'positions_all.csv')
+        bk_ = os.path.join(jd_, 'positions_auto.csv')
+        if os.path.exists(jp_) and not os.path.exists(bk_):
+            import shutil as _sh
+            _sh.copy2(jp_, bk_)
+        P_ = sc.P - sc.P.min(0)
+        with open(jp_, 'w', newline='', encoding='utf-8') as f_:
+            wr_ = csv.writer(f_)
+            wr_.writerow(['id', 'x_px', 'y_px', 'scale'])
+            for i in range(len(P_)):
+                wr_.writerow([i, f"{P_[i, 0]:.2f}", f"{P_[i, 1]:.2f}", "1.0000"])
+        try:
+            from .stitch import make_preview
+            busy("Stitch edited: rebuilding the overview", lambda: make_preview(folder, pos=P_, levels=False))
+        except Exception:
+            pass
+        st['restart'] = True
+        return "Stitch saved (the automatic one: join/positions_auto.csv)"
+
     def render():
         Wv, Hv = st['Wv'], st['Hv']
         if abs(st['rot']) < 1e-6:
@@ -1388,6 +1487,7 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
             Rm = R()
             t = mid() - Rm @ np.array([D / 2, D / 2])
             img = cv2.warpAffine(big, np.float32(np.c_[Rm, t]), (Wv, Hv), flags=cv2.INTER_LINEAR)
+        img = crop_edges(img)                               # K: ровные края, без ступенек
         img = draw_finer(img)                               # снятое крупнее — поверх, в своих контурах
         red, green, yellow = (40, 40, 255), SM.sample_color(folder), (0, 220, 255)   # выбранные — цветом выделения
         base_, void_ = img.copy(), cv2.inRange(img, (0, 0, 0), (22, 22, 22))   # вне мозаики сетку не рисуем
@@ -1478,9 +1578,14 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
             b_ = to_view(st['ruler'][1]) if len(st['ruler']) == 2 else st.get('mouse')
             q2 = st['ruler'][1] if len(st['ruler']) == 2 else (from_view(b_) if b_ is not None else None)
             UI.ruler(img, a_, b_, ruler_text(st['ruler'][0], q2) if q2 is not None else "")
-        mode = {'look': 'Look', 'cross': 'Mark crosses', 'select': 'Select',
+        if st['mode'] == 'stitch' and (st.get('edit') or {}).get('ids'):   # кадры, которые двигают
+            for i_ in st['edit']['ids']:
+                p_ = sc.P[i_]
+                q_ = np.array([to_view(c_) for c_ in (p_, p_ + (sc.W, 0), p_ + (sc.W, sc.H), p_ + (0, sc.H))])
+                cv2.polylines(img, [np.int32(np.round(q_))], True, (255, 220, 0), 1, cv2.LINE_8)
+        mode = {'look': 'Look', 'cross': 'Mark crosses', 'select': 'Select', 'stitch': 'Edit stitch',
                 'paint': 'Brush', 'label': 'Number squares', 'ruler': 'Ruler'}[st['mode']]
-        mcol = {'look': (170, 170, 178), 'cross': (90, 90, 255), 'select': (90, 210, 90),
+        mcol = {'look': (170, 170, 178), 'cross': (90, 90, 255), 'select': (90, 210, 90), 'stitch': (255, 220, 0),
                 'paint': (90, 210, 90), 'label': UI.ACCENT, 'ruler': (0, 220, 255)}[st['mode']]
         if st.get('lab'):
             st['msg'] = f"Square number X Y: {st['lab'][1]}_   (Enter = set, Esc = cancel)"
@@ -2187,7 +2292,7 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
             unseed(); g.cr.clear(); g.refined = None; set_straight(False); g.save(px_um)
             st['mode'] = 'cross'
             st['msg'] = "Crosses cleared (Ctrl+Z brings them back). Click a cross, then its neighbour in the same row"
-        elif ch in 'sj' and ch:                              # S: сшить прямо здесь; окно потом откроется заново
+        elif ch == 's':                                      # S: сшить прямо здесь; окно потом откроется заново
             stitch_here()
             break
         elif ch == 'r':                                      # R: линейка, две точки -> расстояние
@@ -2255,6 +2360,39 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
             st['msg'] = ("Click a square with a number written on it and type the number X Y. Two squares in another "
                          "row and column fix the directions; right click = remove a label") if g.ready() \
                 else "Mark at least 2 crosses first (C)"
+        elif key == 8 and st['mode'] == 'stitch':            # правка сшивки — назад, как сшила программа
+            ed_ = st['edit']
+            sc.P[:] = ed_['orig']
+            ed_['moved'] = False
+            bk_ = os.path.join(folder, 'join', 'positions_auto.csv')
+            if os.path.exists(bk_):                         # и сохранённые раньше правки — тоже
+                import shutil as _sh
+                _sh.copy2(bk_, os.path.join(folder, 'join', 'positions_all.csv'))
+                os.remove(bk_)
+                st['msg'] = "Back to the automatic stitch"
+                st['switch'] = folder
+                break
+            st['msg'] = "Stitch edits undone"
+        elif st['mode'] == 'stitch' and _arrow(key):        # J: ряд / столбец — на 1 px (Shift: 10)
+            dx_, dy_ = _arrow(key)
+            k_ = 10 if shift_held(key) else 1
+            stitch_move(dx_ * k_, dy_ * k_)
+        elif ch == 'j':                                     # J: править сшивку руками
+            if st['mode'] == 'stitch':
+                st['msg'] = stitch_save()
+                st['mode'] = 'look'
+                if st.pop('restart', None):
+                    st['switch'] = folder
+                    break
+            else:
+                st['mode'] = 'stitch'
+                st['edit'] = dict(orig=sc.P.copy(), ids=[], sel=None, moved=False)
+                st['msg'] = ("Edit the stitch: click a frame - its row (Shift+click: its column); arrows move it by 1 px "
+                             "(Shift: 10); Backspace: back to the automatic stitch; J: save")
+        elif ch == 'k':                                     # K: ровные края (без ступенек) / вся мозаика
+            st['crop'] = not st.get('crop', True)
+            st['inner'] = None
+            st['msg'] = "Straight edges: the steps at the borders are cut off" if st['crop'] else "Whole mosaic, with its steps"
         elif key == 8:
             if st['mode'] == 'cross':
                 unseed(); g.cr.undo(); g.save(px_um); st['msg'] = "Last cross mark removed"
@@ -2315,6 +2453,8 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
         elif key in {2621440, 65364}:
             st['cy'] += step
         st['dirty'] = True
+    if st['mode'] == 'stitch' and (st.get('edit') or {}).get('moved'):   # правку сшивки не потерять
+        stitch_save()
     if os.path.isdir(folder) and not st.get('stitched'):   # после сшивки разметку уже записала она (кресты — за кадрами)
         g.save(px_um)
     if os.path.isdir(folder):

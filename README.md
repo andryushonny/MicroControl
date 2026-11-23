@@ -277,6 +277,7 @@ Arrows move; letters do things. As much as possible is done right in the window.
 | `Ctrl+Z` · `Ctrl+Y` | undo · redo (moves too: the stage drives back) |
 | `Tab` or click a field | change steps, exposure, objective |
 | `G` · `M` | steps = one frame · next objective |
+| `J` · `K` | edit the stitch by hand: click a frame — its row (Shift+click — its column), arrows move it by 1 px (Shift — 10 px), Backspace — back to the automatic stitch, `J` — save (the automatic one stays in `join/positions_auto.csv`) · straight edges: the steps at the borders are cut off (again — the whole mosaic) |
 | `P` | profiles window (as Plot Profile in ImageJ, Profile in Gwyddion): two lines, cyan and pink, with R, G, B along them averaged over a band. On a cross they lie across its arms and cross each other. Drag the squares at their ends on the map — any tilt and length (`Shift` — 15° steps), the `x` in the middle — move a line, the diamond — both. Click — pin / unpin. In the window: a zoomed preview with the lines and edges, width in µm, contrast, angles; drag the yellow edges; wheel on a plot — Y scale (the same for both, click `Y` — auto), elsewhere — band width; right click — auto edges. The edges are drawn as ticks on the map, in the preview and on the map of the manual mode |
 | `T` · `O` · `[` `]` | turn the camera picture 180° · check directions with the camera · arrows (and the mini map with them) the other way (all remembered) |
 | `H` · `Shift+Esc` | all keys · exit |

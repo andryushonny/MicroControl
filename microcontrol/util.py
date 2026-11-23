@@ -308,6 +308,17 @@ def exit_key(key):
         return False
 
 
+def shift_held(key=None):
+    """Зажат ли Shift (для стрелок): Windows — спросить систему; Linux / GTK — старшие биты кода клавиши."""
+    if key is not None and key > 0 and (key >> 16) & 0x1:
+        return True
+    try:
+        import ctypes
+        return bool(ctypes.windll.user32.GetAsyncKeyState(0x10) & 0x8000)
+    except Exception:
+        return False
+
+
 def icon_path():
     """Значок программы: microcontrol/icon.ico или ~/.microcontrol/icon.ico (если файл положили)."""
     for p in (os.path.join(os.path.dirname(__file__), 'icon.ico'),

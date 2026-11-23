@@ -26,7 +26,7 @@ import cv2
 import numpy as np
 from . import log as L
 from .errors import MicroControlError
-from .util import wheel_delta, open_window, window_size, exit_key, EXIT, set_icon
+from .util import wheel_delta, wheel_gesture, open_window, window_size, exit_key, EXIT, set_icon
 from .undo import History, undo_key
 from . import focus as F_
 import threading
@@ -801,8 +801,9 @@ def _run(m, fullscreen=False, _keys=None):
                 clicks.append(('mappan', mx_, my_))
             elif ev in (cv2.EVENT_RBUTTONUP, cv2.EVENT_MBUTTONUP):
                 nv['pan'] = None
-            elif ev == cv2.EVENT_MOUSEWHEEL:
-                clicks.append(('mapwheel', mx_, my_, wheel_delta(flags)))
+            elif ev in (cv2.EVENT_MOUSEWHEEL, getattr(cv2, 'EVENT_MOUSEHWHEEL', -99)):   # колесо / тачпад
+                gs_ = wheel_gesture(ev, flags)
+                clicks.append(('mapwheel', mx_, my_, gs_[1]) if gs_[0] == 'zoom' else ('mapscroll', *gs_[1:]))
             return
         if in_rect(nv['inset'], x, y) and nv['big'] and ev == cv2.EVENT_LBUTTONDOWN:   # камера в углу — крупно
             clicks.append(('swap',))
@@ -832,8 +833,9 @@ def _run(m, fullscreen=False, _keys=None):
             mdr['on'] = True
             clicks.append(('mdrag0', x, y))
             return
-        if ev == cv2.EVENT_MOUSEWHEEL:
-            clicks.append(('wheel', x, y, wheel_delta(flags)))
+        if ev in (cv2.EVENT_MOUSEWHEEL, getattr(cv2, 'EVENT_MOUSEHWHEEL', -99)):   # колесо / тачпад
+            gs_ = wheel_gesture(ev, flags)
+            clicks.append(('wheel', x, y, gs_[1]) if gs_[0] == 'zoom' else ('scroll', x, y, *gs_[1:]))
         elif ev in (cv2.EVENT_MBUTTONDOWN, cv2.EVENT_RBUTTONDOWN) or (ev == cv2.EVENT_LBUTTONDOWN and not on_field(x, y)):
             zm['down'] = (x, y)
             clicks.append(('pan0', x, y))
@@ -872,11 +874,14 @@ def _run(m, fullscreen=False, _keys=None):
         return SM.rect(reg, fw_, fh_)               # размер кадра — объектива самого выделения
 
     def reg_area(reg):
-        if reg.get('shape'):                               # по контуру (клетки, черновики): его рамка, не A-B
+        return Area(*work(reg['A']), *work(reg['B']))
+
+    def reg_extent(reg):                                   # для списка: по контуру — его рамка, не A-B
+        if reg.get('shape'):
             from .layers import geom as _gm
             b_ = _gm(m, reg).bounds
             return Area(*work(b_[:2]), *work(b_[2:]))
-        return Area(*work(reg['A']), *work(reg['B']))
+        return reg_area(reg)
 
     def first_num(k):                                    # номера точек фокуса области k
         nums = [n_ for n_, kk, _p in SM.numbered(m) if kk == k]
@@ -1457,6 +1462,20 @@ def _run(m, fullscreen=False, _keys=None):
             th.join()
         return res
 
+    def busy_live(title, fn):
+        """Действие с прибором в потоке, камера на паузе; в окне — полоса и время (видно, что не зависло).
+        -> результат; ошибка прибора -> MicroControlError наружу, как без полосы."""
+        if live is not None:
+            live.paused = True
+        try:
+            res_ = busy(title, fn)
+        finally:
+            if live is not None:
+                live.paused = False
+        if 'e' in res_:
+            raise res_['e']
+        return res_.get('r')
+
     def prepare_here(what='prepare'):
         """Prepare (кнопка, A): подготовка к снимкам здесь; D — дисторсия объектива. Полоса — в окне."""
         nonlocal msg, msg_t
@@ -1720,7 +1739,29 @@ def _run(m, fullscreen=False, _keys=None):
         from .stitch import stitch as _stitch
         msg_t = time.monotonic()
         only_ = None
-        if m._sel is not None and m._sel < len(m._regions):   # выбран черновик: он становится выделением
+        if m._pending:                                     # новая область без угла 2 — она и выделена в меню
+            msg = "Finish the new area first: key 2 sets its second corner (C: drop it)"
+            return
+        if m._sel is None or m._sel >= len(m._regions):    # ничего не выбрано: одно выделение — его, иначе спросить
+            own_ = [k_ for k_, rg in enumerate(m._regions) if SM.obj(m, rg) == m.objective
+                    and rg.get('kind') not in ('group', 'draft')]
+            if len(own_) > 1:
+                msg = f"Choose what to scan: click its card in the list on the right ({len(own_)} areas for {m.objective}x)"
+                return
+            if own_:
+                m._sel = own_[0]
+        if m._sel is not None and m._sel < len(m._regions) and m._regions[m._sel].get('kind') == 'group':
+            gu_, sub_ = {m._regions[m._sel]['uid']}, []    # группа: все выделения в ней (и во вложенных группах)
+            for _ in range(8):
+                for rg in m._regions:
+                    if rg.get('parent') in gu_ and rg['uid'] not in gu_:
+                        gu_.add(rg['uid'])
+            only_ = [rg['uid'] for rg in m._regions if rg['uid'] in gu_ and rg.get('kind') not in ('group', 'draft')
+                     and SM.obj(m, rg) == m.objective]
+            if not only_:
+                msg = f"{SM.title(m, m._sel)} has no area for {m.objective}x"
+                return
+        elif m._sel is not None and m._sel < len(m._regions):   # выбран черновик: он становится выделением
             rs_ = m._regions[m._sel]                          # этого объектива (пойдёт в экспорт) и снимается
             if rs_.get('kind') == 'draft':
                 msg = draft_to_selection(m._sel)
@@ -1836,6 +1877,14 @@ def _run(m, fullscreen=False, _keys=None):
             live.paused = True
         err_ = None
         try:
+            if view is not None:                           # пока грузится просмотр — видно, что идёт работа
+                Wl_ = W - SM.CAR_W
+                pic_ = view.copy()
+                pic_[:, :Wl_] = (pic_[:, :Wl_].astype(np.float32) * 0.4).astype(np.uint8)
+                UI.progress_panel(pic_[:, :Wl_], "Opening the view", os.path.basename(os.path.dirname(os.path.dirname(f_))),
+                                  0.0, "loading the stitched picture", 0.0, None, "")
+                cv2.imshow(WIN, np.vstack([menu_img(W), pic_]))
+                cv2.waitKey(1)
             _view(f_, fullscreen=fullscreen, _keys=keys)          # в тестах — те же нажатия
         except Exception as e:                             # просмотр закрылся с ошибкой — окно микроскопа живёт
             err_ = e
@@ -1854,7 +1903,7 @@ def _run(m, fullscreen=False, _keys=None):
 
     def go_region(k):
         nonlocal msg
-        msg = SM.goto_area(m, k)
+        msg = busy_live(f"Going to {SM.title(m, k)}", lambda: SM.goto_area(m, k))
 
     def delete_region(k):
         nonlocal msg
@@ -2123,6 +2172,11 @@ def _run(m, fullscreen=False, _keys=None):
             line = f"Sharpness {sharp:.0f}" + (f"    {arl['note']}" if arl['note'] and arl['on'] else "")
             if A and B:
                 r, c, ny, nx = cell_of(m, A, B)
+                if zk is not None and zk < len(m._regions):
+                    nx, ny = SM.frames_of(m, zk)            # как на карточке и в съёмке
+                    r = None if r is None or r >= ny else r
+                    c = None if c is None or c >= nx else c
+                    r = None if c is None else r
                 line += f"    Selection {SM.num(m, zk)} ({m.objective}x): {nx} x {ny} = {nx * ny} frames" + \
                         (f"    Frame: row {r + 1}/{ny}, column {c + 1}/{nx}" if r is not None else "    Outside the area")
             else:
@@ -2375,9 +2429,16 @@ def _run(m, fullscreen=False, _keys=None):
             continue
         while clicks:                                     # щелчок по полю — ввод значения; по картинке — направляющие
             c_ = clicks.pop(0)
+            if c_[0] == 'scroll':                                   # тачпад: увеличенный кадр едет за пальцами
+                if zm['z'] > 1 and zm['c'] is not None:
+                    Wl_ = W - SM.CAR_W
+                    k2 = min(Wl_ / img.shape[1], H / img.shape[0]) * zm['z']
+                    zm['c'] = np.asarray(zm['c'], float) - np.array(c_[3:5], float) / k2
+                continue
             if c_[0] == 'wheel':                                    # зум к курсору
                 pix = v2i(c_[1:3])
-                zm['z'] = min(8.0, max(1.0, zm['z'] * (1.25 if c_[3] > 0 else 0.8)))
+                f3_ = c_[3] if 0.05 < c_[3] < 2 and c_[3] != 1 else (1.25 if c_[3] > 0 else 0.8)
+                zm['z'] = min(8.0, max(1.0, zm['z'] * f3_))
                 Wl_ = W - SM.CAR_W
                 k2 = min(Wl_ / img.shape[1], H / img.shape[0]) * zm['z']
                 zm['c'] = pix - (np.array(c_[1:3], float) - (Wl_ / 2, H / 2)) / k2
@@ -2390,26 +2451,23 @@ def _run(m, fullscreen=False, _keys=None):
             if c_[0] == 'swap':                                     # карта <-> камера
                 nv['big'] = m._nav_big = not nv['big']
                 continue
-            if c_[0] in ('mapclick', 'maprect', 'mappan', 'mapwheel', 'mapdbl'):   # карта
+            if c_[0] in ('mapclick', 'maprect', 'mappan', 'mapwheel', 'mapdbl', 'mapscroll'):   # карта
                 if nv['mr'] is None or nav.c is None:
                     continue
-                if c_[0] == 'mapwheel':
-                    nav.zoom(c_[1:3], 1.25 if c_[3] > 0 else 0.8)
+                if c_[0] == 'mapwheel':                             # c_[3]: множитель (или знак — из тестов)
+                    k3_ = c_[3] if c_[3] > 0.05 and abs(c_[3] - 1) < 1 and c_[3] not in (1,) else (1.25 if c_[3] > 0 else 0.8)
+                    nav.zoom(c_[1:3], k3_)
+                elif c_[0] == 'mapscroll':                          # тачпад двумя пальцами: карта едет
+                    nav.pan(nav.c.copy(), np.array(c_[1:3], float))
                 elif c_[0] == 'mappan':
                     if nv['pan'] is not None and nv['pan'][2] is not None:
                         nav.pan(nv['pan'][2], np.array(c_[1:3], float) - nv['pan'][:2])
                 elif c_[0] == 'mapclick':
                     S_ = nav.to_um(c_[1:3])
-                    hold_ = live.hold() if live is not None else None
                     try:
-                        if hold_:
-                            hold_.__enter__()
-                        msg = map_go(S_)
+                        msg = busy_live("Going there", lambda: map_go(S_))
                     except MicroControlError as e:
                         msg = str(e)
-                    finally:
-                        if hold_:
-                            hold_.__exit__(None, None, None)
                 elif c_[0] == 'maprect':
                     msg = new_area(nav.to_um(c_[1:3]), nav.to_um(c_[3:5]))
                 elif c_[0] == 'mapdbl':                             # открыть снятый участок под точкой
@@ -2732,8 +2790,8 @@ def _run(m, fullscreen=False, _keys=None):
                 d0 = default_steps(m)
                 steps['x'], steps['y'] = d0['x'], d0['y']
                 msg = f"Steps X, Y = one frame: {steps['x']:g}, {steps['y']:g} um"
-            elif ch in 'fa' and ch:                        # F (и A): автофокус
-                r = m.focus()
+            elif ch == 'f':                                # F: автофокус (A — мастер Prepare)
+                r = busy_live("Autofocus", m.focus)
                 msg = f"Focused at Z {r['Z']}" + ("  (weak peak)" if 'Note' in r else "")
             elif ch == 'k':                                # запомнить Z здесь как точку фокуса выделения
                 msg = SM.add_point(m)
@@ -2757,7 +2815,7 @@ def _run(m, fullscreen=False, _keys=None):
             elif key in (13, 10) and m._sel is not None and not m._pending:
                 go_region(m._sel)
             elif ch == ' ':
-                m.photo()
+                busy_live("Taking a picture", m.photo)
                 msg = f"Picture saved: {m.last_photo}"
             elif raw in ('0', ')'):                        # выделения хранятся в настоящих мкм: остаются на месте
                 if raw == '0':
@@ -2771,7 +2829,7 @@ def _run(m, fullscreen=False, _keys=None):
             elif ch == 'd':                                # D: дисторсия объектива
                 prepare_here('distortion')
             elif ch == 'w':                                # баланс белого (навести на пустое место)
-                m.white_balance()
+                busy_live("White balance", m.white_balance)
                 msg = "White balance done"
             elif ch == 'r':                                # линейка: две точки на картинке -> расстояние
                 rul['on'], rul['pts'] = not rul['on'], []
@@ -2827,7 +2885,7 @@ def _run(m, fullscreen=False, _keys=None):
             continue
         nx, ny = SM.frames_of(m, k)
         fr_ = f"{nx * ny} frames (by the outline)" if rg.get('shape') else f"{nx} x {ny} = {nx * ny} frames"
-        lines_.append(f"  {'    ' * depth}{'└ ' if depth else ''}{SM.title(m, k)}  {o_}x  {reg_area(rg)}   "
+        lines_.append(f"  {'    ' * depth}{'└ ' if depth else ''}{SM.title(m, k)}  {o_}x  {reg_extent(rg)}   "
                       f"{fr_}   focus points {first_num(k)}" + ("   (hidden)" if SM.hidden(m, k) else ""))
     print("Manual mode closed." + (" The new selection without corner 2 is kept for the next time." if m._pending else "")
           + "\n" + "\n".join(lines_) + f"\n  m.scan() shoots the selections of {m.objective}x, each into its own "

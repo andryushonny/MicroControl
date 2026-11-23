@@ -266,6 +266,28 @@ def wheel_delta(flags):
     return d - 0x10000 if d >= 0x8000 else d
 
 
+def wheel_gesture(ev, flags):
+    """Колесо мыши или тачпад -> ('zoom', k) или ('pan', dx, dy) в пикселях окна.
+    Колесо мыши (шаги по 120) — масштаб. Тачпад: два пальца (мелкие шаги, горизонтальная прокрутка) — двигать
+    картинку; щипок (приходит как Ctrl + колесо) — масштаб. Shift + колесо — двигать вбок."""
+    import cv2
+    d = wheel_delta(flags)
+    if not d:
+        return ('pan', 0.0, 0.0)
+    ctrl = bool(flags & cv2.EVENT_FLAG_CTRLKEY)
+    shift = bool(flags & cv2.EVENT_FLAG_SHIFTKEY)
+    px = 60.0 * d / 120.0 if abs(d) >= 8 else 60.0 * np.sign(d)
+    if ev == getattr(cv2, 'EVENT_MOUSEHWHEEL', -1):
+        return ('pan', -px, 0.0)
+    if ctrl:                                              # щипок на тачпаде / Ctrl + колесо
+        return ('zoom', 1.25 ** (d / 120.0) if abs(d) >= 8 else (1.25 if d > 0 else 0.8))
+    if shift:
+        return ('pan', px, 0.0)
+    if abs(d) >= 8 and d % 120:                           # плавная прокрутка тачпада двумя пальцами
+        return ('pan', 0.0, px)
+    return ('zoom', 1.25 if d > 0 else 0.8)
+
+
 EXIT = -27          # «выйти» (от тестов и когда нажатия кончились)
 
 

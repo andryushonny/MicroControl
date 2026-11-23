@@ -636,7 +636,7 @@ M.run(m, fullscreen=False, _keys=[ord('r'), -1, (600, 300), -1, (700, 300), -1, 
                                   (600, 300), -1, R_, -1, (600, 300), -1, -1])     # линейка; точка 2 — после сдвига
 d_ = np.hypot(*(np.array(m._ruler['pts'][1]) - m._ruler['pts'][0]))
 assert len(m._ruler['pts']) == 2 and abs(d_ - m.frame_size[0]) < 0.1 * m.frame_size[0], (m._ruler, d_, m.frame_size)
-M.run(m, fullscreen=False, _keys=[ord('1'), -1, R_, -1, ord('2'), -1, ord('s'), -1, -1, ord('v'), 27, 27, -1])
+M.run(m, fullscreen=False, _keys=[ord('1'), -1, R_, -1, ord('2'), -1, ord('s'), -1, ord('c'), -1, ord('s'), -1, -1, ord('v'), 27, 27, -1])
 sf = m._last_view
 assert os.path.exists(os.path.join(sf, 'join', 'positions_all.csv')), sf              # S, S: снято и сшито в окне
 m.close()
@@ -1982,3 +1982,24 @@ cv2.imshow = _o
 print("Levels 10x -> 50x -> 100x with undo, redo, delete and redo differently: crosses cleared and marked again, "
       "every grid follows what is selected (own marks, else the larger one around, else the sample), V opens "
       "the selected: OK")
+
+# ------------------------------------------------------------------ 49. Scan area / S снимает то, что выбрано в меню справа: карточку, группу; новая область без угла 2 — не снимается
+import microcontrol.manual as M
+from microcontrol import samples as SM, layers as LY
+cv2.getWindowImageRect = lambda w: (0, 0, 1440, 900)
+m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp()); m.focus()
+M.run(m, fullscreen=False, _keys=[-1, -1]); n_ = m._nav
+M.run(m, fullscreen=False, _keys=[-1, ('maprect', *n_.to_px((0, 0)), *n_.to_px((150, 100))), -1,
+                                  ('maprect', *n_.to_px((400, 300)), *n_.to_px((550, 400))), -1,
+                                  ('maprect', *n_.to_px((800, 0)), *n_.to_px((950, 100))), -1, -1])
+sel_ = lambda: [os.path.basename(os.path.dirname(os.path.dirname(f_))) for f_ in m.last_scans]
+M.run(m, fullscreen=False, _keys=[-1, ('mouse', cv2.EVENT_LBUTTONDOWN, 1250, 150, 0), -1,
+                                  ('mouse', cv2.EVENT_LBUTTONUP, 1250, 150, 0), -1, ord('s'), -1, -1])
+assert m._regions[m._sel]['num'] == 1 and sel_() == ['S01_10x'], (m._sel, sel_())       # карточка 1 — только она
+LY.group(m, [1, 2]); SM.persist(m)                                                     # группа из 2 и 3 — выбрана
+M.run(m, fullscreen=False, _keys=[-1, ord('s'), -1, -1])
+assert sorted(sel_()) == ['S02_10x', 'S03_10x'], sel_()
+m.last_scans = []; m.goto(x=2000, y=1500)
+M.run(m, fullscreen=False, _keys=[-1, ord('1'), -1, ord('s'), -1, -1])                 # угол 1 новой: не снимать
+assert m.last_scans == [] and m._pending is not None, (m.last_scans, m._pending)
+m.close(); print("Scan takes what is selected on the right: one card, a whole group; a new area without corner 2 waits: OK")

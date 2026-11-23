@@ -16,7 +16,7 @@ from collections import OrderedDict
 import cv2
 import numpy as np
 from .storage import ScanData, THUMB, meta_A
-from .util import wheel_delta, open_window, window_size, exit_key, EXIT, set_icon
+from .util import wheel_delta, wheel_gesture, open_window, window_size, exit_key, EXIT, set_icon
 from .undo import History, undo_key
 from . import ui as UI
 from . import log as L
@@ -274,6 +274,14 @@ def _view(folder, fullscreen=False, sensitivity=None, _keys=None):
     Wv, Hv = open_window(WIN, fullscreen) or screen_size()
     car = dict(scroll=0, confirm=None, size=(Wv, Hv), hist=History())   # история — общая для всех выделений
     while cur:
+        try:                                                # пока грузится — видно, что идёт работа
+            ld_ = np.full((Hv, Wv, 3), 24, np.uint8)
+            UI.progress_panel(ld_, "Opening", f"Selection {SM.sample_index(cur)}" if ses else os.path.basename(cur),
+                              0.0, "loading the stitched picture and its grid", 0.0, None, "")
+            cv2.imshow(WIN, ld_)
+            cv2.waitKey(1)
+        except Exception:
+            pass
         cur = _view_one(cur, fullscreen, sensitivity, keys, car)
     if not fullscreen:
         window_size(WIN, remember=True)                                    # запомнить размер для следующего окна
@@ -683,7 +691,10 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
 
     def hints():
         """Жёлтая подсказка: квадраты, где что-то есть (mask.Grid.find_useful) — по уменьшенной мозаике."""
-        g.find_useful(sc.render, sc.size, model=_AD.default_model(sc.st.meta.get('objective')))
+        r_, e_ = busy("Hints: looking for flakes and crystals",
+                      lambda: g.find_useful(sc.render, sc.size, model=_AD.default_model(sc.st.meta.get('objective'))))
+        if e_ is not None:
+            raise e_
         st['hints'] = True
 
     def set_sens(S):
@@ -884,8 +895,13 @@ def _view_one(folder, fullscreen, sensitivity, keys, car):
             c = from_view((x, y))
             st['cx'], st['cy'] = c
             st['dirty'] = True
-        elif ev == cv2.EVENT_MOUSEWHEEL:
-            zoom(1.25 if wheel_delta(flags) > 0 else 0.8, x, y)
+        elif ev in (cv2.EVENT_MOUSEWHEEL, getattr(cv2, 'EVENT_MOUSEHWHEEL', -99)):   # колесо / тачпад
+            gs_ = wheel_gesture(ev, flags)
+            if gs_[0] == 'zoom':
+                zoom(gs_[1], x, y)
+            else:                                           # два пальца: картинка едет за пальцами
+                c = np.array([st['cx'], st['cy']]) - R().T @ (np.array(gs_[1:], float) / st['s'])
+                st['cx'], st['cy'] = c
             st['dirty'] = True
 
     prof_cache = {}

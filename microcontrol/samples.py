@@ -18,20 +18,41 @@ import numpy as np
 import cv2
 
 # Палитра областей (BGR): различимые цвета, без красного (решётка) и жёлтого (поле зрения, подсказки);
-# после 8-й — цвета по «золотому углу» оттенка, не повторяются.
+# дальше — до 100 цветов, каждый следующий — самый непохожий на уже взятые.
 _BASE = [(80, 200, 80), (230, 150, 50), (40, 150, 250), (200, 100, 180), (210, 200, 40),
          (170, 120, 245), (60, 190, 160), (90, 120, 180)]
 
 
+def _palette(n=100):
+    """n различимых цветов (BGR): первые — _BASE, дальше каждый следующий — самый далёкий от уже взятых
+    в CIELAB (жадно); без красного (решётка), жёлтого (поле зрения, подсказки) и слишком тёмных (фон тёмный)."""
+    cand = []
+    for h in np.arange(0, 360, 4.0):
+        if h < 22 or h > 330 or 38 < h < 72:                  # красный, жёлтый
+            continue
+        for sv in ((0.55, 0.95), (0.8, 0.95), (0.45, 0.75), (0.8, 0.75), (0.3, 1.0), (0.95, 0.85)):
+            r, g, b = colorsys.hsv_to_rgb(h / 360, *sv)
+            cand.append((int(b * 255), int(g * 255), int(r * 255)))
+    cand = np.array(cand, np.uint8)
+    lab = lambda c: cv2.cvtColor(np.asarray(c, np.uint8).reshape(-1, 1, 3), cv2.COLOR_BGR2LAB).reshape(-1, 3).astype(float)
+    L = lab(cand)
+    keep = (L[:, 0] > 105)                                    # не темнее ~40 % (OpenCV: L * 255 / 100)
+    cand, L = cand[keep], L[keep]
+    out = [tuple(int(v) for v in c) for c in _BASE]
+    d = np.min([np.linalg.norm(L - x, axis=1) for x in lab(out)], axis=0)
+    while len(out) < n:
+        k = int(np.argmax(d))
+        out.append(tuple(int(v) for v in cand[k]))
+        d = np.minimum(d, np.linalg.norm(L - L[k], axis=1))
+    return out
+
+
+_PAL = _palette(100)
+
+
 def color(i):
-    """Цвет i-й области (с 0), BGR."""
-    if i < len(_BASE):
-        return _BASE[i]
-    h = (0.13 + (i - len(_BASE)) * 0.618034) % 1.0
-    if 0.10 < h < 0.20 or h > 0.95 or h < 0.03:          # не жёлтый и не красный
-        h = (h + 0.33) % 1.0
-    r, g, b = colorsys.hsv_to_rgb(h, 0.65, 0.95)
-    return int(b * 255), int(g * 255), int(r * 255)
+    """Цвет i-й области (с 0), BGR: 100 различимых, дальше — по кругу."""
+    return _PAL[i % len(_PAL)]
 
 
 def dim(c, k=0.45):

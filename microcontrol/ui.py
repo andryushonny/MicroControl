@@ -65,19 +65,54 @@ def keys_line(img, s, x, y, scale, max_x=None):
     return x
 
 
+def help_panel(img, rows, title="Keys", W=None, x_off=0):
+    """Все клавиши посреди картинки: [(клавиша, что делает)]; длинное переносится по словам, шрифт мельчает, пока
+    всё не влезет по высоте. W — ширина области (слева), x_off — её левый край."""
+    from .samples import wrap
+    H, W = img.shape[0], (W or img.shape[1])
+    pw = max(200, W - 40)
+    for fs in (0.52, 0.48, 0.44, 0.40, 0.37, 0.34, 0.31):
+        lh = size("Xg", fs)[1] + 9
+        kw = min(max(size(k, fs)[0] for k, _d in rows) + 18, int(0.26 * pw))
+        dw = pw - kw - 40
+        lay = [(wrap(k, fs, kw - 14) if k else [""], wrap(d, fs, dw)) for k, d in rows]
+        n = sum(max(len(a), len(b)) for a, b in lay)
+        if lh * n + 56 <= H - 20:
+            break
+    ph = min(H - 20, lh * n + 56)
+    x0, y0 = x_off + int((W - pw) / 2), max(10, int((H - ph) / 2))
+    panel(img, x0, y0, x0 + pw, y0 + ph, 0.93, LINE)
+    put(img, title, x0 + 18, y0 + 28, fs + 0.08, ACCENT, 2)
+    y = y0 + 28 + lh
+    for a, b in lay:
+        for i in range(max(len(a), len(b))):
+            if y > y0 + ph - 6:
+                return
+            if i < len(a):
+                put(img, a[i], x0 + 18, y, fs, ACCENT, 1)
+            if i < len(b):
+                put(img, b[i], x0 + 18 + kw, y, fs, TEXT, 1)
+            y += lh
+
+
 def toast(img, msg, cx, y, scale, kind='ok', max_w=None):
-    """Сообщение по центру: тёмная плашка с цветной полосой слева (зелёная — готово, красная — ошибка)."""
+    """Сообщение по центру: тёмная плашка с цветной полосой слева (зелёная — готово, красная — ошибка).
+    Длинное — переносится по словам (до 5 строк), низ плашки — на y."""
     if not msg:
         return
+    from .samples import wrap
     col = ERR if kind == 'err' else (ACCENT if kind == 'info' else OK)
     max_w = max_w or img.shape[1] - 40
-    while size(msg, scale)[0] > max_w - 40 and len(msg) > 10:
-        msg = msg[:-2]
-    w, h, _ = size(msg, scale)
+    lines = wrap(msg, scale, max_w - 40)[:5]
+    lh = size("Xg", scale)[1] + 8
+    w = max(size(l_, scale)[0] for l_ in lines)
+    h = size("Xg", scale)[1]
     x0 = int(cx - w / 2 - 18)
-    panel(img, x0, y - h - 12, x0 + w + 36, y + 12, 0.88)
-    cv2.rectangle(img, (x0, int(y - h - 12)), (x0 + 4, int(y + 11)), col, -1)
-    put(img, msg, x0 + 20, y, scale, TEXT)
+    yt = int(y - h - 12 - lh * (len(lines) - 1))
+    panel(img, x0, yt, x0 + w + 36, y + 12, 0.88)
+    cv2.rectangle(img, (x0, yt), (x0 + 4, int(y + 11)), col, -1)
+    for i, l_ in enumerate(lines):
+        put(img, l_, x0 + 20, int(y - lh * (len(lines) - 1 - i)), scale, TEXT)
 
 
 def facts(img, items, x, y, scale, color=TEXT):

@@ -53,7 +53,7 @@ HELP = ["Same keys: one letter means one thing here and in the view (M C N P G A
         "  , / . = previous / next;  Enter = drive;  Del = delete the chosen one (Ctrl+Z brings it back)",
         "S / Scan area: Queue the scan of the chosen selection (Ctrl+click several cards: all of them); each is quick stitched in the background",
         "J: check the live picture against the stitched mosaic   Shift+J / Stitch: exact (quality) stitch of the chosen selection",
-        "X / Export: everything ticked on the cards -> <sample>/export/ (pictures, mixed.png; the drawing - when the crosses are marked and all ticked are quality)",
+        "X / Export: everything ticked on the cards -> <sample>/export/ (all ticked must be quality; pictures, mixed.png, the drawing - when the crosses are marked)",
         "... on a card: all scans of the selection; the star = the main one (maps, view, export)",
         "Queue (bar at the bottom, menu Queue): scans one after another, stitches on other cores; x stops a job, Stop all; the window lives",
         "V: Open the last scan in the view (crosses, squares, export); closing it brings you back here",
@@ -70,6 +70,8 @@ HELP = ["Same keys: one letter means one thing here and in the view (M C N P G A
         "Cards: Ctrl+click to mark, then Merge / Minus / Overlap above the list; drag a card up / down: the layer order;"
         " the box: in the export; the objective chip: 4x ... 100x, draft; the eye: hide on the maps",
         "Shift+drag over a selection: move it",
+        "D: Distortion   B: One-side approach   \\: Map 90 deg (also buttons of the Settings panel)   Esc during a long job: Stop",
+        "Grid: one for the whole sample - from the crosses marked last in the view (C), on any selection",
         ]
 LEFT, UP, RIGHT, DOWN = {2424832, 65361}, {2490368, 65362}, {2555904, 65363}, {2621440, 65364}
 INT = 0x110000                       # внутреннее дело (кнопка панели Settings): INT + ord(буква), мимо единых клавиш
@@ -1221,7 +1223,7 @@ def _run(m, fullscreen=False, _keys=None):
         sm_ = m.sample
         img_, menu['hits'] = UI.menu_bar(W_, f"{sm_.title}  [{sm_.project.uid}]" + (f"  —  {sm_.description}" if sm_.description else ""),
                                          MENU, menu['hover'])
-        tb_, menu['thits'] = UI.tool_bar(W_, STEPS, step_now(), BUTTONS, menu['thover'])
+        tb_, menu['thits'] = UI.tool_bar(W_, [], None, BUTTONS, menu['thover'])   # шаги работы убраны: путали
         return np.vstack([img_, tb_])
 
     def external_sync():
@@ -1629,7 +1631,8 @@ def _run(m, fullscreen=False, _keys=None):
         if 'e' in res and os.environ.get('MC_TEST'):
             print("Export failed:", res['e'])
         from .drawing import export_message
-        msg = f"Export failed: {res['e']}" if 'e' in res else export_message(res['r'], len(ks_))
+        msg = (str(res['e']) if str(res['e']).startswith("Not exported") else f"Export failed: {res['e']}") \
+            if 'e' in res else export_message(res['r'], len(ks_))
 
     def busy(title, fn, plan=None, expect=None, on_stop=None, bg=None):
         """Долгое дело в потоке; в окне — полоса прогресса с кнопкой Stop (Esc) и строка состояния внизу.
@@ -2701,18 +2704,16 @@ def _run(m, fullscreen=False, _keys=None):
             y += LH + 2
             lt_ = "Light on"                               # свет и лазер: подписи одинаковые, состояние — цветом
             ops.append(('t', lt_, x_l, y, FS, UI.TEXT if m.light else UI.DIM, 1))
-            ops.append(('t', "L", x_l + UI.size(lt_ + "  ", FS)[0], y, FS, UI.ACCENT, 1))
             lz_ = f"Laser on {m.laser:g} mW" if m.laser else "Laser on"
-            xz_ = x_l + UI.size(lt_ + "  L      ", FS)[0]
+            xz_ = x_l + UI.size(lt_ + "      ", FS)[0]
             ops.append(('t', lz_, xz_, y, FS, (80, 80, 255) if m.laser else UI.DIM, 1 if not m.laser else 2))
-            ops.append(('t', "I", xz_ + UI.size(lz_ + "  ", FS, 2)[0], y, FS, UI.ACCENT, 1))
-            right = max(right, xz_ + UI.size(lz_ + "  I", FS, 2)[0])
+            right = max(right, xz_ + UI.size(lz_, FS, 2)[0])
             y += LH
             fp = SM.numbered(m)
             ops.append(('l', y - LH // 2 + 4))
             y += 6
             if fp:
-                ops.append(("t", "Focus points   (K: add one here)", x_l, y, FS, UI.DIM, 1))
+                ops.append(("t", "Focus points", x_l, y, FS, UI.DIM, 1))
                 y += LH
                 per = 4                                      # таблица: столбцы равной ширины, Z — по правому краю
                 fz = FS * 0.95
@@ -2733,14 +2734,8 @@ def _run(m, fullscreen=False, _keys=None):
                 if len(fp) > 12:
                     ops.append(('t', f"... {len(fp) - 12} more", x_l, y, FS * 0.9, UI.DIM, 1))
                     y += LH - 2
-            else:
-                ops.append(('t', "Focus points: keys 1, 2 keep Z of the corners, K keeps Z here", x_l, y, FS * 0.9,
-                            UI.DIM, 1))
-                right = max(right, x_l + UI.size("Focus points: keys 1, 2 keep Z of the corners, K keeps Z here",
-                                                 FS * 0.9)[0])
-                y += LH
             if zm['z'] > 1:
-                ops.append(('t', f"Zoom x{zm['z']:.2f}   Z: whole frame", x_l, y, FS * 0.9, UI.ACCENT, 1))
+                ops.append(('t', f"Zoom x{zm['z']:.2f}", x_l, y, FS * 0.9, UI.ACCENT, 1))
                 y += LH
             hidden_ = getattr(m, '_panel_hidden', False)
             hov_ = lambda r_: hover[0] is not None and r_[0] <= hover[0][0] <= r_[2] and r_[1] <= hover[0][1] <= r_[3]
@@ -2789,20 +2784,6 @@ def _run(m, fullscreen=False, _keys=None):
                 elif op[0] == 'd':
                     cv2.circle(view, op[1], 5, op[2], -1, cv2.LINE_AA)
             Wl = W - SM.CAR_W
-            if show_help:                                    # H: все клавиши — панель по центру
-                fsh = 0.52 * sc
-                lh = UI.size("Xg", fsh)[1] + 12
-                ks = [h_.partition(": ") for h_ in HELP]
-                wl = max(UI.size(k_, fsh)[0] for k_, _s, _d in ks) + 22
-                wh = min(Wl - 40, wl + max(UI.size(d_, fsh)[0] for _k, _s, d_ in ks) + 40)
-                hh = lh * len(HELP) + 54
-                x0_, y0_ = int((Wl - wh) / 2), max(10, int((H - hh) / 2))
-                UI.panel(view, x0_, y0_, x0_ + wh, y0_ + hh, 0.92, UI.LINE)
-                UI.put(view, "Keys", x0_ + 18, y0_ + 30, 0.6 * sc, UI.ACCENT, 2)
-                for k__, (k_, _s, d_) in enumerate(ks):
-                    yy = y0_ + 30 + (k__ + 1) * lh
-                    UI.put(view, k_, x0_ + 18, yy, fsh, UI.ACCENT)
-                    UI.put(view, d_, x0_ + 18 + wl, yy, fsh, UI.TEXT)
             # низ: строка состояния; над ней — сообщение
             bh_ = th0 + 20
             UI.status_bar(view, 0, H - bh_, Wl, H, None,                   # «Ready» и факты; дело — в busy
@@ -2812,6 +2793,9 @@ def _run(m, fullscreen=False, _keys=None):
             qbar['h'] = qh_
             if not nav_early:
                 draw_nav(view, Wl, bh_ + qh_, img.shape)
+            if show_help:                                    # H: все клавиши — поверх всего (переносом, влезает в окно)
+                kh_ = [h_.partition(": ") for h_ in HELP]
+                UI.help_panel(view[:, :Wl], [(k_, d_) for k_, _s, d_ in kh_])
             m.__dict__['_last_msg'] = msg
             if msg and time.monotonic() - msg_t < 5:
                 UI.toast(view, msg, Wl / 2, H - bh_ - qh_ - 20, FS, 'err' if msg.startswith('[E') else 'ok', Wl - 60)

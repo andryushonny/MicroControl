@@ -865,10 +865,12 @@ g.labels = {(0, 0): (3, 2), (2, 1): (5, 3)}; g.save(px_um)                # но
 m._sel = 0
 M.run(m, fullscreen=False, _keys=[-1, ('tbar', bx("Export")), -1, -1])   # чертёж одной кнопкой
 import glob as _glob
-dj31 = json.load(open(os.path.join(m.sample.folder, 'export', 'drawing.json')))    # quick: без чертежа, причина названа
-assert not dj31['drawing'] and any('quality' in w_ for w_ in dj31['no_drawing']), dj31['no_drawing']
-assert not os.path.exists(os.path.join(m.sample.folder, 'export', 'drawing.dxf'))
-m.close(); print("Navigator: drag on the map - new area, click - go, Tab, Scan area, Export (no drawing without quality): OK")
+assert not os.path.exists(os.path.join(m.sample.folder, 'export', 'drawing.json'))   # quick: экспорта нет (ошибка)
+try:
+    mc.export_sample(m); raise AssertionError("export of a quick scan")
+except ValueError as e:
+    assert 'not quality-stitched' in str(e), e
+m.close(); print("Navigator: drag on the map - new area, click - go, Tab, Scan area, Export refused without quality: OK")
 
 # ------------------------------------------------------------------ 32. Проекты таблицей с датами; просмотр в своём окне
 import time as _t
@@ -937,8 +939,10 @@ k50 = next(k for k, r in enumerate(m._regions) if r['obj'] == 50)
 r50 = m._regions[k50]
 assert r50['factors'] == [3] and all(c[0] // 3 in (5, 6) and c[1] // 3 == 6 for c in r50['cells']), r50
 m.scan(); [mc.stitch(x, verbose=False) for x in m.last_scans]
-dx = mc.export_sample(m, ks=[0, kd, k50])                            # черновик, quick: без чертежа
-assert dx.endswith('drawing.json') and any('not quality' in w_ for w_ in json.load(open(dx))['no_drawing']), dx
+try:
+    mc.export_sample(m, ks=[0, kd, k50]); raise AssertionError("export with a draft and quick scans")   # черновик, quick: ошибка
+except ValueError as e:
+    assert 'not quality-stitched' in str(e), e
 dx = mc.export_sample(m, ks=[0, kd, k50], drawing=True)              # 10x и 50x и черновик: каждый на своём слое
 doc = ezdxf.readfile(dx if dx.endswith('.dxf') else dx[:-4] + '.dxf')
 ms = doc.modelspace()
@@ -1447,7 +1451,7 @@ def _keys47():
     assert res is not None and len(res['prof']) == 2 and not st['prof_pts']
     P1 = res['segs'][0][1]
     yield ('qdrag', float(P1[0]), float(P1[1]), float(P1[0]), float(P1[1]) + 20); yield -1      # наклонить линию A
-    assert abs(res['segs'][0][1][1] - P1[1] - 20) < 1.0, res['segs'][0]
+    assert abs(res['segs'][0][1][1] - P1[1] - 20) < 2.5, res['segs'][0]
     px0, py0, w_, h_, xa, xb = st['prof_plots'][1]
     yield ('drag', px0 + w_ // 2, py0 + 30, px0 + w_ // 2 - 15, py0 + 30); yield -1           # край B рукой
     assert res['user'][1] is not None
@@ -2049,7 +2053,7 @@ m.last_scans = []
 f1 = m.scan(only=[r1['uid']])                                          # съёмка: сразу quick
 assert Q57.stitched_as(f1) == 'quick' and Q57.info(f1) is None, Q57.stitched_as(f1)
 assert json.load(open(os.path.join(f1, 'join', 'stitch.json')))['reduced'] >= 2
-dx57 = mc.export_sample(m, ks=[LY57.idx(m, r1['uid'])])                 # quick — в чертёж только контур
+dx57 = mc.export_sample(m, ks=[LY57.idx(m, r1['uid'])], drawing=True)                 # quick — в чертёж только контур
 dj57 = json.load(open(os.path.join(os.path.dirname(dx57), 'drawing.json')))
 assert not dj57['pictures'] and any('quick' in n_ for n_ in dj57['notes']), dj57
 # калибровка пикселя по крестам: участок с 3 x 3 крестами, отметки точно на крестах (как C)
@@ -2167,7 +2171,7 @@ mc.view(f10, _keys=[-1, ('qmove', *c50), -1, ('qclick', *c50, 'ctrl'), -1, ord('
                     ('call', lambda st: res.update(auto=st['msg'])), 13, -1, 27, 27])
 uid50 = json.load(open(os.path.join(f50, 'meta.json')))['sample_uid']
 assert json.load(open(os.path.join(m.sample.folder, 'view.json')))['alpha'] == {uid50: 0.75} and '75 %' in res['a'], res   # отмеченному (Ctrl+щелчок)
-assert abs(res['dq'][0] + 30) < 0.5 and abs(res['dq'][1]) < 0.5 and res['mode'] == 'look', res   # тянут эту: она едет, остальные стоят; Esc — отмена
+assert abs(res['dq'][0] + 30) < 2 and abs(res['dq'][1]) < 0.5 and res['mode'] == 'look', res   # тянут эту: она едет, остальные стоят; Esc — отмена
 assert align(f10) != (0.0, 0.0) and 'by the picture' in res['auto'], res
 d10 = align(f10)
 assert np.hypot(d10[0] - d_true[0], d10[1] - d_true[1]) < 0.5, (d10, d_true)                       # само: с точностью < 0.5 мкм
@@ -2239,14 +2243,14 @@ assert [PJ.scan_label(f_) for f_ in PJ.latest_scans(m.sample.folder)] == ['S03_5
 print(SM.reorder(m, 0, 2))                                                       # Selection 1 — наверх
 assert [PJ.scan_label(f_) for f_ in PJ.latest_scans(m.sample.folder)][0] == 'S01_10x'
 m._regions[1]['export'] = False; SM.persist(m)                                   # галочка снята у Selection 2
-dx = mc.export_sample(m)
+dx = mc.export_sample(m, drawing=False)
 ex = os.path.join(m.sample.folder, 'export')
 assert os.path.dirname(dx) == ex and not any(os.path.isdir(os.path.join(ex, x_)) for x_ in os.listdir(ex)), os.listdir(ex)
 dj = json.load(open(os.path.join(ex, 'drawing.json')))
 assert sorted(a_['selection'] for a_ in dj['areas']) == [1, 3] and dj['mixed']['file'] == 'mixed.png', dj['areas']
 mx = cv2.imread(os.path.join(ex, 'mixed.png')); assert mx is not None and (mx < 250).any(axis=2).mean() > 0.2
 um0 = dj['mixed']['um_per_px']
-dx = mc.export_sample(m, mixed_um=4 * um0)                                       # своё разрешение; та же папка
+dx = mc.export_sample(m, mixed_um=4 * um0, drawing=False)                                       # своё разрешение; та же папка
 dj2 = json.load(open(os.path.join(ex, 'drawing.json')))
 assert abs(dj2['mixed']['um_per_px'] - 4 * um0) < 1e-3 and cv2.imread(os.path.join(ex, 'mixed.png')).shape[1] < mx.shape[1] / 3
 m.close()

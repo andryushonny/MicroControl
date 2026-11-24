@@ -632,7 +632,7 @@ def remove_sample(folder):
 
 # ---------------------------------------------------------------- карусель справа
 
-CAR_W = 300          # ширина карусели, px (кнопки карточки и операции помещаются и у вложенных)
+CAR_W = 360          # ширина карусели, px (кнопки карточки и операции помещаются и у вложенных)
 _FONT = cv2.FONT_HERSHEY_SIMPLEX
 
 
@@ -670,6 +670,35 @@ def hidden(m, k):
     return False
 
 
+def wrap(s, scale, max_w, th=1):
+    """Строку — в несколько, по словам, чтобы каждая влезала в max_w пикселей (слишком длинное слово режется)."""
+    out, cur = [], ""
+    for w_ in str(s).split(" "):
+        t_ = (cur + " " + w_) if cur else w_
+        if cv2.getTextSize(t_, _FONT, scale, th)[0][0] <= max_w or not cur:
+            cur = t_
+        else:
+            out.append(cur)
+            cur = w_
+        while cv2.getTextSize(cur, _FONT, scale, th)[0][0] > max_w and len(cur) > 4:   # слово длиннее строки
+            n_ = len(cur) - 1
+            while n_ > 1 and cv2.getTextSize(cur[:n_], _FONT, scale, th)[0][0] > max_w:
+                n_ -= 1
+            out.append(cur[:n_])
+            cur = cur[n_:]
+    if cur or not out:
+        out.append(cur)
+    return out
+
+
+def _fit_w(t, w):
+    """Картинку — не шире w (уменьшить)."""
+    if t is None or t.shape[1] <= w or w < 10:
+        return t
+    k = w / t.shape[1]
+    return cv2.resize(t, (max(1, int(t.shape[1] * k)), max(1, int(t.shape[0] * k))), interpolation=cv2.INTER_AREA)
+
+
 def carousel(H, items, sel, scroll=0, title="Selections", go=True, hover=None, tools=None):
     """Вертикальная карусель на всю высоту. items: [dict(title, lines, color, thumbs, confirm, depth, obj, muted)].
     depth — слой (матрёшка): карточка участка лежит внутри рамки выделения, в котором её отметили, а та — внутри
@@ -702,6 +731,9 @@ def carousel(H, items, sel, scroll=0, title="Selections", go=True, hover=None, t
     PAD, IND = 6, 10                                                      # поле рамки слоя, отступ на слой
     # 1) раскладка: высота карточек, место каждой рамки (своя карточка + все вложенные)
     depth = [min(4, it.get('depth', 0)) for it in items]
+    items = [dict(it, lines=[w_ for ln in it.get('lines', []) for w_ in wrap(ln, 0.4, W - 60 - IND * depth[k])],
+                  thumbs=[_fit_w(t, W - 60 - IND * depth[k]) for t in it.get('thumbs') or []])
+             for k, it in enumerate(items)]                               # строки — переносом, картинки — по ширине
     ys, y = [], top + 7 - scroll
     for k, it in enumerate(items):
         th = it.get('thumbs') or []
@@ -819,6 +851,10 @@ def carousel(H, items, sel, scroll=0, title="Selections", go=True, hover=None, t
         if th:
             xx = tx
             for t in th:
+                if xx + t.shape[1] > W - 8 and W - 8 - xx > 20:          # не влезает по ширине — уменьшить
+                    k_t = (W - 8 - xx) / t.shape[1]
+                    t = cv2.resize(t, (max(1, int(t.shape[1] * k_t)), max(1, int(t.shape[0] * k_t))),
+                                   interpolation=cv2.INTER_AREA)
                 ty0 = yy - 6
                 a, b = max(0, top - ty0), max(0, ty0 + t.shape[0] - H)
                 if t.shape[0] - a - b > 0 and xx + t.shape[1] <= W - 8:

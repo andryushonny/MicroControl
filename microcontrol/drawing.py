@@ -188,6 +188,12 @@ def export_sample(m, ks=None, out=None, dwg=True, verbose=True, nested=False, pn
     ks = [k for k in ks if m._regions[k].get('kind') != 'group']
     if not ks:
         raise ValueError("Nothing to export: tick the selections to export (the box on their cards)")
+    from . import quality as Qx
+    nqx_ = [title(m, k) for k in ks if m._regions[k].get('kind') == 'draft' or
+            not (lambda sc_: sc_ is not None and Qx.is_quality(sc_.folder))(best_scan(m, m._regions[k]))]
+    if nqx_ and drawing is None:                                # не quality — не экспорт: картинки разной точности
+        raise ValueError("Not exported: not quality-stitched - " + ", ".join(nqx_) +    # вводят в заблуждение
+                         " (Stitch / Shift+J for each, or untick them)")
     out = out or os.path.join(m.sample.folder, 'export')
     os.makedirs(out, exist_ok=True)
     for f_ in os.listdir(out):                                   # одна папка: прежний экспорт заменяется
@@ -280,7 +286,7 @@ def export_sample(m, ks=None, out=None, dwg=True, verbose=True, nested=False, pn
                 im.dxf.insert = (float(C0[0]), float(C0[1]), 0.0)
                 im.dxf.flags = 1 | 2 | 8
                 p00, p10, p01 = px2(0, 0), px2(1, 0), px2(0, 1)         # пиксель (u, v) -> мкм чертежа
-                _addp((obj(m, r) or 0, img, np.c_[p10 - p00, p01 - p00, p00], None))
+                _addp((obj(m, r) or 0, img, np.c_[p10 - p00, p01 - p00, p00], ((img.max(2) if img.ndim == 3 else img) > 6).astype(np.uint8) * 255))   # чёрное (не снято) — прозрачно
                 local_rep[lay] = dict(quality=True, pixel_um=qi['pixel_um'], pixel_source=qi['pixel_source'],
                                       seam_um=qi.get('seam_um'), size_um=qi['size_um'])
                 if qi['pixel_source'] != 'crosses':

@@ -2,7 +2,7 @@
 
 **用 Python 控制 Optosky ATR8300 拉曼显微镜：扫描基底，把它拼接成一张图，叠加光刻网格，选出需要的方格并导出给 AutoCAD。**
 
-**作者：** A. Lyapeikov, S. Domenko · **版本：** 0.32.0 · English: [README.md](../README.md) · Русский: [README_ru.md](README_ru.md) · PDF: [中文](MicroControl_zh.pdf) · 完整技术参考：[中文](reference_zh.md)、[EN](reference_en.md)、[RU](reference_ru.md)
+**作者：** A. Lyapeikov, S. Domenko · **版本：** 0.33.0 · English: [README.md](../README.md) · Русский: [README_ru.md](README_ru.md) · PDF: [中文](MicroControl_zh.pdf) · 完整技术参考：[中文](reference_zh.md)、[EN](reference_en.md)、[RU](reference_ru.md)
 
 ![扫描查看器：方格的红色网格、选中的方格（绿色）、右侧的样品列表](img/view.jpg)
 
@@ -47,7 +47,7 @@ m.close()
 
 `m.manual()` 打开实时相机画面。用方向键移动（按一次 = 一帧），用 `E` / `Q` 对焦（或 `F` —— 自动对焦）。字母用于操作：`L` 照明、`I` 激光、`W` 白平衡、`R` 标尺、`S` 将拍摄放入队列（后台 quick 拼接；队列在底部）、`V` 在查看器中打开结果。
 
-- **一个窗口，四个步骤。** 顶部栏显示当前位置 —— **1 Overview › 2 Pick areas › 3 Detail › 4 Export**（点击步骤查看要做什么）—— 以及主要按钮：**New area**、**Scan area**（拍摄 + 拼接）、**Export**（AutoCAD 图纸：所选区域的 DWG + DXF）、**Settings**（步长、曝光、对焦点）。
+- **一个窗口。** 顶部栏是主要按钮：**New area**、**Scan area**（拍摄 + 拼接）、**Export**（AutoCAD 图纸：所选区域的 DWG + DXF）、**Settings**（步长、曝光、对焦点）。
 - **地图**（右上；`Tab` —— 放大地图，相机移到角落）：所有已拍内容都在其真实位置（10x 在 50x 之下、50x 在 100x 之下），区域轮廓，以及黄色框 —— 相机当前位置。**点击地图 —— 载物台开过去**；**在地图上拖动 —— 新区域**（用当前物镜）；**`Ctrl`+拖动 —— 自由框**，完全按所画位置（框住晶体），不吸附到方格；滚轮 —— 缩放；右键拖动 —— 移动地图；双击已拍区域 —— 在查看器中打开。
 - **用按键选区**仍然可用：到一个角按 `1`，到对角按 `2`。
 - **对焦点：** 每个角点的高度 $Z$ 会被记录；`K` 添加更多对焦点。扫描时每帧根据这些点得到自己的 $Z$，因此倾斜的样品也保持清晰。勾选「Z follows the focus points」后，方向键移动也会跟随这些点。
@@ -75,7 +75,7 @@ m.close()
 
 在查看器中按 `E` 或运行 `mc.export(folder)`，会在扫描文件夹中写入 `export/`：选中方格的校正 PNG（透明背景）、以微米为单位的 AutoCAD DXF 文件，以及方格编号列表。
 
-最终结果是图纸 `export/drawing.dwg`：每个选中的方格是一张独立图片（`export/squares/*.png`，严格沿网格裁剪），按微米放在其真实位置；方格轮廓和编号在单独图层上，另有一个空的 `BONDS` 图层用于绘制键合线。若已安装免费的 ODA File Converter，则直接写出 DWG；否则生成 `drawing.dxf`（在 AutoCAD 中「另存为」DWG）。请整体移动 `export/` 文件夹：DWG 中的图片始终是独立文件。进度直接显示在窗口中。 **只有在十字已标记且所有勾选的选区都做了 quality 拼接时才生成图纸**（十字是信标，保证光刻拼合无误）；否则导出只有图片和 `mixed.png`，消息说明原因。
+最终结果是图纸 `export/drawing.dwg`：每个选中的方格是一张独立图片（`export/squares/*.png`，严格沿网格裁剪），按微米放在其真实位置；方格轮廓和编号在单独图层上，另有一个空的 `BONDS` 图层用于绘制键合线。若已安装免费的 ODA File Converter，则直接写出 DWG；否则生成 `drawing.dxf`（在 AutoCAD 中「另存为」DWG）。请整体移动 `export/` 文件夹：DWG 中的图片始终是独立文件。进度直接显示在窗口中。 **所有勾选的选区都必须做过 quality 拼接**，否则拒绝导出并列出其余选区。**只有在十字已标记时才生成图纸**（十字是信标，保证光刻拼合无误）；没有十字时导出只有图片和 `mixed.png`。
 
 `mc.projects()` 和 `mc.all_samples()` 打印表格：id、名称、样品、选区、拍摄、创建、修改、描述（Open 对话框中相同）。在查看器中 Open → **New window** 在单独窗口中显示另一个项目（`mc.view_window(folder)`），当前窗口保持打开。
 

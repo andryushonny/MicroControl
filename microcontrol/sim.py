@@ -21,6 +21,8 @@ class SimWorld:
         self.field, self.field0, self.seed = field, field0, seed    # поле крестов: узлы field0 … field0 + field - 1
         self.cryst_cell, self.cryst_mean = 50.0, 0.6               # кристаллы: в среднем 0.6 на клетку 50 × 50 мкм
         self.turn_deg = turn_deg                          # подложка повёрнута на столике (кресты наискосок), градусы
+        self.fine_n, self.fine_pitch, self.fine_cross, self.fine_line = 5, 15.0, 4.0, 0.6   # мелкие кресты 5 × 5 (50x, 100x)
+        self.fine_cell = (2, 1)                            # их квадрат: между крестами (2, 1) и (3, 2)
         n, self.tex_um = 3000, 0.5                    # фон: 3000 px по 0.5 мкм = 1.5 мм, дальше повторяется
         noise = np.zeros((n, n), np.float32)
         for k in (3, 10, 40):
@@ -207,7 +209,17 @@ class SimWorld:
         sx, sy = np.where(ix == a0, 1, -1), np.where(iy == a0, 1, -1)   # квадратик в углу, обращённом внутрь поля
         q, c_ = 0.15 * self.cross, 0.4 * self.cross                    # полсторона и смещение центра квадратика, мкм
         sq = edge(np.abs(dx - sx * c_), q) * edge(np.abs(dy - sy * c_), q)
-        m = (np.maximum(m, np.where(corner, sq, 0)) * inside).astype(np.float32)[..., None]
+        m = (np.maximum(m, np.where(corner, sq, 0)) * inside).astype(np.float32)
+        if self.fine_n:                                   # мелкие кресты: fine_n × fine_n в одном квадрате (fine_cell)
+            fp_, fl_, fw_ = self.fine_pitch, self.fine_cross / 2, self.fine_line / 2
+            u_, v_ = Xr - (self.fine_cell[0] + 0.5) * P_, Yr - (self.fine_cell[1] + 0.5) * P_   # от середины квадрата
+            h_ = (self.fine_n - 1) / 2 * fp_
+            du = u_ - np.clip(np.round(u_ / fp_), -(self.fine_n // 2), self.fine_n // 2) * fp_
+            dv = v_ - np.clip(np.round(v_ / fp_), -(self.fine_n // 2), self.fine_n // 2) * fp_
+            near = (np.abs(u_) <= h_ + fp_ / 2) & (np.abs(v_) <= h_ + fp_ / 2)
+            mf = np.maximum(edge(np.abs(du), fw_) * edge(np.abs(dv), fl_), edge(np.abs(dv), fw_) * edge(np.abs(du), fl_))
+            m = np.maximum(m, mf * near)
+        m = m.astype(np.float32)[..., None]
         for x0_, y0_, x1_, y1_ in getattr(self, 'cross_free', ()):   # участки без крестов (мкм образца)
             m[(Y[:, None] >= y0_) & (Y[:, None] <= y1_) & (X[None] >= x0_) & (X[None] <= x1_)] = 0
         img = img * (1 - m) + np.array([70, 185, 225], np.float32) * m

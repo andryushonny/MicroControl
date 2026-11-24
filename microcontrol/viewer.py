@@ -152,18 +152,22 @@ HELP_ALL = [
     ("Crosses", "C: mark crosses: click two neighbouring crosses in one row = tilt; more crosses far apart = more exact"),
     ("", "The mark goes exactly where you click   Shift+click: snap to the cross centre   Drag a mark: move it"),
     ("", "Right click: remove a cross   Backspace: the last one   Del: start again   Shift+C: frames onto the crosses (exact)"),
+    ("Grid", "One grid for the whole sample: from the crosses marked last (on any selection); the others take it as is"),
+    ("", "2-9, 1 then 0: finer grid of the chosen selection (else the one under the mouse) (1/2 ... 1/10)"),
     ("Numbers", "N: click a square, type the number written next to it (X Y), Enter. Two squares fix all numbers"),
     ("Select", "M: click a square (again: off) / drag a box (Shift: unselect)   Ctrl+A: all / none   Enter: they become a selection"),
     ("", "Right click on green: remove that square (or cell)   Shift + right click: the whole green area"),
     ("Ruler", "R: point-point -> line-line -> point-line -> off; click the points"),
     ("Layers", "All pictures in the order of the list (top = on top); the chosen card - on top for now   Y: the others on / off"),
-    ("", "[ / ]: the picture under the mouse (or the marked ones) more / less transparent (100 / 75 / 50 / 25 / 0 % = outline)"),
+    ("", "[ / ]: the picture of the chosen selection (or the marked ones) more / less transparent (100 / 75 / 50 / 25 / 0 % = outline)"),
     ("", "A: align the chosen selection (this scan) with the others: drag it (or arrows) - only it moves; Space - by the picture itself, Enter - save (its outline moves with it)"),
-    ("Many", "Ctrl+click selections (picture or cards): mark several; Esc: unmark. For the marked (or the one under the mouse): "
+    ("Many", "Ctrl+click selections (picture or cards): mark several; Esc: unmark. For the marked (or the chosen one): "
              "O - objective (draft, 4x ... 100x), S - queue their scans, [ ] - transparency, Del - delete (not scanned)"),
     ("", "Shift+O: the objective of new selections made from cells (M, Enter): draft or 4x ... 100x"),
-    ("Export", "X: everything ticked on the cards -> <sample>/export/: pictures, mixed.png (pixel of the finest scan); the drawing - when the crosses are marked and all ticked are quality"),
+    ("Export", "X: everything ticked on the cards -> <sample>/export/: all ticked must be quality: pictures, mixed.png (pixel of the finest scan), the drawing - when the crosses are marked"),
     ("Scans", "... on a card: all scans of the selection; the star = the main one (maps, view, export); View - open it"),
+    ("Cards", "Click: open that selection   Drag up / down: the layer order   Box: in the export   Chip: objective   x: delete"),
+    ("Queue", "The status bar shows the queue of the microscope window; S puts scans there, Shift+J a quality stitch"),
     ("Profiles", "P: two profile lines (cyan, pink): 4 clicks, then R, G, B along them, averaged over a band: edges, width, contrast"),
 ]
 
@@ -301,6 +305,9 @@ def _view(folder, fullscreen=False, _keys=None):
     Wv, Hv = open_window(WIN, fullscreen) or screen_size()
     car = dict(scroll=0, confirm=None, size=(Wv, Hv), hist=History())   # история — общая для всех выделений
     while cur:
+        if not fullscreen:                                  # окно могли растянуть: заставка — его размера, не растянутая
+            Wv, Hv = window_size(WIN, (Wv, Hv))
+            car['size'] = (Wv, Hv)
         try:                                                # пока грузится — видно, что идёт работа
             ld_ = np.full((Hv, Wv, 3), 24, np.uint8)
             UI.progress_panel(ld_, "Opening", f"Selection {SM.sample_index(cur)}" if ses else os.path.basename(cur),
@@ -2141,19 +2148,8 @@ def _view_one(folder, fullscreen, keys, car):
             kind = 'err' if (st['msg'].startswith('[E') or 'no ' in low[:4] or 'not ' in low or 'disagree' in low) \
                 else ('info' if st.get('lab') else 'ok')
             UI.toast(img, st['msg'], Wv / 2, Hv - hb - 18, 0.55, kind, Wv - 40)
-        if st.get('help'):                                  # H: все клавиши
-            fsh = 0.52
-            lh = UI.size("Xg", fsh)[1] + 14
-            wl = max(UI.size(a_, fsh, 2)[0] for a_, _b in HELP_ALL) + 24
-            wh = min(Wv - 60, wl + max(UI.size(b_, fsh)[0] for _a, b_ in HELP_ALL) + 40)
-            hh = lh * len(HELP_ALL) + 50
-            x0_, y0_ = int((Wv - wh) / 2), int((Hv - hh) / 2)
-            UI.panel(img, x0_, y0_, x0_ + wh, y0_ + hh, 0.92, UI.LINE)
-            UI.put(img, "Keys", x0_ + 18, y0_ + 30, 0.6, UI.ACCENT, 2)
-            for k_, (a_, b_) in enumerate(HELP_ALL):
-                yy = y0_ + 30 + (k_ + 1) * lh
-                UI.put(img, a_, x0_ + 18, yy, fsh, UI.ACCENT, 1)
-                UI.put(img, b_, x0_ + 18 + wl, yy, fsh, UI.TEXT)
+        if st.get('help'):                                  # H: все клавиши (переносом, влезает в окно)
+            UI.help_panel(img, HELP_ALL)
         st['scene'] = img
         st['prof_dirty'] = False
         return np.hstack([with_prof(img), carousel_img()])
@@ -2369,13 +2365,13 @@ def _view_one(folder, fullscreen, keys, car):
         st['car_dirty'] = st['dirty'] = True
 
     def targets():
-        """С чем делать дело: отмеченные (Ctrl+щелчок), иначе — выделение под мышью. -> [uid]."""
+        """С чем делать дело: отмеченные (Ctrl+щелчок), иначе — ВЫБРАННОЕ в списке (не то, что под мышью). -> [uid]."""
         mk_ = [u_ for u_ in car.get('marks', set()) if any(r_['uid'] == u_ for r_ in regions_now()[0])]
         car['marks'] = set(mk_)
         if mk_:
             return mk_
-        u_ = sel_at(st['hov']) if st.get('hov') else None
-        return [u_] if u_ else []
+        u_ = car.get('focus') or sc.st.meta.get('sample_uid')
+        return [u_] if u_ and any(r_['uid'] == u_ for r_ in regions_now()[0]) else []
 
     def scanned(r_):
         from .project import Selection as _Sel
@@ -2620,6 +2616,15 @@ def _view_one(folder, fullscreen, keys, car):
     def set_refine(n):
         """Клавиши 2–9 над выделением (1, затем 0 — 10): его подсетка в n раз плотнее (1 — убрать)."""
         L_ = lat_now()
+        ch_ = [r_ for r_ in regions_now()[0] if r_.get('uid') in (car.get('focus'),) and r_.get('cells')]
+        if L_ is not None and ch_:                          # выбранное в списке (из клеток) — ему, где бы ни была мышь
+            r_ = ch_[0]
+            old_ = regions_now()[1].get(r_['uid']) or {}
+            write_refine(r_['uid'], n, old_.get('cells', []) if int(old_.get('n') or 0) == n else [])
+            st['msg'] = (f"Selection {r_['num'] or ''}: grid 1/{n} inside it (cells "
+                         f"{LT.pitch_text(L_, LT.level(r_) * n)}); M selects its cells" if n > 1
+                         else f"Selection {r_['num']}: no finer grid")
+            return
         if L_ is None or st.get('hov') is None:
             st['msg'] = "The finer grid needs the lattice of the sample: mark the crosses and number two squares (C, N)"
             return
@@ -3369,15 +3374,14 @@ def _view_one(folder, fullscreen, keys, car):
             st['_fl_key'] = None
             st['msg'] = ("Pictures of the other selections: on ([ ] - transparency)" if car['others']
                          else "Only this scan and the higher objectives over it")
-        elif ch == 'o':                                      # O / Shift+O: прозрачность картинки выделения под мышью
-            q_o = from_view(st['hov']) if st.get('hov') else None
-            on_base_ = q_o is not None and 0 <= q_o[0] < sc.size[0] and 0 <= q_o[1] < sc.size[1]
-            L_ = None if on_base_ else (layer_at(st['hov']) if st.get('hov') else None)
-            if on_base_:                                    # выбранная — сверху: ей
+        elif ch == 'o':                                      # [ ]: прозрачность картинки ВЫБРАННОГО выделения
+            fo_u_ = car.get('focus')
+            L_ = next((x_ for x_ in finer_layers() if x_[4] == fo_u_), None) if fo_u_ else None
+            if L_ is None:                                  # выбрана открытая съёмка
                 me_u_ = sc.st.meta.get('sample_uid')
                 L_ = (sc.st.meta.get('objective') or 0, None, None, None, me_u_, folder, SM.sample_index(folder))
             if L_ is None:
-                st['msg'] = "[ ]: point at a picture (or Ctrl+click selections)"
+                st['msg'] = "[ ]: choose a selection (its card) or Ctrl+click several"
             else:
                 lv_ = [1.0, 0.75, 0.5, 0.25, 0.0]
                 a0_ = alphas().get(L_[4], 1.0)
@@ -3511,7 +3515,8 @@ def _view_one(folder, fullscreen, keys, car):
             ks_ = [k_ for k_ in _ord(sh_) if sh_._regions[k_].get('export', True)]
             r, e = busy("Export", lambda: export_sample(sh_, ks_))
             from .drawing import export_message
-            st['msg'] = f"Export: {e}" if e is not None else export_message(r, len(ks_))
+            st['msg'] = (str(e) if str(e).startswith("Not exported") else f"Export: {e}") if e is not None \
+                else export_message(r, len(ks_))
         elif ch == 'e':                                      # без образца: картинки квадратов + чертёж этой съёмки
             g.save(px_um)
             r, e = busy("Export", lambda: export(folder))

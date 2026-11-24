@@ -19,14 +19,6 @@ from .stats import timed_fn
 
 
 # ------------------------------------------------------------------ состояние разметки
-SENSITIVITY = 50                 # чувствительность жёлтой подсказки по умолчанию, 0…100
-
-
-def sens_frac(S):
-    """Чувствительность 0…100 -> доля квадрата, которую должно занять «что-то»: 5 % … 0,05 %."""
-    return 0.05 * 10 ** (-2 * float(S) / 100)
-
-
 def _stage_layout(folder, P):
     """Положения кадров по столику (как в просмотре до сшивки), если сетка размечена раньше, чем сделана
     сшивка (grid.json старее join/positions_all.csv). Иначе None."""
@@ -56,8 +48,6 @@ class Grid:
         self.selected = set()
         self.labels = {}                                    # (i, j) -> (X, Y): номера, написанные литографией
         self.arm = None                                     # плечо креста, px мозаики (находится само)
-        self.useful = {}                                    # подсказка: квадраты, где что-то есть -> доля
-        self.sensitivity = SENSITIVITY
         self.refined = None
         self.frames_px = None                               # где стояли кадры, когда ставились кресты (px мозаики)
         p = os.path.join(folder, 'grid.json')
@@ -77,12 +67,7 @@ class Grid:
             self.selected = {tuple(c) for c in d.get('selected', [])}
             self.labels = {(int(a), int(b)): (int(X), int(Y)) for a, b, X, Y in d.get('labels', [])}
             self.arm = d.get('arm_px')
-            self.useful = {(int(a), int(b)): f for a, b, f in d.get('useful', [])}
-            self.sensitivity = d.get('sensitivity', SENSITIVITY)
             self.frames_px = np.array(d['frames_px'], float) if 'frames_px' in d else None
-            if 'hint_scores' in d:
-                self.scores = {(int(a), int(b)): f for a, b, f in d['hint_scores']}
-                self.hint_squares = d.get('hint_squares', len(self.scores))
 
     def sync(self, P, W, H):
         """Кадры встали по-другому (после сшивки или пересшивки): перенести кресты вместе с их кадром.
@@ -117,13 +102,6 @@ class Grid:
             d['numbering'] = dict(P=P.tolist(), t=t.tolist(), note="(X, Y) = P (i, j) + t")
         if self.arm:
             d['arm_px'] = int(self.arm)
-        d['sensitivity'] = self.sensitivity
-        if self.useful:
-            d['useful'] = [[i, j, f] for (i, j), f in sorted(self.useful.items())]
-        sc_ = getattr(self, 'scores', None)
-        if sc_:                                             # доли всех квадратов: чувствительность — мгновенно
-            d['hint_scores'] = [[i, j, round(f, 5)] for (i, j), f in sorted(sc_.items()) if f > 0]
-            d['hint_squares'] = getattr(self, 'hint_squares', len(sc_))
         if self.refined:
             d['refined'] = self.refined
         if self.frames_px is not None:
@@ -324,91 +302,6 @@ class Grid:
         P, t, _ = num or self.numbering()
         X, Y = P @ np.array([i, j]) + t
         return int(X), int(Y)
-
-    def find_useful(self, render, size, n=160, sensitivity=None, dark=False, model=None, info=None):
-        """Подсказка: квадраты, в которых что-то есть (чешуйки, кристаллы, любые предметы) — поиск аномалий
-        (mask -> anomaly.py, принцип PaDiM): подложка описывается смесью гауссиан признаков маленьких участков,
-        «что-то» — участки, далёкие от неё. Учится без разметки на самой мозаике (почти все квадраты пустые)
-        или берёт модель пустой подложки (model: файл hint_model.npz / папка скана с ним / anomaly.Normal).
-        Для слабого ПК вся мозаика — один уменьшенный снимок (≤ ~6 Мпикс). Кресты с номерами (около узлов
-        решётки), края скана и пыль (мелкие тёмные бесцветные точки; dark=True — считать и их) не считаются.
-        sensitivity 0…100 (по умолчанию 50; больше — больше подсказок): доля квадрата, которую должно занять
-        «что-то», от 5 % (0) до 0,05 % (100). render(cx, cy, s, w, h) -> кусок мозаики в масштабе s.
-        Возвращает {(i, j): доля}; info (dict) получает время, число патчей и модель."""
-        import time as _t
-        from . import anomaly as AD
-        if not self.ready():
-            return {}
-        t0 = _t.monotonic()
-        v1, v2 = self.cr.vectors()
-        pitch = min(np.hypot(*v1), np.hypot(*v2))
-        cells = list(self.cells_range((0, 0), size))
-        n = int(min(n, max(32, (6e6 / max(1, len(cells))) ** 0.5)))   # слабый ПК: вся мозаика ≤ ~6 Мпикс
-        s = min(1.0, n / pitch)
-        W, H = int(np.ceil(size[0] * s)), int(np.ceil(size[1] * s))
-        pr = Progress(5, "Hints", unit='steps')
-        pr.stage(f"assembling the mosaic, {W} x {H} px")
-        big = render(size[0] / 2, size[1] / 2, s, W, H)
-        void = (big <= 22).all(2).astype(np.uint8)            # вне кадров (фон просмотра, чёрные поля обзора)
-        net = AD.load_backbone()
-        pr.stage("patch features" + (" (CNN)" if net is not None else " (colour + texture)"), 1)
-        F = AD.features(big, 0.75 * n, net)
-        del big
-        Hp, Wp = F.shape[:2]
-        p = AD.PATCH
-        valid = cv2.resize(void, (Wp, Hp), interpolation=cv2.INTER_AREA) == 0
-        del void
-        # кресты и номера у них: круг около каждого узла решётки
-        cm = np.zeros((Hp, Wp), np.uint8)
-        r = max(1, int(round(0.25 * n / p)))
-        for i, j in cells:
-            q = self.cr.point(i, j) * s / p
-            if -r <= q[0] < Wp + r and -r <= q[1] < Hp + r:
-                cv2.circle(cm, (int(round(q[0])), int(round(q[1]))), r, 1, -1)
-        valid &= cm == 0
-        if isinstance(model, str):
-            path = os.path.join(model, AD.MODEL_FILE) if os.path.isdir(model) else model
-            model = AD.Normal.load(path)
-        pr.stage("model of the empty substrate" + (" (loaded)" if model is not None else f" from {int(valid.sum())} patches"), 1)
-        if model is None:
-            model = AD.Normal.fit(F[valid], kind='cnn' if net is not None else 'hand')
-        pr.stage("searching for anything unusual", 1)
-        m, _z = AD.anomaly_mask(F, model, valid, dust=not dark)
-        pr.stage("scoring the squares", 1)
-        # доля «чего-то» в каждом квадрате: центр патча -> квадрат решётки
-        yy, xx = np.mgrid[0:Hp, 0:Wp]
-        P = np.stack([(xx.ravel() + 0.5) * p / s, (yy.ravel() + 0.5) * p / s], 1) - self.cr.O
-        del xx, yy
-        ij = np.floor(P @ np.linalg.inv(np.column_stack([v1, v2])).T).astype(np.int64)
-        del P
-        i0, j0 = ij.min(0)
-        key = (ij[:, 0] - i0) * (ij[:, 1].max() - j0 + 1) + (ij[:, 1] - j0)
-        nk = int(key.max()) + 1
-        tot = np.bincount(key, minlength=nk)                       # все патчи квадрата
-        good = np.bincount(key, weights=valid.ravel(), minlength=nk)
-        hit = np.bincount(key, weights=m.ravel(), minlength=nk)
-        out = {}
-        nj = ij[:, 1].max() - j0 + 1
-        for kk in np.nonzero(good)[0]:
-            if good[kk] < 0.5 * tot[kk] or tot[kk] < 0.5 * (pitch * s / p) ** 2:   # квадрат почти вне скана
-                continue
-            out[(int(kk // nj + i0), int(kk % nj + j0))] = float(hit[kk] / good[kk])
-        self.scores, self.hint_squares = out, len(out)
-        pr.stage(f"{len(out)} squares scored", 1)
-        pr.close()
-        self.hint_model = model
-        if info is not None:
-            info.update(seconds=round(_t.monotonic() - t0, 2), patches=int(valid.sum()), square_px=n,
-                        model='CNN (ONNX)' if net is not None else 'colour + texture', components=len(model.means))
-        return self.pick_useful(sensitivity)
-
-    def pick_useful(self, sensitivity=None):
-        """Подсказка по уже посчитанным долям (мгновенно): квадраты, где «что-то» занимает больше порога."""
-        S = self.sensitivity if sensitivity is None else float(min(100, max(0, sensitivity)))
-        self.sensitivity = S
-        lim = sens_frac(S)
-        self.useful = {c: round(x, 4) for c, x in getattr(self, 'scores', {}).items() if x > lim}
-        return self.useful
 
     def ready(self):
         return self.cr.vectors()[0] is not None

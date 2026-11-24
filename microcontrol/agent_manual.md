@@ -20,8 +20,7 @@ What the software does, step by step:
    neighbouring crosses in one row (`mark_cross`), then `fit_grid`; the squares between crosses get the red grid.
 5. **Numbers.** `label_square` on two squares (different row and column) with the numbers printed next to them;
    then every square has its real name [X, Y].
-6. **Find and choose.** `find_hints` marks squares where something is (yellow). You check them with `look`,
-   choose the useful ones with `select_squares` (green).
+6. **Choose.** Look at the squares with `look` and choose the useful ones with `select_squares` (green).
 7. **Export.** `export` writes only the selected squares (straight PNG + DXF in um for AutoCAD).
 
 Golden rules:
@@ -38,7 +37,7 @@ Tool groups: state (`get_status`, `get_settings`, `get_manual`), seeing (`look`)
 `goto_position`, `autofocus`, `take_photo`, `change_setting`), areas (`area_corner`, `add_focus_point`,
 `goto_area`, `delete_area`, `scan`), scans on disk (`list_scans`, `scan_info`, `stitch`, `remove_sample`),
 grid and squares (`mark_cross`, `undo_cross`, `fit_grid`, `label_square`, `list_squares`, `select_squares`,
-`find_hints`, `export`).
+`export`).
 
 ## stage
 
@@ -82,7 +81,7 @@ grid and squares (`mark_cross`, `undo_cross`, `fit_grid`, `label_square`, `list_
 - `look` target=mosaic with `folder` shows the whole mosaic or a region `x0, y0, x1, y1` (px). The numbers on the
   top and left borders are mosaic px. To read details, look at a smaller region (e.g. 600 x 600 px).
 - In the picture: red lines = grid of squares, white text "X,Y" = square names, green = selected,
-  yellow = hints, red circles = marked crosses.
+  red circles = marked crosses.
 
 ## squares
 
@@ -94,11 +93,9 @@ grid and squares (`mark_cross`, `undo_cross`, `fit_grid`, `label_square`, `list_
   square containing a point; read the number from a picture of that square (`look` with a small region), never
   guess. Two labels in different rows and columns fix all names; `scan_info` → `grid.numbering` says if more
   are needed.
-- `list_squares` which=selected / hints / all gives names, centres (px) and hint scores; use the centre to look
+- `list_squares` which=selected / all gives names and centres (px); use the centre to look
   at a square: region centre ± one pitch.
-- `select_squares`: add / remove listed names, add_hints, or replace (set / clear, approval).
-- `find_hints` sensitivity 0..100: higher finds more. It is an anomaly search (anything unlike the empty substrate; small dark dust is ignored): always check the
-  strongest hints with `look` before selecting them.
+- `select_squares`: add / remove listed names, or replace (set / clear, approval).
 - `export` writes `<scan>/export/`: PNG of the selected squares, straight, and a DXF in um.
 
 ## safety

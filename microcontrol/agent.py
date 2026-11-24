@@ -443,7 +443,7 @@ def _change(ag, name, value, reason):
 # ------------------------------------------------------------------ tools: camera and stage
 @tool('look', "Get a picture (PNG file; also attached as an image if your client supports images). "
               "target='camera': the live camera frame now (no movement). target='mosaic': a part of a stitched scan "
-              "with the red square grid, square names, selection (green) and hints (yellow); the border ruler is in "
+              "with the red square grid, square names and selection (green); the border ruler is in "
               "mosaic pixels — use those numbers for mark_cross and label_square. target='map': the stage map with "
               "selections, focus points and the current position.",
       {'target': {'type': 'string', 'enum': ['camera', 'mosaic', 'map']}, 'folder': FOLDER,
@@ -494,7 +494,7 @@ def _mosaic_image(ag, folder, x0, y0, x1, y1):
         num = g.numbering()
         ov = img.copy()
         for c in cells:
-            col = (90, 200, 90) if c in g.selected else ((60, 210, 230) if c in g.useful else None)
+            col = (90, 200, 90) if c in g.selected else None
             if col:
                 cv2.fillConvexPoly(ov, np.array([to(q) for q in g.corners(*c)], np.int32), col)
         img = cv2.addWeighted(ov, 0.35, img, 0.65, 0)
@@ -531,7 +531,7 @@ def _mosaic_image(ag, folder, x0, y0, x1, y1):
     return dict(image=path, width=W, height=H, mosaic_size_px=[round(Wm), round(Hm)], region_px=[x0, y0, x1, y1],
                 image_px_per_mosaic_px=round(s, 4), ruler="numbers on the top and left borders are mosaic px",
                 grid=("ready" if g.ready() else "not set: mark two neighbouring crosses with mark_cross"),
-                crosses_marked=len(g.cr.marks), selected=len(g.selected), hints=len(g.useful))
+                crosses_marked=len(g.cr.marks), selected=len(g.selected))
 
 
 def _map_image(ag):
@@ -735,7 +735,7 @@ def _scan(ag, reason, dry_run=False, name=''):
 
 # ------------------------------------------------------------------ tools: scans on disk
 @tool('list_scans', "Scans of the open project (every scan of every selection, a new scan of a selection is a new "
-                    "version): folder, frames, stitched or not, grid, chosen squares, hints.")
+                    "version): folder, frames, stitched or not, grid, chosen squares.")
 def _list(ag):
     out = []
     for d in ag._scan_names():
@@ -759,12 +759,11 @@ def _brief(ag, f):
     meta = json.load(open(os.path.join(f, 'meta.json'), encoding='utf-8'))
     return dict(folder=os.path.relpath(f, ag.root), frames=meta.get('frames') or meta.get('n_frames'),
                 objective=meta.get('objective'), stitched=os.path.isdir(os.path.join(f, 'join')),
-                grid=g.ready(), crosses=len(g.cr.marks), labels=len(g.labels), selected=len(g.selected),
-                hints=len(g.useful))
+                grid=g.ready(), crosses=len(g.cr.marks), labels=len(g.labels), selected=len(g.selected))
 
 
 @tool('scan_info', "Everything about one scan: frames, size, stitched, grid (tilt, pitch), labels and numbering, "
-                   "selection, hints, exported files, and the suggested next step.", {'folder': FOLDER}, ('folder',))
+                   "selection, exported files, and the suggested next step.", {'folder': FOLDER}, ('folder',))
 def _info(ag, folder):
     f = ag.folder(folder)
     g = ag.grid(f)
@@ -783,7 +782,7 @@ def _info(ag, folder):
     nxt = ("stitch" if not b['stitched'] else
            "look target=mosaic, then mark_cross on two neighbouring crosses in one row" if not g.ready() else
            "fit_grid (uses all crosses), then label_square on two squares in different rows and columns"
-           if not g.labels else "find_hints / select_squares, then export")
+           if not g.labels else "look, select_squares, then export")
     out['next'] = nxt
     return out
 
@@ -882,9 +881,9 @@ def _label(ag, folder, x_px, y_px, square):
     return dict(lattice_index=list(c), label=square, numbering=g.numbering()[2])
 
 
-@tool('list_squares', "Squares with their names [X, Y], centre in mosaic px and hint score. which: 'selected', "
-                      "'hints' (yellow: something is there) or 'all' (only inside the mosaic).",
-      {'folder': FOLDER, 'which': {'type': 'string', 'enum': ['selected', 'hints', 'all']},
+@tool('list_squares', "Squares with their names [X, Y] and centre in mosaic px. which: 'selected' or 'all' "
+                      "(only inside the mosaic).",
+      {'folder': FOLDER, 'which': {'type': 'string', 'enum': ['selected', 'all']},
        'limit': {'type': 'integer', 'minimum': 1, 'maximum': 2000}, 'offset': {'type': 'integer', 'minimum': 0}},
       ('folder', 'which'))
 def _squares(ag, folder, which, limit=200, offset=0):
@@ -894,25 +893,22 @@ def _squares(ag, folder, which, limit=200, offset=0):
         raise AgentError('NO_GRID', "No grid yet: mark two crosses (mark_cross).")
     if which == 'selected':
         cells = sorted(g.selected)
-    elif which == 'hints':
-        cells = sorted(g.useful, key=lambda c: -g.useful[c])
     else:
         sc = ag.scene(f)
         cells = [c for c in g.cells_range((0, 0), sc.size)
                  if all(0 <= q[0] <= sc.size[0] and 0 <= q[1] <= sc.size[1] for q in g.corners(*c))]
     num = g.numbering()
-    sc_ = getattr(g, 'scores', {}) or g.useful
     page = cells[offset:offset + limit]
     return dict(total=len(cells), offset=offset, squares=[
         dict(name=list(g.name(*c, num=num)), centre_px=[round(float(v)) for v in g.cr.point(c[0] + .5, c[1] + .5)],
-             selected=c in g.selected, hint=round(float(sc_.get(c, 0.0)), 4)) for c in page],
+             selected=c in g.selected) for c in page],
         more=offset + limit < len(cells))
 
 
 @tool('select_squares', "Change the selection (green squares, the ones exported). action: 'add' / 'remove' the "
-                        "listed squares; 'add_hints' adds all yellow hints; 'clear' and 'set' replace the selection "
+                        "listed squares; 'clear' and 'set' replace the selection "
                         "(need approval).",
-      {'folder': FOLDER, 'action': {'type': 'string', 'enum': ['add', 'remove', 'add_hints', 'set', 'clear']},
+      {'folder': FOLDER, 'action': {'type': 'string', 'enum': ['add', 'remove', 'set', 'clear']},
        'squares': {'type': 'array', 'items': SQUARE, 'description': "List of [X, Y] names."}, 'reason': REASON},
       ('folder', 'action'), risk='work')
 def _select(ag, folder, action, squares=None, reason=''):
@@ -933,31 +929,12 @@ def _select(ag, folder, action, squares=None, reason=''):
         g.selected |= cells
     elif action == 'remove':
         g.selected -= cells
-    elif action == 'add_hints':
-        g.selected |= set(g.useful)
     elif action == 'set':
         g.selected = set(cells)
     else:
         g.selected = set()
     g.save(ag.px_um(ag.scene(f)))
     return dict(before=n0, now=len(g.selected))
-
-
-@tool('find_hints', "Yellow hints: squares where something is (flakes, crystals, any object): anomaly search — "
-                    "everything that does not look like the empty substrate. sensitivity 0..100 (more = more "
-                    "squares; default 50). Dust is ignored. Check the strongest ones with look before selecting.",
-      {'folder': FOLDER, 'sensitivity': {'type': 'number', 'minimum': 0, 'maximum': 100}}, ('folder',), risk='work')
-def _hints(ag, folder, sensitivity=None):
-    f = ag.folder(folder)
-    g, sc = ag.grid(f), ag.scene(f)
-    if not g.ready():
-        raise AgentError('NO_GRID', "No grid yet.")
-    g.find_useful(sc.render, sc.size, sensitivity=sensitivity)
-    g.save(ag.px_um(sc))
-    num = g.numbering()
-    top = sorted(g.useful, key=lambda c: -g.useful[c])[:30]
-    return dict(hints=len(g.useful), sensitivity=g.sensitivity,
-                strongest=[dict(name=list(g.name(*c, num=num)), score=round(g.useful[c], 4)) for c in top])
 
 
 @tool('export', "Export only the selected squares: straight PNG + DXF (um) for AutoCAD, into <scan>/export/.",

@@ -326,9 +326,23 @@ def _area(m, reg):
     ax0, ay0, bx0, by0 = ax, ay, bx, by
     ax, ay = math.floor(ax / s_ + 1e-6) * s_, math.floor(ay / s_ + 1e-6) * s_
     bx, by = math.ceil(bx / s_ - 1e-6) * s_, math.ceil(by / s_ - 1e-6) * s_
+    gb = None
+    if reg.get('shape'):                                    # контур меньше кадра (рамка с кристаллом): он сам
+        from .layers import from_json
+        gb = from_json(reg['shape']).bounds
     for i_, (lo, hi, lo0, hi0) in enumerate(((ax, bx, ax0, bx0), (ay, by, ay0, by0))):
         c_ = round((lo + hi) / 2 / s_) * s_                 # один кадр не накроет контур, если центр не на шаге
-        if n[i_] == 1 and hi > lo and abs(c_ - (lo0 + hi0) / 2) > 1e-6 + (hi0 - lo0) * 0:
+        if n[i_] == 1 and hi > lo and abs(c_ - (lo0 + hi0) / 2) > 1e-6:
+            f_ = reg.get('fw' if i_ == 0 else 'fh', 0.0)
+            if gb is not None:
+                c_ = round((gb[i_] + gb[i_ + 2]) / 2 / s_) * s_     # шаг, ближайший к середине контура
+            if gb is not None and c_ - f_ / 2 <= gb[i_] + 1e-6 and c_ + f_ / 2 >= gb[i_ + 2] - 1e-6:
+                lo = hi = c_                                # кадр на ближнем шаге накрывает контур целиком
+                if i_ == 0:
+                    ax = bx = c_
+                else:
+                    ay = by = c_
+                continue
             n[i_] = 2
     a_ = Area(ax - m._off['x'], ay - m._off['y'], bx - m._off['x'], by - m._off['y'])
     a_.n = tuple(n)

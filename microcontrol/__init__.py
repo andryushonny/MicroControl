@@ -8,7 +8,7 @@ Authors: Andrey Lyapeikov, Savely Domenko.
     folder = m.scan()          # shoot the area
     m.close()
     mc.stitch(folder)          # exact frame positions from the overlaps
-    mc.view(folder)            # crosses, square selection, numbers, hints
+    mc.view(folder)            # crosses, square selection, numbers
     mc.export(folder)          # only the selected squares: PNG + DXF
 
 Help: mc.help()
@@ -27,7 +27,7 @@ from .stitch import stitch
 from .mask import export, clean
 from .optics import measure_distortion as distortion
 from .anchor import fit_crosses
-from .viewer import view, view_window, hints, train_hints
+from .viewer import view, view_window
 from . import layers, snap                            # выделения-слои (контуры, операции), строгая геометрия съёмки
 from .drawing import export_sample                   # чертёж образца: выбранные участки одним DXF / DWG
 from .agent import Agent
@@ -63,8 +63,6 @@ WORKFLOW
   mc.stitch(folder)                Positions of all frames by their overlaps (like ASHLAR): the preview
   mc.fit_crosses(folder)           Exact: frames onto the crosses, grid and lens distortion (after marking crosses)
   mc.view(folder)                  Mark crosses on the mosaic, straighten it, select the squares you need
-  mc.hints(folder, sensitivity=50) Yellow hint without the window: squares with something in them (0-100)
-  mc.train_hints(folder, default=True)  Model of the empty substrate for the hints (scan of a clean substrate)
   ag = mc.Agent(m)                 Tools for AI agents (ag.call('get_status')); mc.agent.chat(m, model='qwen3:8b')
   python -m microcontrol.agent --mcp --port COM3   MCP server for local models; actions need the operator's Allow
   mc.distortion(folder)            Measure the lens distortion by the crosses (once per objective)
@@ -106,8 +104,7 @@ VIEW WINDOW (mc.view)
   M / B            Select squares: click and box / brush rectangles (Shift: unselect)   A / X  All / none
   Right click      On a green area: remove it
   N                Number a square: click it, type X Y (two squares in another row and column fix all numbers)
-  Y                Yellow hint: squares with something in them   Shift+Y  Select the yellow ones
-  U, < / >         Hint sensitivity 0-100 (type it / -5 / +5)    T  Straight / as shot
+  T                Straight / as shot
   R                Ruler                    E       Export
   Ctrl+Z / Ctrl+Y  Undo / redo any change
 
@@ -183,6 +180,6 @@ def help():
     print(_HELP.format(v=__version__))
 
 
-__all__ = ["Microscope", "Agent", "ports", "Area", "Program", "ScanData", "join", "view", "hints", "train_hints", "help", "imread", "imwrite",
+__all__ = ["Microscope", "Agent", "ports", "Area", "Program", "ScanData", "join", "view", "help", "imread", "imwrite",
            "MicroControlError", "SafetyError", "LimitError", "CommError", "CameraError", "FocusError",
            "StoreError", "GcodeError", "StopError", "ERRORS"]

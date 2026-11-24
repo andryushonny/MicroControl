@@ -299,7 +299,7 @@ keys = [ord('c')] + clk((2, 2)) + clk((3, 2)) + [ord('t'), -1] + clk((9, 2)) + c
 keys += [ord('t'), -1, ord('t'), -1, ord('m'), -1, ('drag', 560, 380, 720, 520), -1]
 keys += [ord('n'), -1, ('click', *view_xy(world(2.5, 2.5))), -1] + typed('12 7') + \
         [('click', *view_xy(world(4.5, 3.5))), -1] + typed('14 6')      # номера литографии: X вдоль i, Y — против j
-keys += [ord('y'), -1, ord('e'), -1, 27, 27]
+keys += [ord('e'), -1, 27, 27]
 mc.view(f, _keys=keys)
 grid = json.load(open(os.path.join(f, 'grid.json')))
 assert abs(grid['pitch_um'][0] - 100) < 1 and abs(grid['pitch_um'][1] - 100) < 1, grid['pitch_um']
@@ -315,13 +315,7 @@ assert gg.name(*gg.cell_at(sq['c'])) == (13, 7) and gg.name(*gg.cell_at(sq['e'])
     (gg.name(*gg.cell_at(sq['c'])), gg.name(*gg.cell_at(sq['e'])))
 sj = json.load(open(os.path.join(f, 'export', 'selection.json')))
 assert len(sj['names']) == len(sj['squares']) and 'S13,7' not in open(os.path.join(f, 'export', 'selection.dxf')).read()
-print("Square numbers:", gg.numbering()[2], "  hints:", len(gg.useful), "of", len(gg.scores) if hasattr(gg, 'scores') else '?')
-hint_ok = {gg.cell_at(mos_xy(world(3.5, 2.5))), gg.cell_at(mos_xy(world(5.5, 3.5)))}
-# жёлтая подсказка (поиск аномалий) нашла чешуйки; тёмные пятна текстуры симулятора — тоже «что-то»,
-# но пустые квадраты не отмечены все подряд, и чешуйки — среди самых заметных
-assert hint_ok <= set(gg.useful), (hint_ok, gg.useful)
-med = sorted(gg.useful.values())[len(gg.useful) // 2]
-assert len(gg.useful) <= 0.7 * gg.hint_squares and all(gg.useful[c] >= med for c in hint_ok), (hint_ok, gg.useful)
+print("Square numbers:", gg.numbering()[2])
 # простой щелчок ставит крест ровно в точку щелчка (без притяжения), отметку можно перетащить мышью
 Wsc_ = 1280 - mc.samples.CAR_W
 n0 = len(gg.cr.marks)
@@ -438,15 +432,13 @@ c = mos(np.array(wp(1.5, 1.5)))
 ok(C('label_square', folder=folder, x_px=float(c[0]), y_px=float(c[1]), square=[12, 7]))
 c = mos(np.array(wp(2.5, 0.5)))
 r = ok(C('label_square', folder=folder, x_px=float(c[0]), y_px=float(c[1]), square=[13, 8])); print(r)
-r = ok(C('find_hints', folder=folder)); print('hints', r['hints'], r['strongest'][:3])
-r = ok(C('list_squares', folder=folder, which='hints', limit=5)); print('sq', r['squares'][:2])
-ok(C('select_squares', folder=folder, action='add_hints'))
+r = ok(C('list_squares', folder=folder, which='all', limit=5)); print('sq', r['squares'][:2])
+r = C('find_hints', folder=folder); assert r['error']['code'] == 'NO_TOOL', r      # подсказок больше нет
 r = ok(C('select_squares', folder=folder, action='add', squares=[[12, 8]])); print('sel', r)
 r = C('select_squares', folder=folder, action='add', squares=[[12]]); assert r['error']['code'] == 'BAD_ARGS', r
 r = ok(C('look', target='mosaic', folder=folder)); print('mosaic2', r['image'])
 r = ok(C('export', folder=folder)); print('export', r['result'][:3])
-th = mc.train_hints(os.path.join(m.dirs['scans'], folder)); assert os.path.exists(th['File']), th
-hh = mc.hints(os.path.join(m.dirs['scans'], folder), model=os.path.join(m.dirs['scans'], folder)); print(hh)
+assert not hasattr(mc, 'hints') and not hasattr(mc, 'train_hints')
 # MCP
 inp = io.StringIO("\n".join(json.dumps(x) for x in [
     dict(jsonrpc='2.0', id=1, method='initialize', params=dict(protocolVersion='2025-06-18')),
@@ -458,10 +450,10 @@ out = io.StringIO()
 mc.agent.mcp_server(m, approve=approve, inp=inp, out=out)
 R = [json.loads(x) for x in out.getvalue().splitlines()]
 assert [x['id'] for x in R] == [1, 2, 3, 4], R
-assert len(R[1]['result']['tools']) == 26 and R[3]['result']['content'][1]['type'] == 'image'
+assert len(R[1]['result']['tools']) == 25 and R[3]['result']['content'][1]['type'] == 'image'
 print('mcp ok', len(R[1]['result']['tools']), 'tools; asked', len(asked))
 m.close()
-print("Agent: tools, approval, errors, scan, grid, hints, export, MCP: OK")
+print("Agent: tools, approval, errors, scan, grid, export, MCP: OK")
 
 # ------------------------------------------------------------------ 17. Z по точкам фокуса и время скана
 import io, contextlib, microcontrol.manual as M
@@ -2124,3 +2116,55 @@ m.close()
 print(f"Stitch: seam to {max(e_sub):.3f} px (stage off by 8 px: same), 3000 frames solved in {t_cg:.2f} s, scan with "
       f"backlash: frames to {np.hypot(*e_.T).max():.2f} px, backlash {info_['backlash_um']} um found; J: seam dots "
       "off / on, saved, remembered, Backspace back to automatic: OK")
+
+# ------------------------------------------------------------------ 51. Рамки с кристаллами: Ctrl+тянуть на карте — рамка как нарисована (не по клеткам); обзор 10x выбран — Scan снимает все рамки 50x в нём
+import microcontrol.manual as M
+from microcontrol import samples as SM, layers as LY
+cv2.getWindowImageRect = lambda w: (0, 0, 1440, 900)
+m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp()); m.focus()
+M.run(m, fullscreen=False, _keys=[-1, -1]); n_ = m._nav
+M.run(m, fullscreen=False, _keys=[-1, ('maprect', *n_.to_px((-50, -50)), *n_.to_px((900, 700))), -1, -1])
+k10 = len(m._regions) - 1; u10 = m._regions[k10]['uid']
+m._sample.data['lattice'] = dict(O=[0.0, 0.0], e1=[100.0, 0.0], e2=[0.0, 100.0], stage=True, src=None)   # сетка квадратов
+SM.persist(m)
+m.objective = 50
+fw5, fh5 = m.frame_size
+n_ = m._nav
+def box_px(x0, y0, x1, y1):
+    return (*n_.to_px((x0, y0)), *n_.to_px((x1, y1)))
+M.run(m, fullscreen=False, _keys=[-1, ('maprect', *box_px(205, 205, 395, 395)), -1, -1])          # просто тянуть: клетки
+rc_ = m._regions[-1]
+assert rc_.get('cells') and not rc_.get('free'), rc_                                                   # квадраты сетки
+boxes = [(510, 120, 528, 134), (560, 400, 640, 455), (90, 480, 150, 520)]                             # мкм: малая, средняя, ещё одна
+for b_ in boxes:
+    M.run(m, fullscreen=False, _keys=[-1, ('maprect', *box_px(*b_), True), -1, -1])                    # Ctrl+тянуть
+fr_ = [r_ for r_ in m._regions if r_.get('free')]
+assert len(fr_) == 3, [(r_['num'], r_.get('free')) for r_ in m._regions]
+for r_, b_ in zip(fr_, boxes):                                                                       # контур — ровно рамка
+    B_ = LY.geom(m, r_).bounds
+    want_ = (*n_.to_um(n_.to_px(b_[:2])), *n_.to_um(n_.to_px(b_[2:])))
+    assert np.allclose(B_, want_, atol=0.5), (B_, want_)
+    assert r_.get('parent') == u10 and SM.obj(m, r_) == 50, r_
+nf_ = [int(np.prod(SM.frames_of(m, LY.idx(m, r_['uid'])))) for r_ in fr_]
+assert nf_[0] == 1 and nf_[1] > 1, nf_                                                               # меньше кадра — один кадр
+n0_ = len(m._regions)
+M.run(m, fullscreen=False, _keys=[-1, ('maprect', *box_px(600, 430, 700, 500), True), -1, -1])        # частично на рамке 2
+assert len(m._regions) == n0_, "a box partly over another 50x box must be refused"
+m._sel = LY.idx(m, u10)                                                                              # выбран обзор 10x
+m.last_scans = []
+M.run(m, fullscreen=False, _keys=[-1, ord('s'), -1, -1])
+names_ = sorted(os.path.basename(os.path.dirname(os.path.dirname(f_))) for f_ in m.last_scans)
+want_n = sorted(f"S{r_['num']:02d}_50x" for r_ in m._regions if SM.obj(m, r_) == 50)
+assert names_ == want_n, (names_, want_n)                                                            # все 50x в обзоре, и только они
+from microcontrol.storage import ScanData
+for r_, nf in zip(fr_, nf_):
+    f_ = next(f_ for f_ in m.last_scans if f"S{r_['num']:02d}_50x" in f_)
+    st_ = ScanData(f_); n_fr = len(st_); st_.close()
+    assert n_fr == nf, (r_['num'], n_fr, nf)
+m.objective = 10
+m._sel = LY.idx(m, u10)
+M.run(m, fullscreen=False, _keys=[-1, ord('s'), -1, -1])                                              # 10x: сам обзор
+assert any('S%02d_10x' % m._regions[LY.idx(m, u10)]['num'] in f_ for f_ in m.last_scans), m.last_scans
+m.close()
+print(f"Crystal boxes: Ctrl+drag gives boxes exactly as drawn ({nf_} frames), plain drag still snaps to squares, "
+      "a box over another refused; the 10x overview chosen -> Scan shoots all its 50x boxes: OK")

@@ -55,6 +55,8 @@ HELP = ["Shift+Esc: Exit (or close the window)", "P: Hide / show the left panel"
         "R: Ruler: click two points (distance, um)   0: Zero here   Shift+0: Real coordinates",
         "Wheel: zoom   Drag (middle button too): move the zoomed picture   Z: whole frame",
         "Map (top right): click - the stage goes there, drag - a new area on this objective, wheel - zoom, right drag - move",
+        "Ctrl+drag on the map: a free box (e.g. around a crystal) on this objective, exactly as drawn, not snapped to the squares;"
+        " choose the overview in the list and Scan area: all boxes of this objective inside it are shot",
         "Tab: big map / big camera   Double-click a shot area on the map: open it (crosses, brush, export)",
         "Buttons on top: Prepare (as A), Scan area (scan + stitch), New area, Export (drawing for AutoCAD: DWG + DXF), Settings",
         "Selections are layers: Ctrl+click cards to mark them, then Merge / Minus / Overlap / Group / Ungroup above the list",
@@ -792,9 +794,11 @@ def _run(m, fullscreen=False, _keys=None):
             elif ev == cv2.EVENT_MOUSEMOVE and nv['press'] is not None and flags & cv2.EVENT_FLAG_LBUTTON:
                 if abs(mx_ - nv['press'][0]) + abs(my_ - nv['press'][1]) > 6:
                     nv['drag'] = (*nv['press'], mx_, my_)
+                    nv['free'] = bool(flags & cv2.EVENT_FLAG_CTRLKEY)   # Ctrl: свободная рамка (кристалл)
             elif ev == cv2.EVENT_LBUTTONUP and nv['press'] is not None:
-                clicks.append(('maprect', *nv['drag']) if nv['drag'] else ('mapclick', *nv['press']))
-                nv['press'], nv['drag'] = None, None
+                free_ = bool(flags & cv2.EVENT_FLAG_CTRLKEY) or nv.get('free', False)
+                clicks.append(('maprect', *nv['drag'], free_) if nv['drag'] else ('mapclick', *nv['press']))
+                nv['press'], nv['drag'], nv['free'] = None, None, False
             elif ev in (cv2.EVENT_RBUTTONDOWN, cv2.EVENT_MBUTTONDOWN):
                 nv['pan'] = (mx_, my_, None if nav.c is None else nav.c.copy())
             elif ev == cv2.EVENT_MOUSEMOVE and nv['pan'] is not None:
@@ -1086,11 +1090,13 @@ def _run(m, fullscreen=False, _keys=None):
             a_, b_, c2_, d2_ = nv['drag']
             cv2.rectangle(mp, (int(a_), int(b_)), (int(c2_), int(d2_)), (255, 255, 255), 1, cv2.LINE_8)
             S0_, S1_ = nav.to_um((a_, b_)), nav.to_um((c2_, d2_))
-            cv2.putText(mp, f"{abs(S1_[0] - S0_[0]) / 1000:.2f} x {abs(S1_[1] - S0_[1]) / 1000:.2f} mm, {m.objective}x",
+            cv2.putText(mp, f"{size_txt(abs(S1_[0] - S0_[0]), abs(S1_[1] - S0_[1]))}, {m.objective}x"
+                        + (", free box" if nv.get('free') else ""),
                         (int(min(a_, c2_)), int(max(b_, d2_)) + 16), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1,
                         cv2.LINE_8)
         nav.scale_bar(mp)
-        hint_ = ("Map: click - go there, drag - new area, wheel - zoom, right drag - move, double-click - open, Tab - camera"
+        hint_ = ("Map: click - go there, drag - new area, Ctrl+drag - free box, wheel - zoom, right drag - move, "
+                 "double-click - open, Tab - camera"
                  if nv['big'] else "Map (Tab: bigger)  click - go, drag - new area, wheel - zoom")
         UI.panel(mp, 0, 0, UI.size(hint_, 0.42)[0] + 16, 26, 0.8)        # подсказка — на тёмной плашке
         UI.put(mp, hint_, 8, 18, 0.42, (225, 225, 225), 1)
@@ -1278,13 +1284,18 @@ def _run(m, fullscreen=False, _keys=None):
         if on_.any():
             mp[on_] = cv2.addWeighted(mp, 0.6, ov_, 0.4, 0)[on_]
 
-    def new_area(S0, S1):
+    def size_txt(w_, h_):
+        return f"{w_ / 1000:.2f} x {h_ / 1000:.2f} mm" if max(w_, h_) >= 1000 else f"{w_:.0f} x {h_:.0f} um"
+
+    def new_area(S0, S1, free=False):
         """Новый участок на текущем объективе. Решётка образца есть — клетками: квадраты литографии или подсетка
-        выделения, в котором тянули (его клетки уровня N·n, строго внутри него); нет — прямоугольником (обзор)."""
+        выделения, в котором тянули (его клетки уровня N·n, строго внутри него); нет — прямоугольником (обзор).
+        free (Ctrl): рамка ровно как нарисована, без клеток — например, вокруг кристалла; кадры — только те, что её
+        касаются (рамка меньше кадра — один кадр по её середине)."""
         from .layers import lattice_of, lattice_for, geom as _gm
         from shapely.geometry import Point as _Pt
         L_ = lattice_of(m)
-        if L_ is not None:                                  # клетки — в решётке того, внутри кого тянут
+        if L_ is not None and not free:                                  # клетки — в решётке того, внутри кого тянут
             c_ = ((S0[0] + S1[0]) / 2, (S0[1] + S1[1]) / 2)
             hold_ = [r_ for r_ in m._regions if r_.get('kind') not in ('group', 'draft') and SM.obj(m, r_) <= m.objective
                      and _gm(m, r_).contains(_Pt(*c_))]
@@ -1299,7 +1310,10 @@ def _run(m, fullscreen=False, _keys=None):
         r_ = dict(uid=__import__('uuid').uuid4().hex, num=new_num(m), obj=m.objective, fw=fw_, fh=fh_, pts=[],
                   thumbs=[])
         set_geom(m, r_, _box(x0_, y0_, max(x1_, x0_ + 1), max(y1_, y0_ + 1)))
-        r_.pop('shape')                                    # прямоугольник: хватает углов A, B
+        if free:
+            r_['free'] = True                              # рамка как нарисована: контур — она сама
+        else:
+            r_.pop('shape')                                # прямоугольник: хватает углов A, B
         from .layers import geom as _geom, clip_to_parent
         try:
             gp_, cut_ = clip_to_parent(m, r_)              # пирамидка: не шире того, в чём лежит
@@ -1321,9 +1335,11 @@ def _run(m, fullscreen=False, _keys=None):
         m._sel = len(m._regions) - 1
         SM.persist(m)
         nx_, ny_ = SM.frames_of(m, m._sel)
-        return (f"{SM.title(m, m._sel)} ({m.objective}x): {(x1_ - x0_) / 1000:.2f} x {(y1_ - y0_) / 1000:.2f} mm, "
-                f"{nx_ * ny_} frames" + (f", cut to the edge of {SM.title(m, gp_)}" if cut_ else "") +
-                ". Scan area shoots it")
+        inside_ = f". Inside {SM.title(m, gp_)}: choose it and Scan area to shoot all its {m.objective}x boxes" \
+            if free and gp_ is not None and SM.obj(m, m._regions[gp_]) != m.objective else ". Scan area shoots it"
+        return (f"{SM.title(m, m._sel)} ({m.objective}x{', free box' if free else ''}): {size_txt(x1_ - x0_, y1_ - y0_)}, "
+                f"{nx_ * ny_} frame{'s' if nx_ * ny_ != 1 else ''}" + (f", cut to the edge of {SM.title(m, gp_)}" if cut_ else "")
+                + inside_)
 
     def new_area_cells(L_, S0, S1):
         from . import lattice as LT
@@ -1732,6 +1748,20 @@ def _run(m, fullscreen=False, _keys=None):
             if live is not None:
                 live.paused = False
 
+    def inner_of(rs_):
+        """Области текущего объектива внутри выделения rs_ (на любой глубине; вложенные друг в друга — верхние)."""
+        kids_ = {}
+        for rg in m._regions:
+            kids_.setdefault(rg.get('parent'), []).append(rg)
+        out_, todo_ = [], list(kids_.get(rs_['uid'], []))
+        while todo_:
+            rg = todo_.pop(0)
+            if rg.get('kind') not in ('group', 'draft') and SM.obj(m, rg) == m.objective:
+                out_.append(rg['uid'])                       # её собственные дети этого объектива — в её же скане
+            else:
+                todo_ += kids_.get(rg['uid'], [])
+        return out_
+
     def scan_here():
         """S (дважды): снять выделения текущего объектива и сшить их, не выходя из окна. Полоса прогресса —
         в окне поверх кадра камеры; Esc — остановить после текущего кадра. Потом V — открыть в просмотре."""
@@ -1772,10 +1802,14 @@ def _run(m, fullscreen=False, _keys=None):
                 only_ = [rs_['uid']]
             elif rs_.get('kind') != 'group':                  # выбранное выделение — только его
                 if SM.obj(m, rs_) != m.objective:
-                    msg = (f"Selection {rs_['num']} is for {SM.obj(m, rs_)}x, the objective is {m.objective}x: "
-                           f"switch it (M) or choose another selection")
-                    return
-                only_ = [rs_['uid']]
+                    in_ = inner_of(rs_)                        # обзор другого объектива: все области этого внутри
+                    if not in_:
+                        msg = (f"Selection {rs_['num']} is for {SM.obj(m, rs_)}x, the objective is {m.objective}x: "
+                               f"switch it (M), choose another selection or Ctrl+drag boxes inside it on the map")
+                        return
+                    only_ = in_
+                else:
+                    only_ = [rs_['uid']]
         ks = [k_ for k_, rg in enumerate(m._regions) if SM.obj(m, rg) == m.objective
               and rg.get('kind') not in ('group', 'draft') and (not only_ or rg['uid'] in only_)]
         if not ks:
@@ -2484,8 +2518,8 @@ def _run(m, fullscreen=False, _keys=None):
                         msg = busy_live("Going there", lambda: map_go(S_))
                     except MicroControlError as e:
                         msg = str(e)
-                elif c_[0] == 'maprect':
-                    msg = new_area(nav.to_um(c_[1:3]), nav.to_um(c_[3:5]))
+                elif c_[0] == 'maprect':                            # c_[5]: Ctrl — свободная рамка
+                    msg = new_area(nav.to_um(c_[1:3]), nav.to_um(c_[3:5]), free=len(c_) > 5 and bool(c_[5]))
                 elif c_[0] == 'mapdbl':                             # открыть снятый участок под точкой
                     S_ = nav.to_um(c_[1:3])
                     from .layers import contains as _contains

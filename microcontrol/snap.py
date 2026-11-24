@@ -91,9 +91,14 @@ def geometry(folder):
         else:
             c = r_.mean(0)
     B = np.linalg.solve(Mo, Bl)
-    T = p + sg @ B.T
+    # отсчёт — средняя сторона подъезда этой съёмки: люфт сдвигает кадр на ±B от заданного места, и при подъезде
+    # в основном с одной стороны вся картинка уехала бы от контура выделения (заданных координат) на B.
+    # Так картинка в среднем стоит на заданных координатах (на карте — ровно в своём контуре)
+    sref = sg.mean(0) if len(sg) else np.zeros(2)
+    c = c + (sref @ B.T) @ Mo.T
+    T = p + (sg - sref) @ B.T
     resid = pos - (T @ Mo.T + c)
-    g = dict(pos=pos, p=p, sg=sg, Mo=Mo, B=B, T=T, c=c, W=W, H=H, ms=ms,
+    g = dict(pos=pos, p=p, sg=sg, sref=sref, Mo=Mo, B=B, T=T, c=c, W=W, H=H, ms=ms,
              resid=float(np.median(np.hypot(*resid.T))) if len(p) else 0.0,
              backlash_um=(2 * np.abs(np.diag(B)) * ms).round(2).tolist())
     _GEO[folder] = (key, g)
@@ -116,7 +121,7 @@ def stage_to_mosaic(folder, S):
 
 def live_origin(g, P_cmd, s_now):
     """Где в мозаике левый верхний угол живого кадра: столик задан в P_cmd (шаги), подъехал со стороны s_now."""
-    P = np.asarray(P_cmd, float) + g['B'] @ np.asarray(s_now, float)
+    P = np.asarray(P_cmd, float) + g['B'] @ (np.asarray(s_now, float) - g.get('sref', 0.0))
     d = np.hypot(*(g['T'] - P).T)
     k = np.argsort(d)[:4]                                   # ближайшие кадры съёмки, с весами
     w = np.exp(-(d[k] / max(1.0, 0.5 * np.hypot(*np.linalg.solve(g['Mo'], (g['W'], g['H']))))) ** 2) + 1e-9

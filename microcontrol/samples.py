@@ -213,15 +213,13 @@ def _geo_parent(m, k):
     return best[1] if best else None
 
 
-def stitch_mode(m, reg):
-    """Вид сшивки выделения: 'quick' (быстро, обзор) или 'quality' (точно, для чертежа). Задан на карточке (чип) —
-    он; иначе сам: рамки кристаллов (Ctrl+тянуть) — quality, остальные — quick."""
-    md = reg.get('mode')
-    if md in ('quick', 'quality'):
-        return md
-    if reg.get('prog'):                      # зона из программы (m.area = Area(...)): обычная точная сшивка
-        return None
-    return 'quality' if reg.get('free') else 'quick'
+def shoot_mode(m, reg):
+    """Как снимать выделение: 'quality' — для точного снимка (перекрытие 40 %, подъезд с одной стороны, PNG, запас
+    вокруг рамки): рамки кристаллов (Ctrl+тянуть); иначе None — обычная съёмка. Сшивка после съёмки — всегда quick,
+    точная (quality) — отдельно: Stitch."""
+    if reg.get('mode') == 'quality' or reg.get('free'):
+        return 'quality'
+    return None
 
 
 def frames_of(m, k):

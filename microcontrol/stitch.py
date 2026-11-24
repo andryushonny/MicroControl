@@ -351,11 +351,12 @@ def stitch(folder, engine='builtin', max_shift_um=40.0, sigma=None, alpha=0.01, 
            flat=True, mode=None):
     """Сшить скан: найти положения кадров. mode — 'quick' (быстро, на уменьшенных кадрах: обзор; править и
     отправлять в экспорт нельзя) или 'quality' (точно: только сдвиги кадров, все поправки; для рамки — ровный
-    прямоугольник join/quality.png). По умолчанию — как снято (meta: stitch_mode), иначе quality.
-    max_shift_um — насколько столик может ошибиться между соседними кадрами."""
+    прямоугольник join/quality.png).
+    max_shift_um — насколько столик может ошибиться между соседними кадрами. Без mode — quality (после съёмки сама
+    идёт quick)."""
     t0 = time.monotonic()
     st = ScanData(folder)
-    mode = mode or st.meta.get('stitch_mode') or 'standard'   # съёмка без вида (m.scan(area=...)): точный движок
+    mode = mode or 'quality'
     if mode == 'quick':
         flat = False
     H, W = st.shape[:2]

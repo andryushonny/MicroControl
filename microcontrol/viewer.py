@@ -2520,9 +2520,9 @@ def _view_one(folder, fullscreen, keys, car):
                 if st.pop('restart', None):
                     st['switch'] = folder
                     break
-            elif sc.st.meta.get('stitch_mode') == 'quick':
-                st['msg'] = ("A quick stitch is an overview and is not edited. For an exact picture: switch the "
-                             "selection to quality (its chip on the card) and scan it again")
+            elif __import__('microcontrol.quality', fromlist=['x']).stitched_as(folder) == 'quick':
+                st['msg'] = ("A quick stitch is an overview and is not edited: S makes the quality stitch (exact), "
+                             "then J edits it")
             else:
                 st['mode'] = 'stitch'
                 st['edit'] = dict(orig=sc.P.copy(), ids=[], sel=None, moved=False)

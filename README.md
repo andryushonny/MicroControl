@@ -245,7 +245,7 @@ Arrows move; letters do things. As much as possible is done right in the window.
 | `E` / `Q` (`PgUp` / `PgDn`) | stage up / down by Step Z (`Shift` — ×5) |
 | `F` · `K` | autofocus · keep $Z$ here as a focus point |
 | Ctrl+click cards · Shift+drag over a selection | mark for Merge / Minus / Overlap / Group / Ungroup · move a selection |
-| `quick` / `quality` chip on a selection card | quick — fast overview (not edited, not exported); quality — exact straight-edged picture for the drawing (re-shot where needed, export takes only these) |
+| Scan area · **Stitch** (buttons on top) | scan + quick stitch (fast overview, not edited, not exported) · quality stitch of the chosen selection: exact straight-edged picture for the drawing, re-shot where needed; export takes only these |
 | Ctrl+drag on the map · `Esc` during a job | a draft box on the objective in place (a crystal): with a margin for backlash, edges on motor steps; Scan area shoots it; the overview chosen + Scan area — all such boxes in it · stop the job (or Stop on its bar) |
 | `1`, `2` | corners of a selection |
 | `Y` | "Z follows the focus points" on / off |

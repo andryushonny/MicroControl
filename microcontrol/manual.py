@@ -59,7 +59,9 @@ HELP = ["Shift+Esc: Exit (or close the window)", "P: Hide / show the left panel"
         " margin for the backlash and the stage error; Scan area shoots it with the objective in place; the overview chosen"
         " + Scan area: all boxes inside it",
         "Tab: big map / big camera   Double-click a shot area on the map: open it (crosses, brush, export)",
-        "Buttons on top: Prepare (as A), Scan area (scan + stitch), New area, Export (drawing for AutoCAD: DWG + DXF), Settings",
+        "Buttons on top: Prepare (as A), Scan area (scan + quick stitch: a fast overview), Stitch (quality stitch of the chosen"
+        " selection: exact, re-shoots what is needed; only these go into the drawing), New area, Export (drawing for"
+        " AutoCAD: DWG + DXF), Settings",
         "Selections are layers: Ctrl+click cards to mark them, then Merge / Minus / Overlap / Group / Ungroup above the list",
         "The eye on a card hides the selection on the maps (and shows it again); Show all above the list",
         "Squares selected in the view (M) become Drafts, one per figure   Shift+drag over a selection: move it",
@@ -356,7 +358,7 @@ STEP_HELP = [
     "Step 2: open the overview (double-click it on the map or V), mark 3 crosses (C), number two squares (N), select the squares with flakes (M)",
     "Step 3: put 50x or 100x, choose an area on the right and press Scan area",
     "Step 4: press Export, tick the areas: one drawing for AutoCAD (DWG + DXF with pictures, outlines, crosses)"]
-BUTTONS = ["Prepare", "New area", "Scan area", "Export", "Settings"]
+BUTTONS = ["Prepare", "New area", "Scan area", "Stitch", "Export", "Settings"]
 PREP_STEPS = [                                        # мастер Prepare: шаг, что сделать руками, что делает программа
     ('lamp', "Lamp and room", [
         "Light on (L) for at least 20 minutes before a large scan: the lamp and the stage warm up and stop drifting.",
@@ -1155,7 +1157,7 @@ def _run(m, fullscreen=False, _keys=None):
                 TM.fmt(TM.estimate(m, nfr_, 'points' if m._use_fp and reg['pts'] else 'off', o_)[0])
             hd_ = SM.hidden(m, k)
             sh_ = shot_of(k)
-            items.append(dict(title=SM.title(m, k), obj=f"{o_}x", mode=SM.stitch_mode(m, reg), color=SM.col(m, k),
+            items.append(dict(title=SM.title(m, k), obj=f"{o_}x", color=SM.col(m, k),
                               chosen=k in car['multi'], thumbs=[] if hd_ else reg.get('thumbs', []), confirm=car['confirm'] == k, depth=depth,
                               muted=o_ != m.objective or hd_, hidden=bool(reg.get('hidden')),
                               lines=([(f"scanned {sh_}" + ("" if reg.get('export', True) else ", not in export")
@@ -1483,9 +1485,9 @@ def _run(m, fullscreen=False, _keys=None):
             if sc_ is None:
                 from .project import Selection as _Sel
                 sc_ = _Sel(m.sample, r_).latest
-            q_ = sc_ is not None and Q.is_quality(sc_.folder) and Q.info(sc_.folder) is not None
+            q_ = sc_ is not None and Q.is_quality(sc_.folder)
             return f"{SM.title(m, k_):<14} {SM.obj(m, r_):>4}x   " + \
-                (f"quality {shot_of(k_)}" if q_ else f"quick {shot_of(k_)}: outline only (picture - quality only)")
+                (f"quality {shot_of(k_)}" if q_ else f"quick {shot_of(k_)}: outline only (Stitch: quality)")
         rows = [row_(k_) for k_ in cand]                    # отмечено: что выбрано в прошлый раз, иначе — снятое
         dflt = [m._regions[k_].get('export', bool(m._regions[k_].get('kind') != 'draft' and shot_of(k_))) for k_ in cand]
         try:
@@ -1718,6 +1720,8 @@ def _run(m, fullscreen=False, _keys=None):
             prepare_start()
         elif what[1] == "Scan area":
             scan_here()
+        elif what[1] == "Stitch":
+            stitch_quality()
         elif what[1] == "New area":
             nv['big'] = m._nav_big = True
             msg = "Drag a rectangle on the map (it takes the objective in place). Click the map: go there"
@@ -1911,10 +1915,7 @@ def _run(m, fullscreen=False, _keys=None):
             res['folder'] = folder
             if res.get('stop'):
                 return
-            subs_ = list(getattr(m, 'last_scans', None) or [folder])   # только что снятые (не все съёмки образца)
-            for i_, sf in enumerate(subs_):
-                res['stitch'] = (i_ + 1, len(subs_))
-                _stitch(sf, verbose=True)
+            res['stitch'] = True                             # m.scan сшил сам: quick (обзор)
 
         def halt():
             m._abort, res['stop'] = True, True
@@ -1946,11 +1947,44 @@ def _run(m, fullscreen=False, _keys=None):
                   (" (not stitched: S in the view stitches it)" if res.get('stitch') else "")
         else:
             m._last_view = (m.last_scans or [res['folder']])[-1]
-            msg = f"Scanned and stitched in {TM.fmt(time.monotonic() - t0)}: V opens it in the view"
+            msg = (f"Scanned and stitched (quick) in {TM.fmt(time.monotonic() - t0)}: V opens it; Stitch makes the "
+                   "exact (quality) stitch for the drawing")
             ch_ = m.__dict__.pop('_ori_changed', None)
             if ch_:                                        # проверка направлений перед съёмкой их исправила
                 msg = (f"Camera directions fixed before the scan ({ch_}). If the arrow keys now go the wrong way: "
                        "[ - left / right, ] - up / down (remembered)")
+
+    def stitch_quality():
+        """Stitch: точная сшивка (quality) последней съёмки выбранного выделения — здесь, у прибора: сшить, проверить,
+        доснять (размытые кадры, кадры с объектом без швов, непокрытые места рамки), ровный снимок рамки."""
+        nonlocal msg, msg_t
+        from . import quality as Q
+        from .project import Selection as _Sel
+        msg_t = time.monotonic()
+        k_ = m._sel
+        if k_ is None or k_ >= len(m._regions) or m._regions[k_].get('kind') in ('group', 'draft'):
+            msg = "Choose a scanned selection (its card on the right), then Stitch"
+            return
+        sc_ = _Sel(m.sample, m._regions[k_]).latest
+        if sc_ is None:
+            msg = f"{SM.title(m, k_)} is not scanned yet: Scan area first"
+            return
+        same_ = SM.obj(m, m._regions[k_]) == m.objective
+        res = busy(f"Quality stitch: {SM.title(m, k_)}",
+                   (lambda: Q.finish(m, sc_.folder)) if same_ else (lambda: __import__('microcontrol.stitch', fromlist=['x']).stitch(sc_.folder, verbose=True)),
+                   plan=[("Stitch: light", 0.08), ("Stitch: seams", 0.62), ("Stitch: brightness", 0.08),
+                         ("Stitch: saving", 0.22)])
+        msg_t = time.monotonic()
+        if 'e' in res:
+            msg = f"Quality stitch failed: {res['e']}"
+            return
+        q_ = Q.info(sc_.folder) or {}
+        m._last_view = sc_.folder
+        msg = (f"Quality stitch of {SM.title(m, k_)}: " +
+               (f"{q_['size_um'][0]:.1f} x {q_['size_um'][1]:.1f} um, seams {q_['seam_um'][1] if q_.get('seam_um') else '-'} um"
+                if q_.get('size_um') else "done") +
+               ("" if q_.get('ok', True) else "; " + "; ".join(q_.get('problems', []))) +
+               ("" if same_ else f" (the objective is not {SM.obj(m, m._regions[k_])}x: stitched without re-shooting)"))
 
     def open_view():
         """V: открыть последний скан в просмотре (кресты, квадраты, экспорт); закрыли — снова ручной режим."""
@@ -2701,17 +2735,6 @@ def _run(m, fullscreen=False, _keys=None):
                         SM.persist(m)
                         msg, msg_t = (f"{SM.title(m, k)} " + ("hidden on the maps (the eye shows it again)"
                                                                 if rg_.get('hidden') else "shown on the maps")), time.monotonic()
-                        continue
-                    if act == 'mode' and k < len(m._regions):      # плашка вида сшивки: quick <-> quality
-                        rg_ = m._regions[k]
-                        rg_['mode'] = 'quick' if SM.stitch_mode(m, rg_) == 'quality' else 'quality'
-                        rg_.pop('prog', None)
-                        SM.persist(m)
-                        msg, msg_t = (f"{SM.title(m, k)}: " + (
-                            "quality - exact geometry for the drawing (larger overlap, one-side approach, frames "
-                            "re-shot if needed, a straight-edged picture; goes to export)" if rg_['mode'] == 'quality'
-                            else "quick - a fast overview (not editable, not for export)") + "; the next scan"), \
-                            time.monotonic()
                         continue
                     if act == 'obj' and k < len(m._regions):       # плашка объектива: следующий (пока не снято)
                         msg, msg_t = cycle_objective(k), time.monotonic()

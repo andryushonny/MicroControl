@@ -143,12 +143,14 @@ def export_sample(m, ks=None, out=None, dwg=True, verbose=True):
             pr.update(1, f"{title(m, k)}: picture and outline")
         from . import quality as Q
         qi = Q.info(sc.folder) if sc else None
-        qscan_ = sc.folder if (sc and qi is not None and Q.is_quality(sc.folder)) else None
-        if sc and (qi is None or not Q.is_quality(sc.folder)):   # quick и обычная сшивка — не для чертежа: контур
+        qscan_ = sc.folder if (sc and Q.is_quality(sc.folder)) else None
+        if sc and not Q.is_quality(sc.folder):                  # quick (обзор) — не для чертежа: только контур
             jp = None
-            skipped_.append(f"{title(m, k)}: {'quick' if not Q.is_quality(sc.folder) else 'quality not stitched'} - "
-                            "outline only (the picture goes to the drawing from a quality scan)")
+            skipped_.append(f"{title(m, k)}: {Q.stitched_as(sc.folder) or 'not stitched'} - outline only (the picture "
+                            "goes to the drawing after the quality stitch: Stitch)")
             sc = None
+        if qi is not None and not qscan_:
+            qi = None
         if sc is not None and qi is not None:                   # quality: ровный снимок рамки, строго по столику
             qp = os.path.join(sc.folder, 'join', 'quality.png')
             img = cv2.imread(qp)

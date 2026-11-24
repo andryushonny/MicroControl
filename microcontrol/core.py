@@ -1787,7 +1787,8 @@ class Microscope:
         from .config import scan_overlap
         return plan(self, area=area, focus=focus, overlap=scan_overlap(self.objective) if overlap is None else overlap, path=path)
 
-    def scan(self, area=None, focus='auto', overlap=None, path='snake', name='', notes='', only=None, mode=None):
+    def scan(self, area=None, focus='auto', overlap=None, path='snake', name='', notes='', only=None, mode=None,
+             stitch='quick'):
         """Снять выделения ТЕКУЩЕГО объектива. Для каждого кадра: встать на координаты, Z, пауза, снимок.
         Каждая съёмка — новая версия в папке своего выделения: projects/<проект>/selections/Sxx_NNx/scans/<дата>/
         (прежние съёмки остаются; на картах и в списке — последняя). Выделения других объективов (слои: участки
@@ -1796,9 +1797,10 @@ class Microscope:
                'points', 'off', 'plane', 'each' — см. справку. overlap — перекрытие 0..0.5; path — 'snake' / 'rows'.
         area=Area(...) — снять эту зону: она становится новым выделением проекта.
         name, notes — подпись съёмки (в имени папки и в meta.json). only — uid выделений: снять только их.
-        mode — вид сшивки: 'quick' (обзор) или 'quality' (точный ровный снимок рамки для чертежа: перекрытие больше,
-        подъезд с одной стороны, PNG, после съёмки — сшивка, проверка и пересъёмка); по умолчанию — как у выделения
-        (чип на карточке; рамки кристаллов — quality), для area= — обычная сшивка.
+        stitch='quick' — сразу после съёмки быстрая сшивка (обзор); точная — отдельно: m.quality() (сшивка, проверка,
+        пересъёмка у прибора) или mc.stitch(папка). stitch=None — не сшивать.
+        mode='quality' — снимать для точного снимка (перекрытие 40 %, подъезд с одной стороны, PNG, запас вокруг
+        рамки); рамки кристаллов (Ctrl+тянуть) снимаются так сами.
         Возвращает папку съёмки (одно выделение) или папку проекта (несколько); все — в m.last_scans."""
         from .scan import plan, Area
         from .config import scan_overlap
@@ -1854,10 +1856,10 @@ class Microscope:
         off, pf, done = self._off, self._sample.folder, []
         n0 = 0
         for k, reg in enumerate(regs):
-            from .samples import _area, stitch_mode
+            from .samples import _area, shoot_mode
             from .config import QUALITY_OVERLAP
             from . import quality as Q
-            mode_ = mode or stitch_mode(self, reg)
+            mode_ = mode or shoot_mode(self, reg)
             area_ = Q.plan_area(self, reg, max(ov, QUALITY_OVERLAP)) if mode_ == 'quality' else _area(self, reg)
             pts = [dict(p, tag=str(n0 + i + 1)) for i, p in enumerate(reg['pts'])]
             nums = [n0 + 1, n0 + len(pts)]
@@ -1866,8 +1868,8 @@ class Microscope:
             pk = _par(self, kk)
             extra = dict(sample_index=reg['num'], selection=reg['num'], sample_uid=reg['uid'], project_name=self.project.name, project_uid=self.project.uid, sample_name=self._sample.name,
                          focus_points=nums, area_real_um=[*reg['A'], *reg['B']], outline_um=reg.get('shape'),
-                         pixel_source=getattr(self, '_px_src', 'table'), **({'stitch_mode': mode_} if mode_ else {}))
-            if mode_ == 'quality':
+                         pixel_source=getattr(self, '_px_src', 'table'), **({'shoot': mode_} if mode_ else {}))
+            if not reg.get('prog'):                            # рамка выделения: точный снимок — ровно по ней
                 extra['quality_rect_um'] = list(Q.rect_um(self, reg))
             if pk is not None:
                 extra.update(parent_uid=self._regions[pk]['uid'], parent_selection=self._regions[pk]['num'],
@@ -1890,11 +1892,23 @@ class Microscope:
             done.append(folder)
             if r.title != "Scan finished":
                 break
-            if mode_ == 'quality' and self._cfg.get('quality_finish', True):   # сшить, проверить, доснять — у прибора
-                Q.finish(self, folder)
+            if stitch == 'quick':                              # сразу — быстрый обзор; точно — m.quality()
+                from .stitch import stitch as _stitch
+                _stitch(folder, mode='quick', verbose=True)
         self.last_scans = done
         self.last_scan = done[-1] if done else None
         return done[0] if len(regs) == 1 else pf
+
+    def quality(self, folder=None, rounds=2):
+        """Точная сшивка (quality) съёмки у прибора: сшить полным движком, проверить, доснять размытые кадры, кадры
+        с объектом без швов и непокрытые места рамки (до rounds кругов), собрать ровный снимок рамки
+        (join/quality.png, отчёт quality.json). folder — папка съёмки (по умолчанию — последние снятые)."""
+        from . import quality as Q
+        fs = [folder] if folder else list(self.last_scans or ([self.last_scan] if self.last_scan else []))
+        if not fs:
+            raise SafetyError('E701', "Nothing scanned yet: give the scan folder, m.quality(folder)")
+        out = [Q.finish(self, f, rounds=rounds) for f in fs]
+        return out[0] if len(out) == 1 else out
 
     def gcode(self, program, save=None, notes='', folder=None, extra=None, reuse=False):
         """Выполнить G-код (строка или путь к файлу .gcode). Единицы — мкм.

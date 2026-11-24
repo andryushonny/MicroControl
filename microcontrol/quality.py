@@ -20,6 +20,7 @@ from . import log as L
 from .util import Result
 
 SEAM_TOL_UM = 0.1                # шов quality-снимка: расхождение не больше (мкм)
+QUALITY_MAX_PX = 150e6           # ровный снимок рамки — не больше (пикселей); больше — это обзор
 
 
 def rect_um(m, reg):
@@ -118,6 +119,14 @@ def render(folder, verbose=False):
     xs, ys = np.sort(C[:, 0]), np.sort(C[:, 1])
     bx0, bx1, by0, by1 = xs[1], xs[2], ys[1], ys[2]           # вписанный в рамку прямоугольник мозаики
     w, h = int(math.floor(bx1 - bx0)), int(math.floor(by1 - by0))
+    if w * h > QUALITY_MAX_PX:                                  # обзор, а не рамка: одной картинкой не собирается
+        L.event('QLT-001', f"{folder}: {w} x {h} px - too large for one quality picture (more than "
+                           f"{QUALITY_MAX_PX / 1e6:.0f} Mpx); the frames are stitched exactly, the picture is not made.")
+        for f_ in ('quality.png', 'quality.json'):
+            p_ = os.path.join(folder, 'join', f_)
+            if os.path.exists(p_):
+                os.remove(p_)
+        return None
     fr = Frames(folder, skip=replaced)
     M = np.array([[1.0, 0.0, bx0], [0.0, 1.0, by0]])
     img, cov = fr.warp(M, (w, h), 0, blend='feather')        # веса к краю кадра: память — один снимок
@@ -204,12 +213,19 @@ def info(folder):
         return None
 
 
-def is_quality(folder):
+def stitched_as(folder):
+    """Как сшита съёмка: 'quick', 'quality' или None (не сшита)."""
     try:
-        with open(os.path.join(folder, 'meta.json'), encoding='utf-8') as f:
-            return json.load(f).get('stitch_mode') == 'quality'
+        with open(os.path.join(folder, 'join', 'stitch.json'), encoding='utf-8') as f:
+            d = json.load(f)
     except (OSError, ValueError):
-        return False
+        return None
+    return d.get('mode') or ('quick' if d.get('engine') == 'quick' else 'quality')
+
+
+def is_quality(folder):
+    """Сшита точно (quality): её картинка годится для чертежа."""
+    return stitched_as(folder) == 'quality'
 
 
 # ---------------------------------------------------------------- пересъёмка (у прибора)

@@ -883,7 +883,7 @@ from microcontrol.mask import Grid
 m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp()); m.focus()
 fw, fh = m.frame_size
 m.area = mc.Area(0, 0, 3 * fw, 2 * fh)
-f = m.scan(mode='quality')                                       # в чертёж — только quality
+f = m.scan(); mc.stitch(f, verbose=False)                         # в чертёж — после quality-сшивки
 px_um = json.load(open(os.path.join(f, 'meta.json')))['pixel_size_um']
 g = Grid(f); p0 = np.array([66.0, 52.8]) / px_um; a_ = 100 / px_um   # 66, 53 мкм от угла мозаики
 g.cr.add(p0); g.cr.add(p0 + (a_, 0)); g.cr.add(p0 + (0, a_)); g.selected |= {(1, 0), (2, 0)}
@@ -895,8 +895,8 @@ kd = next(k for k, r in enumerate(m._regions) if r.get('kind') == 'draft')
 assert SM.title(m, kd).startswith('Draft') and SM.frames_of(m, kd) == (0, 0)
 assert sorted(map(tuple, m._regions[kd]['cells'])) == [(5, 6), (6, 6)], m._regions[kd]['cells']   # квадраты 6,7 и 7,7
 assert LT.address(5, 6, []) == "6,7"
-assert len(m.scan(name='again', mode='quality') and m.last_scans) == 1   # черновик не снимается
-f = m.last_scans[0]
+assert len(m.scan(name='again') and m.last_scans) == 1            # черновик не снимается
+f = m.last_scans[0]; mc.stitch(f, verbose=False)
 uid = m._regions[kd]['uid']
 q1 = g.cr.point(1 + 0.5 / 3, 0.5 / 3)                              # левая верхняя клетка 1/3 квадрата 6,7
 V_.view(f, _keys=[-1, ('qmove', *q1), ord('3'), ord('b'), ('qclick', *q1), -1, 27])   # 3 — подсетка; кисть — клетка
@@ -924,8 +924,7 @@ M.run(m, fullscreen=False, _keys=[-1, ('maprect', *nav.to_px(c_ - (60, 40)), *na
 k50 = next(k for k, r in enumerate(m._regions) if r['obj'] == 50)
 r50 = m._regions[k50]
 assert r50['parent'] == uid and r50['factors'] == [3] and all(c[0] // 3 in (5, 6) and c[1] // 3 == 6 for c in r50['cells']), r50
-r50['mode'] = 'quality'
-m.scan()
+m.scan(); [mc.stitch(x, verbose=False) for x in m.last_scans]
 dx = mc.export_sample(m, ks=[0, kd, k50])                            # 10x и 50x и черновик: каждый на своём слое
 doc = ezdxf.readfile(dx if dx.endswith('.dxf') else dx[:-4] + '.dxf')
 ms = doc.modelspace()
@@ -2182,8 +2181,8 @@ for r_ in fr_:                                                                  
     st_ = ScanData(f_); n_fr = len(st_); st_.close()
     nf_.append(n_fr)
     from microcontrol import quality as Q51
-    assert SM.stitch_mode(m, r_) == 'quality' and Q51.info(f_) and n_fr >= int(np.prod(Q51.plan_area(m, r_, 0.4).n)), \
-        (r_['num'], n_fr)                                                                  # рамка — quality
+    assert SM.shoot_mode(m, r_) == 'quality' and Q51.stitched_as(f_) == 'quick' and \
+        n_fr == int(np.prod(Q51.plan_area(m, r_, 0.4).n)), (r_['num'], n_fr)              # рамка снята для quality, сшита quick
 m.objective = 10
 m._sel = LY.idx(m, u10)
 M.run(m, fullscreen=False, _keys=[-1, ord('s'), -1, -1])                                              # 10x: сам обзор
@@ -2522,3 +2521,108 @@ finally:
 print("Server at the instrument: key (wrong / none refused), one owner, commands and frames over the network (PNG), "
       "scan and stitch, memory on the server; no word / crash / remote stop -> the server switches off; a lost move "
       "is known done or not and repeated exactly: OK")
+
+
+# ------------------------------------------------------------------ 57. Съёмка -> quick (обзор, не правится, в чертёж — контур); Stitch -> quality: пиксель по крестам, расстояния как на образце, пересъёмка размытого кадра, ровный снимок рамки в чертеже по столику
+import csv
+os.environ['MC_SIM_PIXEL_CAL'] = '1'
+import microcontrol.manual as M57
+from microcontrol import samples as SM57, layers as LY57, quality as Q57
+from microcontrol.mask import Grid as G57
+from microcontrol.storage import ScanData as SD57
+from microcontrol.stitch import load_positions as LP57
+from microcontrol.config import UM_PER_STEP as UPS
+cv2.getWindowImageRect = lambda w: (0, 0, 1440, 900)
+m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp())
+w = m._world; w.scale_err = 0.01; m.objective = 10                      # объектив на 1 % не такой, как в таблице
+w.backlash = {'x': 2.0, 'y': 2.0}
+m.focus()
+T57 = np.radians(w.turn_deg)
+wp57 = lambda i, j: np.array([np.cos(T57) * i * 100 - np.sin(T57) * j * 100, np.sin(T57) * i * 100 + np.cos(T57) * j * 100])
+
+
+def box57(x0, y0, x1, y1):
+    M57.run(m, fullscreen=False, _keys=[-1, -1]); n_ = m._nav
+    M57.run(m, fullscreen=False, _keys=[-1, ('maprect', *n_.to_px((x0, y0)), *n_.to_px((x1, y1)), True), -1, -1])
+    k_ = max(i for i, r in enumerate(m._regions) if r.get('free') and r.get('kind') == 'draft')
+    LY57.draft_to_selection(m, k_, m.objective)
+    return m._regions[k_]
+
+
+def measure57(f_):
+    """Снимок рамки против правды симулятора: сдвиги 16 участков (расстояния внутри, px) и ошибка масштаба."""
+    q_ = Q57.info(f_)
+    img_ = cv2.cvtColor(cv2.imread(os.path.join(f_, 'join', 'quality.png')), cv2.COLOR_BGR2GRAY).astype(np.float32)
+    h_, w_ = img_.shape
+    c_ = np.array(q_['pixel_to_stage_um']) @ np.array([w_ / 2, h_ / 2, 1.0])
+    sv_ = dict(w._p)
+    w._p = {'x': c_[0] / UPS, 'y': c_[1] / UPS, 'z': w.z_focus + (w.tilt[0] * c_[0] + w.tilt[1] * c_[1]) / UPS}
+    w.motion = None
+    tr_ = cv2.cvtColor(w._frame(w_ + 200, h_ + 200), cv2.COLOR_BGR2GRAY).astype(np.float32)
+    w._p = sv_
+    sh_, ps_ = [], min(160, w_ // 3, h_ // 3)
+    for yy in np.linspace(ps_ // 2, h_ - ps_ // 2, 4).astype(int):
+        for xx in np.linspace(ps_ // 2, w_ - ps_ // 2, 4).astype(int):
+            a_ = img_[yy - ps_ // 2: yy + ps_ // 2, xx - ps_ // 2: xx + ps_ // 2]
+            ex_, ey_ = max(0, xx - ps_ // 2 + 100 - 400), max(0, yy - ps_ // 2 + 100 - 400)
+            r_ = cv2.matchTemplate(tr_[ey_: ey_ + ps_ + 800, ex_: ex_ + ps_ + 800], a_, cv2.TM_CCOEFF_NORMED)
+            _, mx_, _, (x_, y_) = cv2.minMaxLoc(r_)
+            dx_ = dy_ = 0.0
+            if 0 < x_ < r_.shape[1] - 1 and 0 < y_ < r_.shape[0] - 1:
+                dx_ = (r_[y_, x_ - 1] - r_[y_, x_ + 1]) / (2 * (r_[y_, x_ - 1] - 2 * r_[y_, x_] + r_[y_, x_ + 1]))
+                dy_ = (r_[y_ - 1, x_] - r_[y_ + 1, x_]) / (2 * (r_[y_ - 1, x_] - 2 * r_[y_, x_] + r_[y_ + 1, x_]))
+            sh_.append((x_ + ex_ + dx_ - (xx - ps_ // 2), y_ + ey_ + dy_ - (yy - ps_ // 2)))
+    sh_ = np.array(sh_)
+    d_ = np.hypot(*(sh_ - np.median(sh_, 0)).T)
+    return float(d_.max()), q_['pixel_um'] / w.px_um - 1, max(w_, h_) * w.px_um
+
+
+fw, fh = m.frame_size
+r1 = box57(310, 210, 310 + 2.0 * fw, 210 + 1.6 * fh)
+m.last_scans = []
+f1 = m.scan(only=[r1['uid']])                                          # съёмка: сразу quick
+assert Q57.stitched_as(f1) == 'quick' and Q57.info(f1) is None, Q57.stitched_as(f1)
+assert json.load(open(os.path.join(f1, 'join', 'stitch.json')))['reduced'] >= 2
+dx57 = mc.export_sample(m, ks=[LY57.idx(m, r1['uid'])])                 # quick — в чертёж только контур
+dj57 = json.load(open(os.path.join(os.path.dirname(dx57), 'drawing.json')))
+assert not dj57['pictures'] and any('quick' in n_ for n_ in dj57['notes']), dj57
+# калибровка пикселя по крестам: участок с 3 x 3 крестами, отметки точно на крестах (как C)
+w.backlash = {'x': 0.0, 'y': 0.0}
+m.area = mc.Area(40, 40, 40 + 5 * fw * 0.7, 40 + 6 * fh * 0.7)
+fc = m.scan(stitch=None); mc.stitch(fc, verbose=False); m.area = None
+w.backlash = {'x': 2.0, 'y': 2.0}
+st_ = SD57(fc); P_ = LP57(fc, st_); P_ = P_ - P_.min(0); H_, W_ = st_.shape[:2]
+x0_, y0_ = st_.index[0]['x_p'] * UPS, st_.index[0]['y_p'] * UPS; st_.close()
+g_ = G57(fc)
+for ij in ((1, 1), (2, 1)):
+    g_.cr.add(P_[0] + (wp57(*ij) - (x0_, y0_)) / w.px_um + (W_ / 2, H_ / 2))
+g_.save(json.load(open(os.path.join(fc, 'meta.json')))['pixel_size_um'])
+rc = mc.fit_crosses(fc, verbose=False)
+assert rc.info['used'] >= 8 and abs(rc.info['pixel_um'] / w.px_um - 1) < 2e-4, rc.info
+m.objective = 10
+assert m._px_src == 'crosses' and abs(m.pixel_size / w.px_um - 1) < 2e-4, (m._px_src, m.pixel_size)
+# точная сшивка рамки (Stitch): кадр размыт — переснимается
+r2 = box57(710, 510, 710 + 2.0 * fw, 510 + 1.6 * fh)
+m.last_scans = []
+f2 = m.scan(only=[r2['uid']])
+rows_ = list(csv.reader(open(os.path.join(f2, 'index.csv'), encoding='utf-8')))
+kb_ = rows_[0].index('blurry'); rows_[2][kb_] = '1'                    # кадр 2 «остался размытым»
+csv.writer(open(os.path.join(f2, 'index.csv'), 'w', newline='', encoding='utf-8')).writerows(rows_)
+n0_ = len(rows_) - 1
+rq = m.quality(f2)
+q2 = Q57.info(f2)
+assert Q57.stitched_as(f2) == 'quality' and q2['ok'] and q2['pixel_source'] == 'crosses' and q2['coverage'] == 1.0, q2
+assert 1 in q2['replaced'] and q2['frames'] >= n0_ + len(q2['replaced']), (q2['replaced'], q2['frames'], n0_)   # сняты заново, старые — не в снимке
+dmax_, serr_, span_ = measure57(f2)
+assert dmax_ < 0.5 and abs(serr_) < 2e-4, (dmax_, serr_)                   # расстояния внутри — как на образце
+err_um = dmax_ * w.px_um + abs(serr_) * span_
+assert err_um < 0.15, err_um                                            # на всей рамке — точнее 0.15 мкм
+img2 = cv2.imread(os.path.join(f2, 'join', 'quality.png'))
+assert img2.shape[1] == q2['size_px'][0] and (img2.reshape(-1, 3).max(1) > 0).all()   # ровный прямоугольник без пустот
+dx57 = mc.export_sample(m, ks=[LY57.idx(m, r2['uid'])])                 # в чертёж — снимок, по столику
+dj57 = json.load(open(os.path.join(os.path.dirname(dx57), 'drawing.json')))
+assert any(v_.get('quality') for v_ in dj57['pictures'].values()) and dj57['areas'][0]['placed'].startswith('quality'), dj57
+m.close()
+print(f"Quick after the scan (reduced frames, outline only in the drawing); pixel by the crosses {rc.info['pixel_um']:.6f} "
+      f"(true {w.px_um:.6f}); quality stitch: blurry frame re-shot, distances off by {dmax_:.2f} px, "
+      f"{err_um:.3f} um over {span_:.0f} um, picture in the drawing by the stage: OK")

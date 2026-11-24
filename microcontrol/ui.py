@@ -146,31 +146,227 @@ def ruler(img, a, b, label, color=(0, 220, 255), scale=0.5):
         cv2.putText(img, label, (x0, y0), FONT, scale, (245, 245, 245), 1, cv2.LINE_AA)
 
 
-def progress_panel(img, title, stage, frac, text="", passed=0.0, left=None, footer=""):
+def _bar(img, x0, y, x1, h, frac, t):
+    """Полоса: доля frac (0…1); frac None — дело идёт, а доли нет: бегущий блок (видно, что не зависло)."""
+    cv2.rectangle(img, (x0, y), (x1, y + h), (60, 60, 66), -1)
+    if frac is None:
+        w_ = max(12, (x1 - x0) // 5)
+        a_ = x0 + int(((t * 0.6) % 1.0) * (x1 - x0 + w_)) - w_
+        cv2.rectangle(img, (max(x0, a_), y), (min(x1, a_ + w_), y + h), (90, 200, 90), -1)
+    else:
+        cv2.rectangle(img, (x0, y), (x0 + int((x1 - x0) * max(0.0, min(1.0, frac))), y + h), (90, 200, 90), -1)
+    cv2.rectangle(img, (x0, y), (x1, y + h), (110, 110, 118), 1)
+
+
+def _tm(s):
+    return f"{int(s // 60):02d}:{int(s % 60):02d}"
+
+
+def progress_panel(img, title, stage, frac, text="", passed=0.0, left=None, footer="", stopping=None):
     """Полоса прогресса посреди окна (долгая работа прямо в окне: сшивка, скан): заголовок, этап, полоса
-    в процентах 0.00 … 100.00 %, что делается сейчас, сколько прошло и осталось."""
+    в процентах 0.00 … 100.00 % (frac None — доли нет: бегущий блок), что делается сейчас, сколько прошло и
+    осталось, кнопка Stop (Esc). stopping: None — без кнопки, False — кнопка, True — «останавливается».
+    -> прямоугольник кнопки Stop или None."""
+    import time as _t
     H, W = img.shape[:2]
     pw, ph = min(700, W - 60), 206
     x0, y0 = int((W - pw) / 2), int((H - ph) / 2)
     panel(img, x0, y0, x0 + pw, y0 + ph, 0.94, LINE)
     put(img, title, x0 + 22, y0 + 38, 0.7, ACCENT, 2)
-    pct = f"{100 * frac:.2f}% / 100.00%"
+    pct = f"{100 * frac:.2f}% / 100.00%" if frac is not None else "working"
     st_ = stage
     while st_ and size(st_, 0.55)[0] > pw - 60 - size(pct, 0.5)[0]:
         st_ = st_[:-2]
     put(img, st_, x0 + 22, y0 + 74, 0.55, TEXT, 1)
     put(img, pct, x0 + pw - 22 - size(pct, 0.5)[0], y0 + 74, 0.5, TEXT, 1)
-    bx0, bx1, by = x0 + 22, x0 + pw - 22, y0 + 92
-    cv2.rectangle(img, (bx0, by), (bx1, by + 18), (60, 60, 66), -1)
-    cv2.rectangle(img, (bx0, by), (bx0 + int((bx1 - bx0) * max(0.0, min(1.0, frac))), by + 18), (90, 200, 90), -1)
-    cv2.rectangle(img, (bx0, by), (bx1, by + 18), (110, 110, 118), 1)
+    _bar(img, x0 + 22, y0 + 92, x0 + pw - 22, 18, frac, _t.monotonic())
     t = text or ""
     while t and size(t, 0.45)[0] > pw - 44:
         t = t[:-2]
     put(img, t, x0 + 22, y0 + 136, 0.45, DIM, 1)
-    tm = lambda s: f"{int(s // 60):02d}:{int(s % 60):02d}"
-    put(img, f"{tm(passed)} passed" + (f", this step {tm(left)} left" if left else "") + (f"   {footer}" if footer else ""),
+    put(img, f"{_tm(passed)} passed" + (f", about {_tm(left)} left" if left else "") + (f"   {footer}" if footer else ""),
         x0 + 22, y0 + 176, 0.45, DIM, 1)
+    if stopping is None:
+        return None
+    lab = "Stopping..." if stopping else "Stop (Esc)"
+    bw, bh = size(lab, 0.5)[0] + 28, 30
+    r = (x0 + pw - 22 - bw, y0 + ph - 22 - bh, x0 + pw - 22, y0 + ph - 22)
+    cv2.rectangle(img, r[:2], r[2:], (40, 40, 120) if not stopping else (50, 50, 56), -1)
+    cv2.rectangle(img, r[:2], r[2:], ERR if not stopping else LINE, 1)
+    put(img, lab, r[0] + 14, r[3] - 10, 0.5, TEXT, 1)
+    return r
+
+
+def status_bar(img, x0, y0, x1, y1, state=None, facts_=(), scale=0.45):
+    """Строка состояния внизу окна: слева — что делается сейчас (бегущая точка, дело, этап, полоса, время,
+    Stop) или «Ready»; дальше — факты (положение, объектив ...). state — как у run_busy или None.
+    -> прямоугольник Stop или None."""
+    import time as _t
+    panel(img, x0, y0, x1, y1, 1.0)
+    cy = (y0 + y1) // 2
+    th = size("Xg", scale)[1]
+    x = x0 + 12
+    stop_r = None
+    if state:
+        now = _t.monotonic()
+        ph_ = now * 6.0                                     # бегущая точка: окно живо
+        for i in range(3):
+            c_ = ACCENT if int(ph_) % 3 == i else LINE
+            cv2.circle(img, (x + 5 + 10 * i, cy), 3, c_, -1, cv2.LINE_AA)
+        x += 38
+        nm = state.get('title', '')
+        put(img, nm, x, cy + th // 2, scale, ACCENT, 1)
+        x += size(nm, scale)[0] + 12
+        _bar(img, x, cy - 6, x + 140, 12, state.get('frac'), now)
+        x += 150
+        el = now - state.get('t0', now)
+        lft = state.get('left')
+        t_ = ("working" if state.get('frac') is None else f"{100 * state['frac']:.0f}%") + f"  {_tm(el)}" + \
+            (f", ~{_tm(lft)} left" if lft else "")
+        put(img, t_, x, cy + th // 2, scale, TEXT, 1)
+        x += size(t_, scale)[0] + 12
+        lab = "Stopping..." if state.get('stopping') else "Stop (Esc)"
+        bw = size(lab, scale)[0] + 16
+        stop_r = (x, y0 + 3, x + bw, y1 - 3)
+        cv2.rectangle(img, stop_r[:2], stop_r[2:], (40, 40, 120) if not state.get('stopping') else (50, 50, 56), -1)
+        put(img, lab, x + 8, cy + th // 2, scale, TEXT, 1)
+        x += bw + 12
+        sub = state.get('stage', '')
+        if state.get('text'):
+            sub = f"{sub}: {state['text']}" if sub and sub != nm else state['text']
+        while sub and size(sub, scale)[0] > x1 - x - 10:
+            sub = sub[:-2]
+        put(img, sub, x, cy + th // 2, scale, DIM, 1)
+    else:
+        cv2.circle(img, (x + 5, cy), 4, OK, -1, cv2.LINE_AA)
+        x += 16
+        put(img, "Ready", x, cy + th // 2, scale, OK, 1)
+        x += size("Ready", scale)[0] + 22
+        if facts_:
+            facts(img, list(facts_), x, cy + th // 2, scale)
+    return stop_r
+
+
+_BUSY_T = {}
+
+
+def _busy_times(title=None, sec=None):
+    """Сколько обычно идёт дело без своих долей (по прошлым разам): для полосы по времени."""
+    import json, os
+    p = os.path.join(os.path.expanduser('~'), '.microcontrol', 'busy_times.json')
+    if not _BUSY_T:
+        try:
+            _BUSY_T.update(json.load(open(p, encoding='utf-8')))
+        except (OSError, ValueError):
+            _BUSY_T['_'] = 0
+    if sec is None:
+        return _BUSY_T.get(title)
+    old = _BUSY_T.get(title)
+    _BUSY_T[title] = round(sec if old is None else 0.6 * old + 0.4 * sec, 3)
+    try:
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        json.dump(_BUSY_T, open(p, 'w', encoding='utf-8'))
+    except OSError:
+        pass
+
+
+def run_busy(win, title, fn, frame, plan=None, expect=None, wait_ms=60, on_stop=None):
+    """Долгое дело fn() в потоке, окно живёт: frame(state) -> (картинка, прямоугольник Stop в окне | None),
+    показывается каждые wait_ms. Esc или щелчок по Stop — остановка: дело выходит на ближайшей полосе прогресса
+    (util.check_stop -> Stopped); не вышло за 2.5 с — Stopped подбрасывается в поток (чистый Python), on_stop()
+    (например, стоп столика) — сразу. Доля: от полос Progress; plan = [(начало названия полосы, вес)] — этапы
+    одного дела, доля общая (не 0 -> 100 % на каждом этапе); полос нет — по времени: expect с или прошлые разы,
+    иначе бегущий блок. -> dict(r=результат | e=ошибка, stopped=bool)."""
+    import threading, time as _t, ctypes
+    from .util import Progress, stop_begin, stop_end, stop_request, stop_active, stop_requested
+    from .errors import Stopped
+    st = dict(title=title, stage=title, frac=0.0, text="starting", left=None, t0=_t.monotonic(), n=0,
+              stopping=False, ov=0.0, target=0.0)
+    plan = list(plan or [])
+    wsum = sum(w for _n, w in plan) or 1.0
+
+    def hook(t, f, txt, el, eta):
+        st['n'] += 1
+        st['stage'], st['text'] = t, txt
+        k = next((i for i, (nm, _w) in enumerate(plan) if t.startswith(nm)), None)
+        if plan and k is not None:                          # общая доля всего дела: этапы друг за другом
+            ov = (sum(w for _n, w in plan[:k]) + plan[k][1] * f) / wsum
+            st['ov'] = max(st['ov'], ov)
+            st['target'] = st['ov']
+            st['left'] = (_t.monotonic() - st['t0']) * (1 - st['ov']) / st['ov'] if st['ov'] > 0.02 else None
+        elif plan:
+            st['target'] = st['ov']
+        else:
+            st['target'], st['left'] = f, eta
+    res = {}
+
+    def work():
+        stop_begin()
+        try:
+            res['r'] = fn()
+        except Stopped as e:
+            res['e'], res['stopped'] = e, True
+        except Exception as e:
+            res['e'] = e
+        finally:
+            stop_end()
+    exp_ = expect if expect is not None else _busy_times(title)
+    Progress._open = None                                   # полосы прерванного дела не делают новые «вложенными»
+    Progress.hook = hook
+    th = threading.Thread(target=work, daemon=True)
+    th.start()
+    click = {}
+
+    def cb(ev, x, y, *_a):
+        if ev == cv2.EVENT_LBUTTONDOWN:
+            click['xy'] = (x, y)
+    try:
+        cv2.setMouseCallback(win, cb)
+    except cv2.error:
+        pass
+    t_stop, forced = None, False
+    try:
+        while th.is_alive():
+            if st['n'] == 0:                                # своих долей нет: по времени или бегущий блок
+                el = _t.monotonic() - st['t0']
+                st['frac'] = min(0.95, el / exp_) if exp_ else None
+                st['left'] = max(0.0, exp_ - el) if exp_ else None
+            else:                                           # доля догоняет пришедшую плавно (без рывков)
+                tg_ = st['target']
+                fr_ = st['frac'] if st['frac'] is not None else 0.0
+                if abs(tg_ - fr_) < 0.002 or (not plan and tg_ < fr_):   # новый этап без плана — с его доли
+                    st['frac'] = tg_
+                elif tg_ > fr_:
+                    st['frac'] = fr_ + (tg_ - fr_) * 0.35
+            img, r = frame(st)
+            if img is not None:
+                cv2.imshow(win, img)
+            k_ = cv2.waitKeyEx(wait_ms)
+            xy = click.pop('xy', None)
+            hit = r is not None and xy is not None and r[0] <= xy[0] <= r[2] and r[1] <= xy[1] <= r[3]
+            if (k_ == 27 or hit or stop_requested()) and not st['stopping']:
+                st['stopping'], t_stop = True, _t.monotonic()
+                st['text'] = "stopping..."
+                stop_request()
+                if on_stop is not None:
+                    try:
+                        on_stop()
+                    except Exception:
+                        pass
+            if t_stop is not None and not forced and _t.monotonic() - t_stop > 2.5 and th.is_alive() \
+                    and stop_active(th.ident):
+                ctypes.pythonapi.PyThreadState_SetAsyncExc(ctypes.c_ulong(th.ident), ctypes.py_object(Stopped))
+                forced = True                               # чистый Python: выйдет на следующей строке
+    finally:
+        th.join()
+        Progress.hook = None
+        Progress._open = None
+    if 'e' not in res and st['n'] == 0:
+        _busy_times(title, _t.monotonic() - st['t0'])       # в следующий раз — полоса по времени
+    res['seconds'] = _t.monotonic() - st['t0']
+    if isinstance(res.get('e'), Stopped):
+        res['stopped'] = True
+    return res
 
 
 def confirm_panel(img, title, lines, buttons=("Done", "Cancel"), hover=None, W=None, low=False):

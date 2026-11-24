@@ -2168,3 +2168,83 @@ assert any('S%02d_10x' % m._regions[LY.idx(m, u10)]['num'] in f_ for f_ in m.las
 m.close()
 print(f"Crystal boxes: Ctrl+drag gives boxes exactly as drawn ({nf_} frames), plain drag still snaps to squares, "
       "a box over another refused; the 10x overview chosen -> Scan shoots all its 50x boxes: OK")
+
+# ------------------------------------------------------------------ 52. Любое долгое дело с полосой останавливается (Esc / Stop); полоса идёт долями (по этапам, по времени), а не 0 -> 100 %
+import threading
+from microcontrol import ui as UI_, util as U_
+from microcontrol.errors import Stopped
+from microcontrol.util import Progress
+cv2.namedWindow('busy test')
+log_ = []
+def frame_(stt):
+    log_.append((time.monotonic(), stt['frac'], stt['stage'], stt['text']))
+    return np.zeros((120, 400, 3), np.uint8), (0, 0, 10, 10)
+def steps_(n=200):
+    with Progress(n, "Work", unit='steps') as pr:
+        for i in range(n):
+            time.sleep(0.02); pr.update(1, f"step {i}")
+    return 'done'
+# 1) с полосой: Stop -> выходит на ближайшем шаге
+threading.Timer(0.5, U_.stop_request).start()
+r = UI_.run_busy('busy test', "Steps", steps_, frame_, wait_ms=20)
+assert r.get('stopped') and isinstance(r['e'], Stopped) and r['seconds'] < 1.2, r
+# 2) чистый Python без полосы и без проверок: останавливается силой
+def spin_():
+    x = 0
+    while True:
+        x += 1
+threading.Timer(0.3, U_.stop_request).start()
+r = UI_.run_busy('busy test', "Spin", spin_, frame_, wait_ms=20)
+assert r.get('stopped') and r['seconds'] < 4.0, r
+# 3) внутри no_stop (скан): Stop не прерывает, дело кончается само (on_stop — его мягкий стоп)
+flag = {}
+def soft_():
+    with U_.no_stop():
+        with Progress(50, "Scan", unit='frames') as pr:
+            for i in range(50):
+                if flag.get('abort'):
+                    return f'stopped after {i} frames'
+                time.sleep(0.02); pr.update(1)
+threading.Timer(0.3, U_.stop_request).start()
+r = UI_.run_busy('busy test', "Scan", soft_, frame_, wait_ms=20, on_stop=lambda: flag.update(abort=True))
+assert r.get('r', '').startswith('stopped after') and not r.get('stopped'), r
+# 4) этапы: общая полоса растёт, без скачков 0 -> 100 на каждом этапе
+def two_():
+    for nm in ("Job: first", "Job: second"):
+        with Progress(30, nm, unit='steps') as pr:
+            for i in range(30):
+                time.sleep(0.02); pr.update(1)
+log_.clear()
+r = UI_.run_busy('busy test', "Job", two_, frame_, plan=[("Job: first", 0.5), ("Job: second", 0.5)], wait_ms=20)
+fr_ = [f for _t, f, _s, _x in log_ if f is not None]
+assert all(b >= a - 1e-9 for a, b in zip(fr_, fr_[1:])) and len({round(f, 2) for f in fr_ if 0.05 < f < 0.95}) > 10, fr_
+# 5) без своих долей: полоса по времени (ожидание — из прошлого раза), а не 0 / 100
+UI_._busy_times("Sleepy", 1.0)
+log_.clear()
+r = UI_.run_busy('busy test', "Sleepy", lambda: time.sleep(1.0), frame_, wait_ms=20)
+fr_ = [f for _t, f, _s, _x in log_]
+assert None not in fr_ and len({round(f, 2) for f in fr_ if 0.1 < f < 0.9}) > 5, fr_
+# 6) сшивка останавливается посреди швов, файлы прежней сшивки целы
+m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp()); m.focus(); fw, fh = m.frame_size
+m.area = mc.Area(0, 0, 7 * fw * 0.7, 5 * fh * 0.7); f = m.scan(); m.close()
+mc.stitch(f, verbose=False)
+fo = f if os.path.exists(os.path.join(f, 'join')) else next(os.path.join(f, d_) for d_ in sorted(os.listdir(f)) if os.path.exists(os.path.join(f, d_, 'join')))
+P0 = open(os.path.join(fo, 'join', 'positions_all.csv')).read()
+log_.clear()
+threading.Timer(1.0, U_.stop_request).start()
+r = UI_.run_busy('busy test', "Stitching", lambda: mc.stitch(fo, verbose=True), frame_, wait_ms=20,
+                 plan=[("Stitch: light", 0.08), ("Stitch: seams", 0.62), ("Stitch: brightness", 0.08), ("Stitch: saving", 0.22)])
+assert r.get('stopped') and r['seconds'] < 3.0, (r.get('e'), r['seconds'])
+assert open(os.path.join(fo, 'join', 'positions_all.csv')).read() == P0
+log_.clear()
+r = UI_.run_busy('busy test', "Stitching", lambda: mc.stitch(fo, verbose=True), frame_, wait_ms=20,
+                 plan=[("Stitch: light", 0.08), ("Stitch: seams", 0.62), ("Stitch: brightness", 0.08), ("Stitch: saving", 0.22)])
+fr_ = [f for _t, f, _s, _x in log_ if f is not None]
+assert {'Stitch: seams', 'Stitch: saving'} <= {s_ for _t, _f, s_, _x in log_}, {s_ for _t, _f, s_, _x in log_}   # после Stop полосы не «вложенные»
+assert 'e' not in r and all(b >= a - 1e-9 for a, b in zip(fr_, fr_[1:])) and \
+    len({round(f, 2) for f in fr_ if 0.02 < f < 0.98}) > 5, (r.get('e'), len({round(f, 2) for f in fr_ if 0.02 < f < 0.98}),
+                                                               [(i, a, b) for i, (a, b) in enumerate(zip(fr_, fr_[1:])) if b < a - 1e-9][:5],
+                                                               sorted({s_ for _t, _f, s_, _x in log_}))
+cv2.destroyWindow('busy test')
+print("Stop: with a progress bar at the next step, plain Python by force, a scan softly after its frame; a stitch stops "
+      "in 1-3 s and the old results stay; the bar goes by stages and by time, not 0 -> 100: OK")

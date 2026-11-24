@@ -548,10 +548,15 @@ def _view_one(folder, fullscreen, keys, car):
         except Exception as e:
             st['msg'] = f"{item}: {e}"
 
-    def busy(title, fn, close_scene=False, footer=""):
-        """Долгая работа прямо в окне: fn() в фоновом потоке, в окне — этап, полоса 0-100 %, время.
-        Возвращает (результат, ошибка или None)."""
-        import threading
+    PLANS = {                                              # этапы одного дела и их доли: общая полоса, не 0 -> 100 % на этапе
+        'stitch': [("Stitch: light", 0.08), ("Stitch: seams", 0.62), ("Stitch: brightness", 0.08), ("Stitch: saving", 0.22)],
+        'cross': [("Crosses: finding", 0.45), ("Crosses: solving", 0.2), ("Stitch: saving", 0.35)],
+    }
+
+    def busy(title, fn, close_scene=False, footer="", plan=None):
+        """Долгая работа прямо в окне: fn() в фоновом потоке, в окне — этап, полоса 0-100 % (общая по этапам plan),
+        время, кнопка Stop (Esc) и строка состояния внизу. Возвращает (результат, ошибка или None); Stop — ошибка
+        Stopped."""
         from .util import Progress
         base = st.get('scene')
         if base is None:
@@ -562,36 +567,27 @@ def _view_one(folder, fullscreen, keys, car):
             sc.st.close()
             sc.thumbs, sc.over = None, None
             sc.cache.clear()
-        prog = dict(title=title, f=0.0, text="starting", eta=None)
-        res = {}
+        fs_ = 0.5
+        sbh_ = UI.size("Xg", fs_)[1] + 16
 
-        def hook(t, f, txt, el, eta):
-            prog.update(title=t, f=f, text=txt, eta=eta)
-
-        def work():
-            try:
-                res['r'] = fn()
-            except Exception as e:                          # покажем в окне
-                res['e'] = e
-
-        t0 = _t.monotonic()
-        Progress.hook = hook
-        th = threading.Thread(target=work, daemon=True)
-        th.start()
+        def frame(stt):
+            img = base.copy()
+            nm_ = stt['stage'].replace("Stitch: ", "").lower()
+            stage = STAGES.get(nm_, stt['stage'] if stt['stage'] != title else "")
+            r_ = UI.progress_panel(img, title, stage, stt['frac'], stt['text'], _t.monotonic() - stt['t0'], stt['left'],
+                                   footer, stopping=stt['stopping'])
+            r2_ = UI.status_bar(img, 0, img.shape[0] - sbh_, img.shape[1], img.shape[0], stt, scale=fs_)
+            out = np.hstack([img, pan]) if pan.shape[0] == img.shape[0] else img
+            ttl = (smp.title + f"  [{smp.project.uid}]") if smp else os.path.basename(folder)
+            mb, _h = UI.menu_bar(out.shape[1], ttl, ["Open", "Scans", "Info", "Help"], None)
+            hit_ = r_ if (r_ and not stt['stopping']) else r2_
+            hit_ = (hit_[0], hit_[1] + mb.shape[0], hit_[2], hit_[3] + mb.shape[0]) if hit_ else None
+            return np.vstack([mb, out]), hit_
         try:
-            while th.is_alive():
-                img = base.copy()
-                nm_ = prog['title'].replace("Stitch: ", "").lower()
-                order_ = ['light', 'seams', 'brightness', 'saving']
-                stage = (f"Step {order_.index(nm_) + 1} of 4:  " if nm_ in order_ and 'cross' not in title.lower() else "") \
-                    + STAGES.get(nm_, prog['title'])
-                UI.progress_panel(img, title, stage, prog['f'], prog['text'], _t.monotonic() - t0, prog['eta'], footer)
-                show(np.hstack([img, pan]) if pan.shape[0] == img.shape[0] else img)
-                cv2.waitKey(60)
+            res = UI.run_busy(WIN, title, fn, frame, plan=plan, wait_ms=60)
         finally:
-            Progress.hook = None
-            th.join()
-        st['busy_s'] = _t.monotonic() - t0
+            cv2.setMouseCallback(WIN, mouse_cb)
+        st['busy_s'] = res['seconds']
         return res.get('r'), res.get('e')
 
     def fit_here():
@@ -600,7 +596,7 @@ def _view_one(folder, fullscreen, keys, car):
         from .anchor import fit_crosses
         g.save(px_um)
         r, e = busy("Frames onto the crosses", lambda: fit_crosses(folder, verbose=True), close_scene=True,
-                    footer="(the view reopens by itself)")
+                    footer="(the view reopens by itself)", plan=PLANS['cross'])
         st['stitched'] = True
         if e is not None:
             car['msg'] = f"Frames onto the crosses failed: {type(e).__name__}: {e}"
@@ -617,7 +613,8 @@ def _view_one(folder, fullscreen, keys, car):
         from .stitch import stitch as _stitch
         g.save(px_um)
         r, e = busy(f"Stitching Selection {SM.sample_index(folder)}" if len(subs) > 1 else "Stitching",
-                    lambda: _stitch(folder, verbose=True), close_scene=True, footer="(the view reopens by itself)")
+                    lambda: _stitch(folder, verbose=True), close_scene=True, footer="(the view reopens by itself)",
+                    plan=PLANS['stitch'])
         st['stitched'] = True
         if e is not None:
             car['msg'] = f"Stitching failed: {type(e).__name__}: {e}"
@@ -1502,7 +1499,7 @@ def _view_one(folder, fullscreen, keys, car):
                 wr_.writerow([i, f"{P_[i, 0]:.2f}", f"{P_[i, 1]:.2f}", "1.0000"])
         try:
             from .stitch import make_preview
-            busy("Stitch edited: rebuilding the overview", lambda: make_preview(folder, pos=P_, levels=False))
+            busy("Stitch edited: rebuilding the overview", lambda: make_preview(folder, pos=P_, levels=False, verbose=True))
         except Exception:
             pass
         st['restart'] = True
@@ -1651,10 +1648,12 @@ def _view_one(folder, fullscreen, keys, car):
             w_ = UI.size("Straight", fs)[0] + 18
             UI.chip(img, "Straight", Wv - w_ - 10, bh - 11, fs, (235, 170, 60))
         hl = [HELP_MODE[st['mode']], HELP_V2]
-        hb = len(hl) * (th_ + 12) + 12
-        UI.panel(img, 0, Hv - hb, Wv, Hv, 0.82)             # низ: клавиши этого режима
+        sbh = UI.size("Xg", 0.5)[1] + 16                    # строка состояния — в самом низу
+        hb = len(hl) * (th_ + 12) + 12 + sbh
+        UI.panel(img, 0, Hv - hb, Wv, Hv - sbh, 0.82)       # над ней: клавиши этого режима
         for k_, h_ in enumerate(hl):
             UI.keys_line(img, h_, 12, Hv - hb + 6 + (k_ + 1) * (th_ + 12) - 4, fs, Wv - 10)
+        UI.status_bar(img, 0, Hv - sbh, Wv, Hv, None, [mode, f"{len(sc.st)} frames"], scale=0.5)
         import time as _t
         if st['msg'] != st.get('_lm'):
             st['_lm'], st['_lt'] = st['msg'], _t.monotonic()

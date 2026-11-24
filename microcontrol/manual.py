@@ -1451,45 +1451,50 @@ def _run(m, fullscreen=False, _keys=None):
                f"Exported {len(ks_)} area{'s' if len(ks_) > 1 else ''}: {res['r']}"
                + ("" if str(res['r']).endswith('.dwg') else "  (DWG: install ODA File Converter)"))
 
-    def busy(title, fn):
-        """Долгое дело в потоке; в окне — полоса прогресса (Progress)."""
-        import threading
-        from .util import Progress
-        prog, res, t0 = dict(title=title, f=0.0, text="starting", eta=None), {}, time.monotonic()
-        Progress.hook = lambda t, f, txt, el, eta: prog.update(title=t, f=f, text=txt, eta=eta)
+    def busy(title, fn, plan=None, expect=None, on_stop=None, bg=None):
+        """Долгое дело в потоке; в окне — полоса прогресса с кнопкой Stop (Esc) и строка состояния внизу.
+        -> dict(r=результат | e=ошибка; Stop -> e = Stopped)."""
+        Wl_ = W - SM.CAR_W
+        oy_ = UI.MENU_H + UI.TOOL_H
+        fs_ = 0.5
+        bh_ = UI.size("Xg", fs_)[1] + 20
 
-        def work():
-            try:
-                res['r'] = fn()
-            except Exception as e:
-                res['e'] = e
-        th = threading.Thread(target=work, daemon=True)
-        th.start()
-        try:
-            while th.is_alive():
-                Wl_ = W - SM.CAR_W
+        def frame(stt):
+            pic = bg() if bg is not None else None              # своя подложка (скан: последний кадр)
+            if pic is None:
                 pic = (view[:, :Wl_].astype(np.float32) * 0.6).astype(np.uint8) if view is not None else \
                     np.zeros((H, Wl_, 3), np.uint8)
-                UI.progress_panel(pic, title, prog['title'], prog['f'], prog['text'], time.monotonic() - t0, prog['eta'], "")
-                fr_ = view.copy()
-                fr_[:, :Wl_] = pic
-                cv2.imshow(WIN, np.vstack([menu_img(W), fr_]))
-                cv2.waitKey(60 if keys is None else 1)
+            r_ = UI.progress_panel(pic, title, stt['stage'] if stt['stage'] != title else "",
+                                   stt['frac'], stt['text'], time.monotonic() - stt['t0'], stt['left'], "",
+                                   stopping=stt['stopping'])
+            r2_ = UI.status_bar(pic, 0, H - bh_, Wl_, H, stt, scale=fs_)
+            fr_ = view.copy() if view is not None else np.zeros((H, W, 3), np.uint8)
+            fr_[:, :Wl_] = pic
+            hit_ = r_ if not stt['stopping'] else None
+            hit_ = (hit_[0], hit_[1] + oy_, hit_[2], hit_[3] + oy_) if hit_ else \
+                ((r2_[0], r2_[1] + oy_, r2_[2], r2_[3] + oy_) if r2_ else None)
+            return np.vstack([menu_img(W), fr_]), hit_
+        try:
+            return UI.run_busy(WIN, title, fn, frame, plan=plan, expect=expect, wait_ms=60 if keys is None else 1,
+                               on_stop=on_stop)
         finally:
-            Progress.hook = None
-            th.join()
-        return res
+            cv2.setMouseCallback(WIN, on_mouse)
 
-    def busy_live(title, fn):
+    def busy_live(title, fn, expect=None):
         """Действие с прибором в потоке, камера на паузе; в окне — полоса и время (видно, что не зависло).
-        -> результат; ошибка прибора -> MicroControlError наружу, как без полосы."""
+        Stop (Esc): дело выходит на ближайшем шаге (столик доезжает начатое движение).
+        -> результат; ошибка прибора или Stop -> MicroControlError наружу, как без полосы."""
         if live is not None:
             live.paused = True
+
+        def halt():
+            m._abort = True                                 # скан / G-код: после текущей команды
         try:
-            res_ = busy(title, fn)
+            res_ = busy(title, fn, expect=expect, on_stop=halt)
         finally:
             if live is not None:
                 live.paused = False
+            m._abort = False
         if 'e' in res_:
             raise res_['e']
         return res_.get('r')
@@ -1821,60 +1826,48 @@ def _run(m, fullscreen=False, _keys=None):
         fm_ = 'points' if m._use_fp else 'off'
         est = sum(TM.estimate(m, int(np.prod(SM.frames_of(m, k_))), fm_ if m._regions[k_]['pts'] else 'off')[0] for k_ in ks)
         L.event('MAN-011', f"Scan from the window: {len(ks)} selection(s) of {m.objective}x, {nfr} frames, ~{TM.fmt(est)}.")
-        prog = dict(title="Scan", f=0.0, text="starting", eta=None)
         res, t0 = {}, time.monotonic()
-
-        def hook(t, f, txt, el, eta):
-            prog.update(title=t, f=f, text=txt, eta=eta)
+        from .util import no_stop
 
         def work():
-            try:
+            with no_stop():                                 # скан останавливается сам, после кадра (снятое — цело)
                 folder = m.scan(only=only_)
-                res['folder'] = folder
-                if res.get('stop'):
-                    return
-                subs_ = list(getattr(m, 'last_scans', None) or [folder])   # только что снятые (не все съёмки образца)
-                for i_, sf in enumerate(subs_):
-                    res['stitch'] = (i_ + 1, len(subs_))
-                    _stitch(sf, verbose=True)
-            except Exception as e:                          # показать в окне
-                res['e'] = e
+            res['folder'] = folder
+            if res.get('stop'):
+                return
+            subs_ = list(getattr(m, 'last_scans', None) or [folder])   # только что снятые (не все съёмки образца)
+            for i_, sf in enumerate(subs_):
+                res['stitch'] = (i_ + 1, len(subs_))
+                _stitch(sf, verbose=True)
+
+        def halt():
+            m._abort, res['stop'] = True, True
 
         m._abort = False
         if live is not None:
             live.paused = True                             # камера — скану
-        Progress.hook = hook
-        th = threading.Thread(target=work, daemon=True)
-        th.start()
         try:
-            while th.is_alive():
+            def last_frame():
                 fr_ = getattr(m, '_last_img', None)
-                Wl_ = W - SM.CAR_W
-                pic = render(fr_, Wl_, H, kz, zm['c'], 0.0) if fr_ is not None else np.zeros((H, Wl_, 3), np.uint8)
-                pic = (pic.astype(np.float32) * 0.75).astype(np.uint8)
-                sti = res.get('stitch')
-                ttl = (f"Stitching {sti[0]} of {sti[1]}" if sti else f"Scanning {len(ks)} selection{'s' if len(ks) > 1 else ''}"
-                       f" of {m.objective}x")
-                stg = prog['title'].replace("Stitch: ", "").capitalize()
-                UI.progress_panel(pic, ttl, stg, prog['f'], prog['text'], time.monotonic() - t0, prog['eta'],
-                                  "stopping after this frame..." if res.get('stop') else ("Esc: stop" if not sti else ""))
-                frame_ = np.zeros((H, W, 3), np.uint8)
-                frame_[:, :Wl_] = pic
-                frame_[:, Wl_:] = view[:, Wl_:] if view.shape[:2] == (H, W) else 30
-                cv2.imshow(WIN, np.vstack([menu_img(W), frame_]))
-                k__ = cv2.waitKeyEx(60) if keys is None else -1
-                if (k__ == 27 or exit_key(k__)) and not res.get('stitch'):
-                    m._abort, res['stop'] = True, True
+                if fr_ is None:
+                    return None
+                return (render(fr_, W - SM.CAR_W, H, kz, zm['c'], 0.0).astype(np.float32) * 0.75).astype(np.uint8)
+            r_ = busy(f"Scanning {len(ks)} selection{'s' if len(ks) > 1 else ''} of {m.objective}x", work,
+                      expect=est, on_stop=halt, bg=last_frame)
         finally:
-            Progress.hook = None
-            th.join()
             if live is not None:
                 live.paused = False
+            m._abort = False
+        if 'e' in r_ and not r_.get('stopped'):
+            res['e'] = r_['e']
+        elif r_.get('stopped'):
+            res['stop'] = True
         msg_t = time.monotonic()
         if 'e' in res:
             msg = f"Scan / stitch failed: {res['e']}"
         elif res.get('stop'):
-            msg = f"Scan stopped. Frames so far: {res.get('folder', '-')}"
+            msg = (f"Stopped. Frames so far: {res['folder']}" if res.get('folder') else "Stopped") + \
+                  (" (not stitched: S in the view stitches it)" if res.get('stitch') else "")
         else:
             m._last_view = (m.last_scans or [res['folder']])[-1]
             msg = f"Scanned and stitched in {TM.fmt(time.monotonic() - t0)}: V opens it in the view"
@@ -2407,8 +2400,8 @@ def _run(m, fullscreen=False, _keys=None):
                     UI.put(view, d_, x0_ + 18 + wl, yy, fsh, UI.TEXT)
             # низ: строка состояния; над ней — сообщение
             bh_ = th0 + 20
-            UI.panel(view, 0, H - bh_, Wl, H, 0.82)
-            UI.facts(view, [t_.strip() for t_ in line.split("    ") if t_.strip()] + ["H: keys"], 14, H - 10, FS)
+            UI.status_bar(view, 0, H - bh_, Wl, H, None,                   # «Ready» и факты; дело — в busy
+                          [t_.strip() for t_ in line.split("    ") if t_.strip()] + ["H: keys"], scale=FS)
             if not nav_early:
                 draw_nav(view, Wl, bh_, img.shape)
             if msg and time.monotonic() - msg_t < 5:

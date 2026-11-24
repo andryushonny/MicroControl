@@ -4,7 +4,7 @@
 
 **Full technical reference** (formulas, protocol, parameters, error codes). For a short introduction see the [README](../README.md). Русский: [reference_ru.md](reference_ru.md) · 中文: [reference_zh.md](reference_zh.md).
 
-![Viewer: red grid of squares, selection (green), hints (yellow), carousel of samples](img/view.jpg)
+![Viewer: red grid of squares, selection (green), carousel of samples](img/view.jpg)
 
 > Independent project, not affiliated with Optosky. Provided as is, without warranty — see the [Disclaimer](#disclaimer) and the [MIT licence](../LICENSE).
 
@@ -56,7 +56,7 @@ Modules:
 | `scan`, `gcode` | scan area, G-code scan program and its execution |
 | `storage` | frame storage of a scan (HDF5 or JPG) |
 | `stitch`, `optics` | overlap stitching (like ASHLAR), flat field, lens distortion, multiband blending |
-| `crosses`, `mask` | cross lattice, square selection, numbering, hints, export |
+| `crosses`, `mask` | cross lattice, square selection, numbering, export |
 | `join` | simple mosaic of the frames |
 | `manual`, `viewer` | manual control window, scan viewer |
 | `device` | instrument memory: home and last position |
@@ -486,7 +486,7 @@ scans/<date>_<time>_<objective>_<name>/      one area; several samples — a ses
   batches/b0000.h5   or batches of batch_size frames (HDF5, frame_format = 'h5')
   join/              stitching results
   viewer/            viewer caches: frame thumbnails and reduced copies (levels/)
-  grid.json          crosses, square selection, square numbers, hints
+  grid.json          crosses, square selection, square numbers
   export/            exported squares (PNG/JPG, DXF, JSON)
 ```
 
@@ -511,7 +511,7 @@ st.export()                                    # PNG files and TileConfiguration
 2. Focus at the corners: at each corner bring the image into focus (`E`/`Q`) and press `1`/`2` (area corners) and `F` (other corners). The "Z follows the focus points" checkbox (`Y`, on by default): $Z$ of each scan frame from the 4 nearest points of its area with weights $1/d^2$; in manual mode, inside an area with at least 2 focus points, every arrow step also sets $Z$ this way (up by at most `max_move_z`). Unchecked — the arrows do not touch $Z$ and the scan keeps one $Z$.
 3. `folder = m.scan()` — frames with 30 % overlap, 35 % at 50x and 100x (`scan_overlap` in `config.py`). Before each picture two consecutive frames are compared by phase correlation: if the picture still moves by more than 1 px (the stage has not settled), the picture is postponed (`m.still_check`). Exposure and white balance are manual for the scan (they do not drift from frame to frame).
 4. `mc.stitch(folder)` — exact frame positions from the overlaps (12.1). Once per objective — `mc.distortion(folder)` (12.5).
-5–7. `mc.view(folder)` — stitch here (`S`), crosses (`C`), level view (`T`), square selection (`M`), square numbers (`N`), hints (`Y`), ruler (`R`) (12.2).
+5–7. `mc.view(folder)` — stitch here (`S`), crosses (`C`), level view (`T`), square selection (`M`), square numbers (`N`), ruler (`R`) (12.2).
 8. `mc.export(folder)` — only the selected squares: PNG (transparent background) or JPG, DXF for AutoCAD (12.3).
 9. `mc.clean(folder)` — show, `mc.clean(folder, confirm=True)` — delete the frames and other work files.
 
@@ -577,7 +577,6 @@ Result: `join/positions_all.csv`, `join/stitch.json`, `join/seams.npz` (seams), 
 | `N` | number a square |
 | `M` | select (click, box); `Shift` — unselect; right click — remove one, `Shift` + right click — the whole area; `A` / `X` — all / none |
 | `2`…`5` · `1` | over a selection: its own grid 2–5 times denser (`M` then selects its cells) · no finer grid |
-| `Y` · `Shift+Y` · `<` `>` | hints · take the hints · sensitivity |
 | `T` | picture level / as shot |
 | `J` · `K` | edit the stitch by hand: seams are dots coloured by their error (green < 0.5 px, yellow < 1.5 px, red; grey — off), a click on a dot switches the seam off or on and the frames are placed again at once from the others; click a frame — its row (Shift+click — its column), arrows move it by 1 px (Shift — 10 px), Backspace — back to the automatic stitch, `J` — save (the automatic one stays in `join/positions_auto.csv`, the seams switched by hand — in `join/seams_edit.json`) · straight edges: the steps at the borders are cut off (again — the whole mosaic) |
 | `P` | profiles window (as Plot Profile in ImageJ, Profile in Gwyddion): two lines, cyan and pink, with R, G, B along them averaged over a band. On a cross they lie across its arms and cross each other. Drag the squares at their ends on the map — any tilt and length (`Shift` — 15° steps), the `x` in the middle — move a line, the diamond — both. Click — pin / unpin. In the window: a zoomed preview with the lines and edges, width in µm, contrast, angles; drag the yellow edges; wheel on a plot — Y scale (the same for both, click `Y` — auto), elsewhere — band width; right click — auto edges. The edges are drawn as ticks on the map, in the preview and on the map of the manual mode |
@@ -600,29 +599,6 @@ The lattice is always **square**: $\mathbf{v}_2$ is $\mathbf{v}_1$ turned by 90�
 ```
 
 $P$ is a signed permutation of the axes (8 variants: which lattice axis is $X$ and which way it grows). $P$ and $\mathbf{t}$ are chosen so that all labels hold exactly. One label gives only $\mathbf{t}$ (the directions are the defaults: $X$ to the right, $Y$ down on the screen); a label on a second square **in another row and column** fixes the directions of both axes — and the numbers of all squares. The number is written in the top left corner of each square (labelled ones in yellow); inconsistent labels give a warning. The numbers go to `selection.json` (`names`), to the DXF (layer LABELS) and to the file names of the squares (`square_X+012_Y+007.png`). No digit recognition is needed: two labels are enough.
-
-**Yellow hint** — squares with something in them (flakes, crystals, any object). It is an anomaly search (the PaDiM principle): the empty substrate is described by a mixture of a few Gaussians of small-patch features, and everything far from it is "something". Steps:
-
-1. The whole mosaic as one reduced image (a square ≈ 160 px, smaller for a large grid — ≤ 6 Mpx in total), cut into 4 × 4 px patches.
-2. Features of a patch, $\mathbf{f} \in \mathbb{R}^8$: deviation of the colour from the local background in Lab (3, uneven illumination removed), chroma of the deviation (1), edges and texture — Laplacian, gradient, local standard deviation of brightness, difference of Gaussians (4).
-3. The norm: a mixture of $K = 3$ Gaussians (EM in OpenCV) fitted on the patches of the scan itself (almost all squares are empty); the farthest 12 % are dropped and the fit is repeated. The patch distance is the Mahalanobis distance to the nearest Gaussian, in units of the spread of the norm:
-
-```math
-z = \frac{\min_k \sqrt{(\mathbf{f}-\boldsymbol{\mu}_k)^{\mathsf T}\Sigma_k^{-1}(\mathbf{f}-\boldsymbol{\mu}_k)} - \mathrm{med}}{1.48\,\mathrm{MAD}},
-```
-
-   a patch is "something" if $z > 8$.
-4. Not counted: patches near the lattice nodes (crosses and their numbers), the edges of the scan, dust (small spots with a dark colourless core), spots smaller than 2 patches.
-
-A square is yellow if the share of "something" is larger than
-
-```math
-f(S) = 5\,\% \cdot 10^{-2S/100},
-```
-
-$S$ — sensitivity 0…100 (50 — 0.5 %; 0 — 5 %; 100 — 0.05 %). Computed automatically when the lattice is set (≈ 2.5 s for 4400 squares, memory ≈ 0.3 GB), changing the sensitivity is instant. Without the window: `mc.hints(folder, sensitivity=50)`. On sample images the crystals and flakes are found, the regular marking dots, crosses and dust are not.
-
-**Model of the empty substrate** (optional): shoot a clean substrate, mark the crosses, `mc.train_hints(folder, default=True)` — the model is saved for this objective and all hints compare with it. **Neural network features** (optional, the original PaDiM): `mc.anomaly.export_backbone()` once on any PC with `torch`, `torchvision` and internet, copy `backbone.onnx` and `backbone.json` to `~/.microcontrol/` on the microscope PC; OpenCV runs it, `torch` is not needed there.
 
 **Performance** (30 × 30 frame grid, 900 frames of 1296 × 972, 2 cores): stitching 67 s, memory ≤ 0.6 GB; opening the viewer 0.1 s; a window frame at any zoom 7–63 ms, while dragging 2–25 ms. Small zoom is drawn from the overview mosaic `join/preview_all.jpg`, medium from the reduced frame copies `viewer/levels/` (written at stitching), large from the frames; the copy cache is limited to 400 MB.
 
@@ -768,13 +744,19 @@ The `F` (feed) parameter is not supported (`E902`): the speed is set by the cont
 
 **Stitch in the viewer** (`S`): `mc.stitch` of the open selection in a background thread; the window shows the step (1 of 4: light field, seams, frame brightness, saving), its progress bar in % and the time; then the viewer reopens with the stitched picture (crosses moved with the frames).
 
+**Stop and the status bar.** Every long job in both windows (scan, stitch, frames onto the crosses, fit grid, autofocus, Prepare, export, going to a place) has a **Stop** button on its progress bar (or `Esc`). The job stops at its next step (the library's progress bar checks it); a job that does not reach a step in 2.5 s is stopped by force (pure Python); the stage finishes the move it has started. A scan stops softly after the current frame and keeps what is shot; a stitch stops between seams and the previous results stay as they were. The bar is one for the whole job: its stages have shares (stitch: light 8 %, seams 62 %, brightness 8 %, saving 22 %), extra rounds of seams add to it, so it does not run 0 → 100 % on every stage; a job without its own shares (a move, white balance, a picture) goes by its usual time (remembered in `~/.microcontrol/busy_times.json`), the very first time — a running block. The **status bar** at the bottom of both windows always says what is going on: `Ready` and the facts (position, sharpness, ...), or the job, its bar, the time passed and left, and Stop.
+
+**Boxes with crystals.** In the manual window `Ctrl`+drag on the map draws a **free box** on the objective in place, exactly as drawn (not snapped to the lithography squares) — around a crystal seen on the 10x picture. Only the frames touching the box are shot; a box smaller than a frame is one frame on the nearest motor step. Many boxes: choose the overview they lie in (its card on the right) and **Scan area** — all boxes of the objective in place inside it are shot, each into its own folder, and stitched. A box partly over another box of the same objective is refused.
+
+**The picture on the map stands in its outline.** Backlash shifts every frame by $\pm B$ from the commanded place, depending on the side the stage came from. The stage model takes the mean approach side $\bar s$ of the scan as the reference, $T = p + B\,(s - \bar s)$: on average the picture is at the commanded coordinates and does not slide out of its outline by half the backlash.
+
 **Final drawing** (`E` / `mc.export`): besides `selection.png` / `selection.dxf`, every chosen square is saved as its own picture `export/squares/square_X±NNN_Y±NNN.png` (cut along the lattice, level), and `export/drawing.dxf` (DXF 2010, units µm, Y up; `ezdxf`) places each picture at its square (layer `IMAGES`), with the outlines (`SQUARES`, the outer edge `OUTLINE`), the numbers (`LABELS`) and an empty `BONDS` layer. If the free ODA File Converter is installed (or its path is in `MC_ODA`), `export/drawing.dwg` is written too. Pictures are external files in DWG as well: move the whole `export/` folder.
 
 **Chosen squares on the maps.** Lattice corners of the chosen squares are mapped from mosaic pixels to stage micrometres by an affine fit over the frame positions (frame centre = where the stage stood; one row of frames — by the camera matrix `A`); in manual mode they are drawn dark green on the mini map and on the live picture (`selections.marked_all`, refreshed every 3 s), in the viewer — on the previews in the list.
 
 **Ruler** (`R`, both windows): two clicks — the distance in µm and its projections; the points are placed exactly at the clicks (marked with «+»). In manual mode the points are on the sample (stage coordinates), so the stage may move between the clicks. In manual mode: `L` — light, `I` — laser, `W` — white balance; `S` (twice) scans the selections of the objective in place and stitches them in the window (`Esc` stops after the current frame), `V` opens the result in the viewer.
 
-**Undo** (`Ctrl+Z`, `Ctrl+Y` / `Ctrl+Shift+Z` — redo; both windows). After every action the window compares its state with the previous one and keeps the pair (before, after), up to 200 steps. Manual mode: selections, focus points, objective, zero offset and the stage position (undoing a move drives the stage back: down first, then X/Y in legs ≤ `max_jump`, then up in steps ≤ `max_move_z`). Viewer: crosses, grid, squares, numbers, hints, and a selection removed from the list (moved back from `_removed/`).
+**Undo** (`Ctrl+Z`, `Ctrl+Y` / `Ctrl+Shift+Z` — redo; both windows). After every action the window compares its state with the previous one and keeps the pair (before, after), up to 200 steps. Manual mode: selections, focus points, objective, zero offset and the stage position (undoing a move drives the stage back: down first, then X/Y in legs ≤ `max_jump`, then up in steps ≤ `max_move_z`). Viewer: crosses, grid, squares, numbers, and a selection removed from the list (moved back from `_removed/`).
 
 **Mini map and arrows.** The mini map follows the arrows: arrow up — the stage cell goes up on the map. `[` `]` turn the arrows (and the map with them) the other way (`arrows_flip_x/y`, remembered).
 
@@ -839,7 +821,7 @@ Focus points are numbered through all areas: the first area has 1, 2 (its corner
 
 **Selections are layers.** One entity for every level: a selection has an outline (a union of rectangles in real stage µm, no inner squares; `shape` in `sample.json`), an objective (its level of the pyramid), a parent (`parent`, explicit; groups are folders without an outline of their own) and its scans. **Ctrl+click** cards marks them (the first is the target); buttons above the list: **Merge** (into the first), **Minus** (the first minus the others), **Overlap** (the first = the common part), **Group**, **Ungroup**; Ctrl+Z undoes. Clicking the objective chip of a selection not scanned yet switches it to the next objective. **The brush becomes selections:** squares chosen in the viewer (M / B) turn into selections by themselves, one per closed figure (squares touching by a side), children of the scanned selection, on the next objective; while they are not changed by operations they follow the brush, after that they live on their own. **x** or `C` deletes a selection at once (the squares of a brush selection leave the brush; Ctrl+Z brings both back). **Shift + drag** over a selection on the picture moves it. The **eye** on a card hides the selection (with what is inside it) on the maps and the picture, and shows it again; **Show all** above the list brings every hidden one back. The outlines lie on the real crosses also when the grid of crosses is turned against the stage (checked at 5° and −12° with backlash: corners within 0.5 µm). A selection with an outline is scanned only by the frames that touch it. On the live picture the outlines lie strictly by the scan geometry: every frame records the side the stage came from (`dir_x`, `dir_y`); from the stitched positions one system $\mathbf{pos} = M_o\mathbf{p} + B_l\mathbf{s} + \mathbf{c}$ gives the camera as the stitching sees it ($M_o$, px per step) and the stage backlash $B = M_o^{-1}B_l$; the true stage position is the commanded one plus $B\mathbf{s}$ ($\mathbf{s}$ — the side of the last move). Without it a snake scan (neighbouring rows come from opposite sides) put the outlines off by ±backlash/2, depending on the side the stage came from (about 10 µm on the simulator); `mc.snap.offset(...)` checks the geometry against the picture.
 
-`m.scan()` shoots all areas, each with the Z from its own focus points, into one session folder (section 11): `sample_01`, `sample_02`, … `mc.stitch`, `mc.export`, `mc.clean`, `mc.hints` accept the session folder and work on every sample. `mc.view(session)` opens the first sample; the same carousel on the right switches samples (click, `,` / `.`), each sample has its own crosses, red grid, selection and numbers; **x** removes a sample — its folder is moved to `<session>/_removed/` (not deleted).
+`m.scan()` shoots all areas, each with the Z from its own focus points, into one session folder (section 11): `sample_01`, `sample_02`, … `mc.stitch`, `mc.export`, `mc.clean` accept the session folder and work on every sample. `mc.view(session)` opens the first sample; the same carousel on the right switches samples (click, `,` / `.`), each sample has its own crosses, red grid, selection and numbers; **x** removes a sample — its folder is moved to `<session>/_removed/` (not deleted).
 
 The stage coordinates are shown large in the top left corner; the status line at the bottom also has the frame number in the area ("Frame: row $r$/$n_y$, column $c$/$n_x$").
 
@@ -1049,8 +1031,8 @@ Read `m.photo_pause`, change `m.photo_pause = 0.5`, table of all parameters `m.s
 | `m.gcode(program)` | run G-code | — |
 | `m.info()`, `m` | instrument info, state | — |
 | `m.close()` | disconnect | — |
-| `mc.stitch()`, `mc.fit_crosses()`, `mc.view()`, `mc.hints()`, `mc.export()`, `mc.clean()` | stitching (preview), frames onto the crosses with the distortion (section 12.5), marking, hints, export, clean-up | — |
-| `mc.train_hints()`, `mc.Agent()`, `mc.agent.chat()` | model of the empty substrate for hints; tools for AI agents (section 25) | — |
+| `mc.stitch()`, `mc.fit_crosses()`, `mc.view()`, `mc.export()`, `mc.clean()` | stitching (preview), frames onto the crosses with the distortion (section 12.5), marking, export, clean-up | — |
+| `mc.Agent()`, `mc.agent.chat()` | tools for AI agents (section 25) | — |
 | `mc.join()`, `mc.ScanData()` | simple mosaic, access to the frames | — |
 | `mc.help()` | short help | — |
 
@@ -1188,7 +1170,7 @@ On the instrument, do not raise the stage "blindly" with commands like `m.move(d
 
 ## 25. AI agents
 
-A local language model can use MicroControl completely: look through the camera and at stitched mosaics, drive the stage, set sample areas, scan, stitch, mark crosses, number and select squares, find hints and export. Everything that moves the stage or removes the operator's work is shown to the operator first and runs only after **Allow**.
+A local language model can use MicroControl completely: look through the camera and at stitched mosaics, drive the stage, set sample areas, scan, stitch, mark crosses, number and select squares and export. Everything that moves the stage or removes the operator's work is shown to the operator first and runs only after **Allow**.
 
 **Start.**
 
@@ -1205,11 +1187,11 @@ The lab PC (old i5) runs the microscope; the language model itself is better run
 | Group | Tools |
 |---|---|
 | State and help | `get_status`, `get_settings`, `get_manual` (manual for the model: units, coordinates, workflow, safety) |
-| Seeing | `look`: `camera` (frame now, centre cross, scale bar), `mosaic` (part of a stitched scan with the red grid, square names, selection, hints and a ruler in mosaic px), `map` (stage map: areas, focus points, position) |
+| Seeing | `look`: `camera` (frame now, centre cross, scale bar), `mosaic` (part of a stitched scan with the red grid, square names, selection and a ruler in mosaic px), `map` (stage map: areas, focus points, position) |
 | Stage | `move_stage`, `goto_position`, `autofocus`, `take_photo`, `change_setting` |
 | Sample areas | `area_corner` (like keys 1 and 2), `add_focus_point`, `goto_area`, `delete_area`, `scan` (`dry_run` — count frames and time) |
 | Scans on disk | `list_scans`, `scan_info` (with the suggested next step), `stitch`, `remove_sample` |
-| Grid and squares | `mark_cross`, `undo_cross`, `fit_grid`, `label_square`, `list_squares`, `select_squares`, `find_hints`, `export` |
+| Grid and squares | `mark_cross`, `undo_cross`, `fit_grid`, `label_square`, `list_squares`, `select_squares`, `export` |
 
 **Approval.** Needed for: moving the stage, autofocus, changing a setting, scanning, deleting an area, removing a sample folder, replacing the selection. A window on the lab PC shows what exactly will happen (from where to where, $+Z$ towards the objective is stated) and the agent's reason: **Allow**, **Allow for this session** (this tool), **Deny** (the agent is told not to repeat it). `approve='console'` asks in the console, `approve='deny'` makes a read-only agent.
 

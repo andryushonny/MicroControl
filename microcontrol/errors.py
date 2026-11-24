@@ -49,6 +49,7 @@ CODES = {
     'E704': "Selections of one objective overlap",
     'E705': "Corner 1 was set with another objective",
     'E706': "No selection for this objective",
+    'E790': "Stopped by the user",
     'E801': "Scan folder not found or empty",
     'E901': "G-code syntax error",
     'E902': "Unsupported G-code command",
@@ -91,6 +92,12 @@ class StoreError(MicroControlError, RuntimeError):
 
 class StopError(MicroControlError, RuntimeError):
     """Аварийная остановка: python -m microcontrol stop. После неё нужно подключиться заново."""
+
+
+class Stopped(MicroControlError):
+    """Остановлено из окна (Esc или Stop на полосе прогресса)."""
+    def __init__(self, detail=""):
+        super().__init__('E790', detail)
 
 
 class GcodeError(MicroControlError, ValueError):

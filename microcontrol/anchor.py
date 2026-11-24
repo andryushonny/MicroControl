@@ -221,7 +221,10 @@ def anchor(folder, save=True, fit_dist=True, verbose=True, preview=True):
     U = U0.copy()
     x = None
     th = th0.copy()
+    pr_s = Progress(7, "Crosses: solving", unit='steps') if verbose else None
     for it, cs in enumerate((1e9, 4.0, 2.0, 1.0, 1.0, 0.7, 0.7)):
+        if pr_s:
+            pr_s.update(1 if it else 0, f"frames, grid and distortion together, step {it + 1} of 7")
         rows, mc_, ms_ = model_rows(U, None if fit_th else th0)
         w = np.r_[np.repeat(wc, 2), np.repeat(ws, 2) if len(I) else np.zeros(0),
                   np.full(2 * n, 1e-3), np.full(4, (30.0 if cal else 0.3) if fit_th else 1e4)]
@@ -236,6 +239,9 @@ def anchor(folder, save=True, fit_dist=True, verbose=True, preview=True):
         sd = max(1.48 * float(np.median(res[wc > 0.05])) if (wc > 0.05).any() else 1.0, 0.15)
         wc = 1.0 / (1.0 + (res / max(cs, 2.5 * sd)) ** 2)
         wc[res > max(3.0, 6 * sd)] = 0.0                    # не тот крест / грязь
+    if pr_s:
+        pr_s.update(1, "done")
+        pr_s.close()
     Pn, On, an = x[:2 * n].reshape(n, 2), x[iO:iO + 2], x[iA:iA + 2]
     U = Rr - (dist_basis(U - c, R) @ th)
     node = On + IJ[:, :1] * an + IJ[:, 1:] * np.array([-an[1], an[0]])

@@ -1,5 +1,5 @@
 """Текстовые ответы (Result) и полоса прогресса (Progress)."""
-import os, sys, time
+import os, sys, time, threading
 import numpy as np
 
 
@@ -66,6 +66,51 @@ class Result(dict):
         p.text(repr(self))
 
 
+# ------------------------------------------------------------------ остановка долгого дела из окна
+_STOP = {'tid': None, 'on': False}
+
+
+def stop_begin():
+    """Поток долгого дела (из окна): с этой минуты его можно остановить (stop_request)."""
+    _STOP.update(tid=threading.get_ident(), on=False)
+
+
+def stop_end():
+    _STOP.update(tid=None, on=False)
+
+
+def stop_request():
+    """Esc / Stop в окне: дело остановится на ближайшей полосе прогресса (или check_stop)."""
+    _STOP['on'] = True
+
+
+class no_stop:
+    """with no_stop(): ...  — внутри дело само знает, как остановиться мягко (скан: после кадра, снятое
+    сохраняется), полоса прогресса его не прерывает и силой не останавливают."""
+    def __enter__(self):
+        self.tid, _STOP['tid'] = _STOP['tid'], None
+        return self
+
+    def __exit__(self, *a):
+        _STOP['tid'] = self.tid
+
+
+def stop_requested():
+    return _STOP['on']
+
+
+def stop_active(tid):
+    """Поток tid можно остановить силой (не внутри no_stop)."""
+    return _STOP['tid'] == tid
+
+
+def check_stop():
+    """В потоке долгого дела: остановку попросили — Stopped. В других потоках (окно, камера) — ничего."""
+    if _STOP['on'] and _STOP['tid'] == threading.get_ident():
+        from .errors import Stopped
+        raise Stopped()
+
+
 class Progress:
     """Полоса прогресса в одну строку:
     Scan             [############............]  48.21% / 100.00%   27 of 56 frames   00:41 passed, 00:44 left   Z 102 um
@@ -78,6 +123,7 @@ class Progress:
     def __init__(self, total, title, expect=None, unit=''):
         """expect — ожидаемое время всего, с (из прошлых сканов): в начале «left» берётся из него, потом всё
         больше — из того, как идёт на самом деле."""
+        check_stop()
         self.total, self.title, self.done, self.t0, self._t = max(1, total), title, 0, time.monotonic(), 0.0
         self.expect, self.unit, self.text, self.sub, self._w = expect, unit, '', '', 0
         self.step, self.sub_frac = 1, 0.0                   # вес текущего шага и сколько его сделала вложенная полоса
@@ -95,8 +141,14 @@ class Progress:
     def __exit__(self, *a):
         self.close()
 
+    def extend(self, n):
+        """Работы стало больше на n (ещё один раунд): доля не прыгает к 100 %, пока она идёт."""
+        self.total += max(0, int(n))
+        self.update(0, force=True)
+
     def update(self, n=1, text=None, force=False):
-        """Сделано ещё n (n=0 — только сменить подпись text)."""
+        """Сделано ещё n (n=0 — только сменить подпись text). Здесь же — остановка из окна (Stopped)."""
+        check_stop()
         self.done = min(self.total, self.done + n)
         if n:
             self.sub_frac = 0.0
@@ -109,7 +161,7 @@ class Progress:
                 self.parent._set_sub(f"{self.title} {100 * self.done / self.total:.0f}%" + self._label(" › "),
                                      self._frac())
             return
-        if now - self._t < 0.25 and self.done < self.total and not force:
+        if now - self._t < (0.1 if Progress.hook is not None else 0.25) and self.done < self.total and not force:
             return
         self._show(now)
 

@@ -4,7 +4,7 @@
 
 **Authors:** A. Lyapeikov, S. Domenko · **Version:** 0.20.0 · Русский: [docs/README_ru.md](docs/README_ru.md) · 中文: [docs/README_zh.md](docs/README_zh.md) · PDF: [EN](docs/MicroControl_en.pdf), [RU](docs/MicroControl_ru.pdf), [中文](docs/MicroControl_zh.pdf) · Full technical reference: [EN](docs/reference_en.md), [RU](docs/reference_ru.md), [中文](docs/reference_zh.md)
 
-![Overview: numbered lithography squares, hints (yellow), Draft 2 with its 1/4 grid, Draft 3, the 50x and 100x areas inside](docs/img/view.jpg)
+![Overview: numbered lithography squares, chosen squares as drafts, the 20x and 100x areas inside, the status bar at the bottom](docs/img/view.jpg)
 
 > Independent project, not affiliated with Optosky. Provided as is, without warranty — see the [Disclaimer](#disclaimer) and the [MIT licence](LICENSE).
 
@@ -25,7 +25,7 @@ folder = m.scan()            #    shoot the area frame by frame (or S right in t
 mc.stitch(folder)            #    join the frames into one picture (or S in mc.view)
 
 mc.view(folder)              # 3. key C: click two neighbouring crosses -> the red grid
-                             # 4. keys M / B: choose squares (green); Y shows hints, Shift+Y takes them
+                             # 4. keys M / B: choose squares (green)
 mc.export(folder)            # 5. the chosen squares: pictures + a drawing in micrometres (DXF / DWG)
 
 m.close()
@@ -48,7 +48,7 @@ Both windows close with **Shift+Esc** or the window's ×. A single `Esc` only ca
 `m.manual()` opens the live camera. Move with the arrows (one press = one frame), focus with `E` / `Q` (or `F` — autofocus). Letters do things: `L` light, `I` laser, `W` white balance, `R` ruler, `S` (twice) scan and stitch right in the window, `V` open the result in the viewer.
 
 - **One window, four steps.** The bar on top shows where you are — **1 Overview › 2 Pick areas › 3 Detail › 4 Export** (click a step for what to do) — and the main buttons: **New area**, **Scan area** (scan + stitch), **Export** (drawing for AutoCAD: DWG + DXF of the chosen area), **Settings** (steps, exposure, focus points).
-- **Map** (top right; `Tab` — big map, the camera goes to the corner): everything already shot, at its real place (10x under 50x under 100x), the outlines of the areas and a yellow frame where the camera is now. **Click the map — the stage drives there**; **drag on the map — a new area** on the objective in place; wheel — zoom; right drag — move the map; double-click a shot area — open it in the viewer.
+- **Map** (top right; `Tab` — big map, the camera goes to the corner): everything already shot, at its real place (10x under 50x under 100x), the outlines of the areas and a yellow frame where the camera is now. **Click the map — the stage drives there**; **drag on the map — a new area** on the objective in place; **`Ctrl`+drag — a free box** exactly as drawn (around a crystal), not snapped to the squares; wheel — zoom; right drag — move the map; double-click a shot area — open it in the viewer.
 - **Selection by keys** still works: go to one corner, press `1`, to the opposite one, press `2`.
 - **Focus points:** the height $Z$ at each corner is remembered; `K` adds more points. During the scan every frame gets its own $Z$ from these points, so a tilted sample stays sharp. With the checkbox "Z follows the focus points" the arrows also follow them.
 - **Several selections, layers:** set them one after another (`1`, `2`, then `1`, `2` again). Selections of one objective do not overlap, but a selection of a higher objective may lie inside one of a lower objective (see *Layers* below). The list on the right shows them nested: click — choose, **Go** — drive to it, **x** — delete.
@@ -59,7 +59,7 @@ Both windows close with **Shift+Esc** or the window's ×. A single `Esc` only ca
 
 ### 3. Red grid — find the squares
 
-![Grid, numbers, chosen squares and hints](docs/img/view_zoom.jpg)
+![Grid, numbers and chosen squares](docs/img/view_zoom.jpg)
 
 `mc.view(folder)` opens the stitched picture (drag — move, wheel — zoom).
 
@@ -70,7 +70,6 @@ Both windows close with **Shift+Esc** or the window's ×. A single `Esc` only ca
 ### 4. Choose squares — the mask
 
 - `M` — select: click a square (again — off) or drag a box, every square it touches is chosen (`Shift` — unselect). Right click — remove one square, `Shift` + right click — the whole green area. Chosen squares are green (`B` does the same, out of habit).
-- **Hints:** `Y` finds and shows yellow squares where something is (flakes, crystals); they are not computed by themselves — it takes a few seconds. `Shift+Y` takes all of them and switches to the brush to correct the choice; `<` / `>` change the sensitivity.
 
 ### 5. Export
 
@@ -197,7 +196,7 @@ The whole protocol, step by step: [reference, section 5](docs/reference_en.md#5-
 | **Expected time** | A small learning model: a physical estimate at first, then the real times of your scans (see [Machine learning inside](#machine-learning-inside)). |
 | **Stitching** | Neighbouring frames overlap; comparing the overlaps gives their exact shifts. All shifts are solved together, so stage errors do not add up. The uneven light of the lens (darker, differently tinted edges) is measured from the frames themselves for each colour and divided out; the brightness of every frame is then matched to its neighbours over the overlaps, so the seams do not show. Built for hundreds and thousands of frames and inspired by the ideas of BigStitcher and MIST: shifts to a fraction of a pixel regardless of the stage error, a stage model with backlash that rejects false matches (repeating crosses on a blurred frame), a sparse solver (thousands of frames in a fraction of a second); in the viewer every seam can be switched off and the frames are placed again at once. |
 | **Grid** | Two crosses give the direction and the length of one square side; the grid is square, so that is all it needs. Fitting to all crosses makes it exact. Two labelled squares give the numbering of the whole grid. |
-| **Hints** | Unsupervised anomaly detection: the program learns what the empty substrate looks like and marks the squares with something unlike it (see [Machine learning inside](#machine-learning-inside)). |
+| **Stop** | Every long job has a Stop button (or `Esc`) on its progress bar; the bar goes by the stages of the job, and the status bar at the bottom always says what is going on. |
 | **Export** | Only the chosen squares, straightened, at full resolution, plus a DXF with the squares in micrometres. |
 | **Selections and layers** | Each selection gets its own colour, objective, focus points and sub-folder; a selection of a higher objective inside one of a lower objective is its detail (a layer). |
 | **AI agents** | A local language model can use the whole program through tools; everything that moves the stage needs the operator's "Allow". See below. |
@@ -229,25 +228,6 @@ T = T_0 + t\,N,
    (1 scan — 33 %, 4 — 67 %, 10 — 83 %), like a Bayesian estimate that trusts experience more and more.
 5. **During the scan** the "Left" time starts from this prediction and moves to the real pace as frames come.
 
-### Hints: finding flakes and crystals on the substrate
-
-The yellow hint is **unsupervised anomaly detection** (the idea of PaDiM): nobody has to label flakes; the program learns what *normal* substrate is and marks what is not.
-
-1. **Patches.** The whole stitched picture is reduced (≤ 6 Mpx) and cut into small 4 × 4 px patches.
-2. **Features** of every patch (8 numbers): how its colour differs from the local background in the Lab colour space (3; uneven illumination is removed), how saturated that difference is (1), and texture — edges, gradient, local contrast, difference of Gaussians (4).
-3. **Model of normal substrate — Gaussian mixture.** The features of all patches are fitted with a mixture of $K = 3$ Gaussians by the EM algorithm (the substrate has a few kinds of normal patches: clean, with a marking dot, with a cross edge). Fitting is robust: the farthest 12 % of the patches — where flakes are — are dropped and the mixture is fitted again.
-4. **Anomaly score.** For every patch — the Mahalanobis distance to the nearest Gaussian, in units of the spread of normal patches (median and MAD):
-
-```math
-z = \frac{\min_k \sqrt{(\mathbf f-\boldsymbol\mu_k)^{\mathsf T}\Sigma_k^{-1}(\mathbf f-\boldsymbol\mu_k)} - \mathrm{med}}{1.48\,\mathrm{MAD}},
-```
-
-   a patch with $z > 8$ is "something".
-5. **Cleaning.** Patches near the grid nodes (crosses and their numbers) and at the edges are ignored; connected spots smaller than 2 patches and small dark colourless spots (dust) are dropped.
-6. **Squares.** A square is yellow if "something" covers more than a share $5\,\% \cdot 10^{-2S/100}$ of it, $S$ — the sensitivity 0…100 (keys `<` `>`): changing it is instant.
-
-Options: train the normal model once on a clean substrate — `mc.train_hints(folder, default=True)`; or use neural-network features instead of the hand-made ones (a ResNet18 file in ONNX format, run by OpenCV — the original PaDiM), see the [reference](docs/reference_en.md). The whole search takes a few seconds for thousands of squares and needs no GPU.
-
 ---
 
 ## Keys
@@ -262,6 +242,7 @@ Arrows move; letters do things. As much as possible is done right in the window.
 | `E` / `Q` (`PgUp` / `PgDn`) | stage up / down by Step Z (`Shift` — ×5) |
 | `F` · `K` | autofocus · keep $Z$ here as a focus point |
 | Ctrl+click cards · Shift+drag over a selection | mark for Merge / Minus / Overlap / Group / Ungroup · move a selection |
+| Ctrl+drag on the map · `Esc` during a job | a free box on the objective in place (a crystal): exactly as drawn, smaller than a frame — one frame; the overview chosen + Scan area — all such boxes in it · stop the job (or Stop on its bar) |
 | `1`, `2` | corners of a selection |
 | `Y` | "Z follows the focus points" on / off |
 | `,` `.` · `Enter` | previous / next selection · drive to it |
@@ -292,7 +273,6 @@ Arrows move; letters do things. As much as possible is done right in the window.
 | `N` | number a square |
 | `M` | select (click, box); `Shift` — unselect; right click — remove one, `Shift` + right click — the whole area; `A` / `X` — all / none |
 | `2`…`5` · `1` | over a selection: its own grid 2–5 times denser (`M` then selects its cells) · no finer grid |
-| `Y` · `Shift+Y` · `<` `>` | hints · take the hints · sensitivity |
 | `T` | picture level / as shot |
 | `P` | profiles window: R, G, B across the arms of the cross under the mouse, arm edges (green), width in µm, contrast, overexposure. Click a cross — pin it; drag the yellow edge lines in the window — they move on the map too; wheel over the window — profile range; right click — edges found automatically. Cross search prefers the largest «+», so dust and dots do not pull it |
 | `R` | ruler: two clicks — the distance |

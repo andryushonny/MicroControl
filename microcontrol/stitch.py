@@ -438,7 +438,7 @@ def _builtin(st, pred, p, W, H, max_shift, sigma, alpha, verbose, A=None):
     # 2) сдвиги
     meas, err = [], []
     nf = min(300, 3 * len(pairs))
-    pr = Progress(len(pairs) + nf, "Stitch: seams", unit='comparisons') if verbose else None
+    pr = Progress(len(pairs) + nf + 1, "Stitch: seams", unit='comparisons') if verbose else None
     import threading
     from concurrent.futures import ThreadPoolExecutor
     lock_ = threading.Lock()
@@ -450,13 +450,16 @@ def _builtin(st, pred, p, W, H, max_shift, sigma, alpha, verbose, A=None):
     st.frame = frame_locked
     try:
         nw_ = max(1, min(8, (os.cpu_count() or 2) - 1))
-        with ThreadPoolExecutor(max_workers=nw_) as ex_:
+        ex_ = ThreadPoolExecutor(max_workers=nw_)
+        try:
             futs_ = [ex_.submit(_pair, st, a, b, pred[b] - pred[a], W, H, pad, sigma, max_shift) for a, b in pairs]
             for k_, ((a, b), fu_) in enumerate(zip(pairs, futs_)):
                 dt, e = fu_.result()
                 meas.append(pred[b] - pred[a] if dt is None else dt); err.append(e)
                 if pr:
                     pr.update(1, f"seam {k_ + 1} of {len(pairs)}: frames {a + 1} + {b + 1}")
+        finally:
+            ex_.shutdown(wait=True, cancel_futures=True)       # Stop: оставшиеся швы не считаются
     finally:
         st.frame = fr0_
     meas, err = np.array(meas), np.array(err)
@@ -473,7 +476,7 @@ def _builtin(st, pred, p, W, H, max_shift, sigma, alpha, verbose, A=None):
             continue
         fake.append(_pair(st, a, b, pred[b] - pred[a], W, H, pad, sigma, 1e9, other=c)[1])
     if pr:
-        pr.stage("solving frame positions")
+        pr.update(1, "solving frame positions")
     thr = float(np.quantile(fake, alpha)) if len(fake) >= 20 else 0.7
     I = np.array([q[0] for q in pairs]); J = np.array([q[1] for q in pairs])
     # 3б) не нашёлся по полосам у предсказания — по кадрам целиком (столик ошибся больше перекрытия)
@@ -481,9 +484,11 @@ def _builtin(st, pred, p, W, H, max_shift, sigma, alpha, verbose, A=None):
     full = 0
     if len(failed):
         if pr:
-            pr.stage(f"{len(failed)} seams not found near the stage position: whole frames")
-        for k in sorted(failed, key=lambda k_: pairs[k_]):
+            pr.extend(len(failed))
+        for i_, k in enumerate(sorted(failed, key=lambda k_: pairs[k_])):
             a, b = pairs[k]
+            if pr:
+                pr.update(1, f"not found near the stage position: whole frames, {i_ + 1} of {len(failed)}")
             dt, e = _pair_full(st, a, b, pred[b] - pred[a], W, H, sigma)
             if dt is not None and e < err[k] - 0.05:
                 meas[k], err[k] = dt, e
@@ -584,9 +589,11 @@ def _builtin(st, pred, p, W, H, max_shift, sigma, alpha, verbose, A=None):
     tent = []                                                   # найдены по кадрам целиком: проверка новой моделью
     if len(far) and thr_m < max_shift:
         if pr:
-            pr.stage(f"{len(far)} seams far from the stage model: measured again near it")
-        for k in sorted(far, key=lambda k_: pairs[k_]):
+            pr.extend(len(far))
+        for i_, k in enumerate(sorted(far, key=lambda k_: pairs[k_])):
             a, b = pairs[k]
+            if pr:
+                pr.update(1, f"far from the stage model: measured again near it, {i_ + 1} of {len(far)}")
             db = base[b] - base[a]
             dt, e = _pair(st, a, b, db, W, H, int(thr_m) + 4, sigma, thr_m)
             if dt is not None and np.hypot(*(dt - db)) <= thr_m:
@@ -616,10 +623,12 @@ def _builtin(st, pred, p, W, H, max_shift, sigma, alpha, verbose, A=None):
     redone = 0
     if len(redo):
         if pr:
-            pr.stage(f"second round: {len(redo)} seams")
+            pr.extend(len(redo))
         ms2 = min(max_shift, max(10.0, 3.0 * float(np.median(np.abs(res[res < 3.0]))) if (res < 3.0).any() else 10.0))
-        for k in sorted(redo, key=lambda k_: pairs[k_]):          # по порядку кадров: кэш
+        for i_, k in enumerate(sorted(redo, key=lambda k_: pairs[k_])):   # по порядку кадров: кэш
             a, b = pairs[k]
+            if pr:
+                pr.update(1, f"second round: seam {i_ + 1} of {len(redo)} from the found positions")
             dt, e = _pair(st, a, b, pos[b] - pos[a], W, H, int(ms2) + 4, sigma, ms2, fine=True)
             if dt is None:
                 dt, e = _pair(st, a, b, pos[b] - pos[a], W, H, int(ms2) + 4, sigma, ms2)

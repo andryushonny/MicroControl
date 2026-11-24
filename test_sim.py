@@ -130,9 +130,9 @@ print(m.measure_speed(1000)); assert m.motor_speed <= 0.8 * 5000 * 1.05
 m.offset()
 m.focus()
 # ноль и баланс белого из ручного режима: зона не сдвигается
-m.manual(fullscreen=False, _keys=[ord('1'), 65363, ord('0'), ord('2'), ord('w'), ord(')'), ord('c'), 27])
+m.manual(fullscreen=False, _keys=[ord('1'), 65363, 0x110000 + ord('0'), ord('2'), ord('w'), ord(')'), 3014656, 27])   # Zero here — кнопка Settings, Del
 assert not any(m._off.values()); m.goto(x=0, y=0)
-area = m.manual(fullscreen=False, _keys=[ord('a'), ord('1')] + [65363] * 4 + [65364] * 3 + [ord('2'), 27])
+area = m.manual(fullscreen=False, _keys=[-1, ord('1')] + [65363] * 4 + [65364] * 3 + [ord('2'), 27])
 print(area)
 prog = m.plan(focus='plane'); print(prog)
 folder = m.scan(name='test sample', focus='plane')
@@ -362,7 +362,7 @@ keys = [ord('1'), -1, R_, -1, R_, -1, D_, -1, ord('k'), -1, ord('2'), -1]       
 keys += [R_, -1, R_, -1, ord('1'), -1, R_, -1, D_, -1, ord('2'), -1]                 # образец 2: точки 4-5
 keys += [L_, -1, L_, -1, ord('1'), -1]                                              # внутри образца 2 -> отказ
 keys += [L_, -1, L_, -1, L_, -1, U_, -1, U_, -1, U_, -1, ord('1'), -1,                # новый угол 1 над образцом 1,
-         D_, -1, D_, -1, D_, -1, ord('2'), -1, ord('c'), -1, 27]                     # угол 2 внутри него -> отказ, отмена
+         D_, -1, D_, -1, D_, -1, ord('2'), -1, 3014656, -1, 27]                     # угол 2 внутри него -> отказ, отмена
 M.run(m, fullscreen=False, _keys=keys)
 regs = m._regions
 assert len(regs) == 2 and m._pending is None, (len(regs), m._pending)
@@ -620,7 +620,7 @@ assert 'Where the time goes' in txt and 'Camera: picture' in inf['Time'] and inf
 print(txt.split("\n\n")[1].splitlines()[2])
 r = m.remove(2, confirm=False); print(r)
 assert not os.path.exists(det) and len(m.list()) == 1 and os.path.isdir(mapf)
-mc.view(mapf, _keys=[-1, ord('s'), -1, -1, 27, 27])                                # S: сшить прямо в просмотре
+mc.view(mapf, _keys=[-1, ord('J'), -1, -1, 27, 27])                                # Shift+J: сшить прямо в просмотре
 assert os.path.exists(os.path.join(mapf, 'join', 'positions_all.csv'))
 m.close(); print("Layers 10x > 50x, list, remove, time report, stitch from the viewer (S): OK")
 
@@ -639,7 +639,7 @@ M.run(m, fullscreen=False, _keys=[ord('r'), -1, (600, 300), -1, (700, 300), -1, 
                                   (600, 300), -1, R_, -1, (600, 300), -1, -1])     # линейка; точка 2 — после сдвига
 d_ = np.hypot(*(np.array(m._ruler['pts'][1]) - m._ruler['pts'][0]))
 assert len(m._ruler['pts']) == 2 and abs(d_ - m.frame_size[0]) < 0.1 * m.frame_size[0], (m._ruler, d_, m.frame_size)
-M.run(m, fullscreen=False, _keys=[ord('1'), -1, R_, -1, ord('2'), -1, ord('s'), -1, ord('c'), -1, ord('s'), -1, -1, ord('v'), 27, 27, -1])
+M.run(m, fullscreen=False, _keys=[ord('1'), -1, R_, -1, ord('2'), -1, ord('s'), -1, 3014656, -1, ord('s'), -1, -1, ord('v'), 27, 27, -1])
 sf = m._last_view
 assert os.path.exists(os.path.join(sf, 'join', 'positions_all.csv')), sf              # S, S: снято и сшито в окне
 m.close()
@@ -749,11 +749,11 @@ g.selected |= {(0, 0), (1, 0)}; g.save(px_um)
 gj = lambda: sorted(map(tuple, json.load(open(os.path.join(f, 'grid.json')))['selected']))
 LY.sync_brush(m); SM.persist(m)
 m._sel = next(k for k, r in enumerate(m._regions) if r.get('src'))
-M.run(m, fullscreen=False, _keys=[-1, ord('c'), -1, -1])            # C — удалить сразу; квадраты снимаются с кисти
+M.run(m, fullscreen=False, _keys=[-1, 3014656, -1, -1])            # Del — удалить сразу; квадраты снимаются с кисти
 assert gj() == [] and not any(r.get('src') for r in m._regions), (gj(), m._regions)
 g = Grid(f); g.selected |= {(0, 0), (1, 0)}; g.save(px_um); LY.sync_brush(m); SM.persist(m)
 m._sel = next(k for k, r in enumerate(m._regions) if r.get('src'))
-M.run(m, fullscreen=False, _keys=[-1, ord('c'), -1, 26, -1, -1])    # и Ctrl+Z — назад: и выделение, и квадраты
+M.run(m, fullscreen=False, _keys=[-1, 3014656, -1, 26, -1, -1])    # и Ctrl+Z — назад: и выделение, и квадраты
 assert gj() == [(0, 0), (1, 0)] and any(r.get('src') for r in m._regions), (gj(), m._regions)
 m.close(); print("Shift+drag moves a selection, C deletes a brush selection at once, Ctrl+Z brings both back: OK")
 
@@ -906,7 +906,7 @@ assert len(m.scan(name='again') and m.last_scans) == 1            # чернов
 f = m.last_scans[0]; mc.stitch(f, verbose=False)
 uid = m._regions[kd]['uid']
 q1 = g.cr.point(1 + 0.5 / 3, 0.5 / 3)                              # левая верхняя клетка 1/3 квадрата 6,7
-V_.view(f, _keys=[-1, ('qmove', *q1), ord('3'), ord('b'), ('qclick', *q1), -1, 27])   # 3 — подсетка; кисть — клетка
+V_.view(f, _keys=[-1, ('qmove', *q1), ord('3'), ord('m'), ('qclick', *q1), -1, 27])   # 3 — подсетка; кисть — клетка
 rf = json.load(open(os.path.join(f, 'grid.json')))['refine'][uid]
 assert rf['n'] == 3 and rf['cells'] == [[15, 18]], rf
 print(LY.sync_brush(m)); SM.persist(m)
@@ -1907,7 +1907,7 @@ try:
         g_ = m.cam.grab(); assert g_.shape == (480, 640, 3) and g_.dtype == np.uint8 and g_.std() > 5, c_
     m._link.codec_now = 'raw'
     import microcontrol.manual as M56
-    M56.run(m, fullscreen=False, _keys=[-1, ord('d'), -1, -1])     # ручной режим по сети: шаг клавишей
+    M56.run(m, fullscreen=False, _keys=[-1, 65363, -1, -1])     # ручной режим по сети: шаг клавишей
     try:
         mc.Microscope(U, objective=10, folder=tempfile.mkdtemp()); raise AssertionError('second owner')   # ключ запомнен
     except _SE as e:
@@ -2149,10 +2149,10 @@ d_true = (8.0, -5.0)
 align(f50, d_true)                                                   # 50x «уехал» (своя ось у объектива)
 c50 = stage_to_mosaic(f10, [(fw + 1.5 * f5w, fh + 1.5 * f5h)])[0]
 res = {}
-mc.view(f10, _keys=[-1, ('qmove', *c50), -1, ('qclick', *c50, 'ctrl'), -1, ord('o'), ord('o'), -1, ord('O'), -1,
+mc.view(f10, _keys=[-1, ('qmove', *c50), -1, ('qclick', *c50, 'ctrl'), -1, ord('['), ord('['), -1, ord(']'), -1,
                     ('call', lambda st: res.update(a=st['msg'])), 27, -1,
-                    ord('l'), -1, ('qdrag', *c50, *(c50 + (30, 0))), -1, ('call', lambda st: res.update(dq=list(st['al']['dq']))),
-                    27, -1, ('call', lambda st: res.update(mode=st['mode'])), ord('l'), -1, 32, -1,
+                    ord('a'), -1, ('qdrag', *c50, *(c50 + (30, 0))), -1, ('call', lambda st: res.update(dq=list(st['al']['dq']))),
+                    27, -1, ('call', lambda st: res.update(mode=st['mode'])), ord('a'), -1, 32, -1,
                     ('call', lambda st: res.update(auto=st['msg'])), 13, -1, 27, 27])
 uid50 = json.load(open(os.path.join(f50, 'meta.json')))['sample_uid']
 assert json.load(open(os.path.join(m.sample.folder, 'view.json')))['alpha'] == {uid50: 0.75} and '75 %' in res['a'], res   # отмеченному (Ctrl+щелчок)
@@ -2182,12 +2182,12 @@ LY.sync_brush(m); SM.persist(m)
 q = m.queue                                                          # очередь окна микроскопа (в этом процессе)
 qc = lambda i, j: g.cr.point(i + 0.5, j + 0.5)
 res = {}
-V_.view(f, _keys=[-1, ord('G'), ord('G'), ord('G'), ord('G'), -1, ('call', lambda st: res.update(new=st['msg'])),   # новые: 50x
+V_.view(f, _keys=[-1, ord('O'), ord('O'), ord('O'), ord('O'), -1, ('call', lambda st: res.update(new=st['msg'])),   # новые: 50x
                   ord('m'), ('qclick', *qc(0, 0)), -1, ('qclick', *qc(2, 0)), -1, 13, -1, 27, -1, -1,
                   ('call', lambda st: res.update(made=st['msg'])),
                   ('qclick', *qc(0, 0), 'ctrl'), -1, ('qclick', *qc(2, 0), 'ctrl'), -1, ('call', lambda st: res.update(mk=st['msg'])),
-                  ord('g'), -1, ('call', lambda st: res.update(g=st['msg'])),      # 50x -> 100x обеим
-                  ord('q'), -1, ('call', lambda st: res.update(q=st['msg'])),
+                  ord('o'), -1, ('call', lambda st: res.update(g=st['msg'])),      # 50x -> 100x обеим
+                  ord('s'), -1, ('call', lambda st: res.update(q=st['msg'])),
                   ord('y'), -1, ord('y'), -1, 27, -1, ('qmove', *qc(2, 0)), 3014656, -1, ('call', lambda st: res.update(d=st['msg'])), 27, 27])
 regs = json.load(open(m.sample.file))['selections']
 print("  ", res)

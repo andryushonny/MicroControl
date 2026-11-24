@@ -2,7 +2,7 @@
 
 **Python control of the Optosky ATR8300 Raman microscope: scan a substrate, stitch one picture of it, put the lithography grid on it, choose the squares you need and export them for AutoCAD.**
 
-**Authors:** A. Lyapeikov, S. Domenko · **Version:** 0.28.0 · Русский: [docs/README_ru.md](docs/README_ru.md) · 中文: [docs/README_zh.md](docs/README_zh.md) · PDF: [EN](docs/MicroControl_en.pdf), [RU](docs/MicroControl_ru.pdf), [中文](docs/MicroControl_zh.pdf) · Full technical reference: [EN](docs/reference_en.md), [RU](docs/reference_ru.md), [中文](docs/reference_zh.md)
+**Authors:** A. Lyapeikov, S. Domenko · **Version:** 0.29.0 · Русский: [docs/README_ru.md](docs/README_ru.md) · 中文: [docs/README_zh.md](docs/README_zh.md) · PDF: [EN](docs/MicroControl_en.pdf), [RU](docs/MicroControl_ru.pdf), [中文](docs/MicroControl_zh.pdf) · Full technical reference: [EN](docs/reference_en.md), [RU](docs/reference_ru.md), [中文](docs/reference_zh.md)
 
 ![Overview: numbered lithography squares, chosen squares as drafts, the 20x and 100x areas inside, the status bar at the bottom](docs/img/view.jpg)
 
@@ -235,59 +235,32 @@ T = T_0 + t\,N,
 
 ## Keys
 
-Arrows move; letters do things. As much as possible is done right in the window.
+**One letter — one meaning in both windows.** Keys of one window only say so in the other one (and do nothing).
 
-**Manual mode** (`m.manual()`)
+| Key | Meaning | Microscope window (`m.manual()`) | View (`mc.view(folder)`) |
+|---|---|---|---|
+| arrows, wheel, `+` / `-`, `0` | move, zoom, whole | stage by one frame (Step X, Y); the map | the picture |
+| `,` `.` | previous / next selection | ✓ | ✓ |
+| Ctrl+click | mark several | cards (Merge / Minus / Overlap above the list) | cards and the picture |
+| `Enter` | confirm | drive to the chosen selection | chosen cells -> a selection (chosen here and there); save the alignment |
+| `Del` | delete | the chosen selection / the new one (Ctrl+Z brings it back) | the marked / pointed ones (not scanned); in the crosses mode — crosses again |
+| `S` | scan: into the queue | the chosen / marked selections (Scan area) | the pointed / marked ones (the microscope window's queue) |
+| `J` | stitch | check the live picture against the mosaic; `Shift+J` — exact (quality) stitch of the chosen (Stitch) | edit the seams by hand; `Shift+J` — stitch right here |
+| `X` | export | everything ticked -> `<sample>/export/` (Export) | the same |
+| `O` | objective | the one in place: next (put it in place) | of the pointed / marked selections; `Shift+O` — for new ones |
+| `[` `]` | transparency | the picture of the chosen selection on the map | the picture under the mouse / of the marked ones |
+| `R` | ruler | two clicks | point-point -> line-line -> point-line -> off |
+| `T` | turn the picture | the camera by 180° (remembered) | level by the lattice / as shot |
+| `M` · `C` · `N` | cells · crosses · numbers | — | select cells (`Ctrl+A` — all / none) · mark crosses (`Shift+C` — frames onto the crosses) · number a square |
+| `P` · `G` · `A` · `Y` | profiles · straight edges · align · the others | — | profile lines (4 clicks) · crop the steps · align this scan with the others (Space — by itself) · other selections' pictures on / off |
+| `2`…`9`, `1` `0` | finer grid | — | of the selection under the mouse (1/2 … 1/10) |
+| `E` / `Q` (`PgUp` / `PgDn`) · `F` · `K` · `1` / `2` | stage up / down · autofocus · focus point · corners | ✓ (`Shift` — ×5) | — |
+| `L` · `I` · `W` · `Space` · `V` | light · laser · white balance · picture · open the view | ✓ | — |
+| `Tab` or click a field | steps, exposure, objective | ✓ | — |
+| `Ctrl+Z` · `Ctrl+Y` | undo · redo | ✓ (moves too) | ✓ |
+| `H` · `Esc` · `Shift+Esc` | all keys · leave the mode / unmark · exit | ✓ | ✓ |
 
-| Key | Action |
-|---|---|
-| Arrows | move by one frame (Step X, Y) |
-| `E` / `Q` (`PgUp` / `PgDn`) | stage up / down by Step Z (`Shift` — ×5) |
-| `F` · `K` | autofocus · keep $Z$ here as a focus point |
-| Ctrl+click cards · Shift+drag over a selection | mark for Merge / Minus / Overlap · move a selection; drag a card up / down: the layer order (top on top); the box on a card: in the export |
-| menu **Scans** (a selection chosen) · objective chip `… 100x, draft` | its scans oldest first: View, **Make main** (maps, view and export use it) · a selection without an objective (draft) is not scanned |
-| Scan area / `S` · Ctrl+click cards · bar at the bottom, menu **Queue** | queue the scan of the chosen selection (several: Ctrl+click their cards); scans go one after another at the instrument, quick stitches in the background on other cores; the window lives · `x` stops a job, Stop all; the whole queue: all done in ~T; keys that move the stage wait until the instrument is free |
-| Scan area · **Stitch** (buttons on top) | scan + quick stitch (fast overview, not edited, not exported) · quality stitch of the chosen selection: exact straight-edged picture for the drawing, re-shot where needed; export takes only these |
-| Ctrl+drag on the map · `Esc` during a job | a draft box on the objective in place (a crystal): with a margin for backlash, edges on motor steps; Scan area shoots it; the overview chosen + Scan area — all such boxes in it · stop the job (or Stop on its bar) |
-| `1`, `2` | corners of a selection |
-| `Y` | "Z follows the focus points" on / off |
-| `,` `.` · `Enter` | previous / next selection · drive to it |
-| `C` | cancel the new selection / delete the chosen one (Ctrl+Z brings it back) |
-| `S` | scan the selections of this objective and stitch them, in the window (`Esc` — stop) |
-| `V` | open the last scan in the viewer; closing it brings you back |
-| `L` · `I` · `W` | light on / off · laser on / off · white balance |
-| `A` · `D` | Prepare step by step (as the button) · distortion of this objective |
-| `B` · `\` | one-side approach against backlash · turn the map 90° anticlockwise (both remembered) |
-| `R` | ruler: two clicks — the distance |
-| `Space` | take a picture |
-| `0` · `Shift+0` | zero here · real coordinates |
-| `Ctrl+Z` · `Ctrl+Y` | undo · redo (moves too: the stage drives back) |
-| `Tab` or click a field | change steps, exposure, objective |
-| `G` · `M` | steps = one frame · next objective |
-| `J` · `K` | edit the stitch by hand: seams are dots coloured by their error (green < 0.5 px, yellow < 1.5 px, red; grey — off), a click on a dot switches the seam off or on and the frames are placed again at once from the others; click a frame — its row (Shift+click — its column), arrows move it by 1 px (Shift — 10 px), Backspace — back to the automatic stitch, `J` — save (the automatic one stays in `join/positions_auto.csv`, the seams switched by hand — in `join/seams_edit.json`) · straight edges: the steps at the borders are cut off (again — the whole mosaic) |
-| `P` | profiles window (as Plot Profile in ImageJ, Profile in Gwyddion): two lines, cyan and pink, with R, G, B along them averaged over a band. On a cross they lie across its arms and cross each other. Drag the squares at their ends on the map — any tilt and length (`Shift` — 15° steps), the `x` in the middle — move a line, the diamond — both. Click — pin / unpin. In the window: a zoomed preview with the lines and edges, width in µm, contrast, angles; drag the yellow edges; wheel on a plot — Y scale (the same for both, click `Y` — auto), elsewhere — band width; right click — auto edges. The edges are drawn as ticks on the map, in the preview and on the map of the manual mode |
-| `T` · `O` · `[` `]` | turn the camera picture 180° · check directions with the camera · arrows (and the mini map with them) the other way (all remembered) |
-| `H` · `Shift+Esc` | all keys · exit |
-
-**Viewer** (`mc.view(folder)`)
-
-| Key | Action |
-|---|---|
-| arrows, drag · wheel · `0` | move · zoom · whole picture |
-| `S` | stitch right here (frames by their overlaps, the preview); the view reopens stitched |
-| `C` · `F` | mark crosses (`Shift+C` — start again) · frames onto the crosses (exact: frames, grid and distortion together) |
-| `N` | number a square |
-| `M` | select (click, box); `Shift` — unselect; right click — remove one, `Shift` + right click — the whole area; `A` / `X` — all / none **Enter** — the selected cells become a selection (draft, or the objective for new ones: `Shift+G`), chosen on the right. |
-| `2`…`9` · `1` `0` · `1` | over a selection: its own grid 2–9 times denser (`M` then selects its cells) · `1` then `0` within a second — 10 times · no finer grid; zoom up to 32× to see it |
-| `T` | picture level / as shot |
-| `P` | profiles window: R, G, B across the arms of the cross under the mouse, arm edges (green), width in µm, contrast, overexposure. Click a cross — pin it; drag the yellow edge lines in the window — they move on the map too; wheel over the window — profile range; right click — edges found automatically. Cross search prefers the largest «+», so dust and dots do not pull it Lines are set by **4 clicks** first (two ends of the cyan line, then of the pink one: «k of 4»), only then the plots are built and pinned; a click after that starts again, `P` — clear. |
-| `R` | ruler, `R` again — the next kind, then off: two points — the distance; two lines (4 clicks) — the distance between them at their middles and the angle; a line and a point (3 clicks) — the distance from the point to the line |
-| `O` / `Shift+O` · `L` | picture of a higher objective under the mouse: more / less transparent (100…0 %, kept per selection) · align this scan with the higher one: drag (arrows), `Space` — by itself, `Enter` — save (`align.json`: grid, selections, map, export go with it) |
-| Ctrl+click selections / cards · `G` · `Q` · `Del` · `Shift+G` · `Y` | mark several (`Esc` — unmark); for the marked (or the one under the mouse): objective draft / 4x … 100x · queue their scans (other objectives wait for theirs: `S` in the microscope window starts them) · delete · objective of new selections from cells · pictures of the other selections on / off |
-| `E` | export: square pictures + the drawing (DWG / DXF), progress in the window |
-| `,` `.` | previous / next selection |
-| `Ctrl+Z` · `Ctrl+Y` | undo · redo any change |
-| `Esc` · `H` · `Shift+Esc` | leave the mode · all keys · exit |
+**Settings panel** of the microscope window (button Settings): Z follows the focus points, One-side approach (backlash), **Prepare**, **Distortion**, **Zero here**, **Steps = frame**, **Check directions**, **Arrows X / Y** the other way, **Map 90 deg**. On top: Prepare, New area, Scan area, Stitch, Export, Settings; the menu: Open, New, Info, Scans (history of the chosen selection: View, Make main), Queue, View, Help. Ctrl+drag on the map — a box on the objective in place (a crystal); `Esc` during a job — stop it.
 
 ---
 

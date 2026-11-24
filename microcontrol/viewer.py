@@ -115,49 +115,52 @@ class _Scene:
         return out
 
 
-HELP_V2 = "Arrows / drag: move  Wheel: zoom  0: whole  , / .: selection  H: all keys  Shift+Esc: exit"
+# одна буква — один смысл в обоих окнах: клавиша -> внутреннее действие просмотра
+VIEW_KEYS = {'s': 'q', 'S': 'q', 'J': 's', 'x': 'e', 'X': 'e', 'o': 'g', 'O': 'G', '[': 'o', ']': 'O', 'a': 'l',
+             'A': 'l', 'g': 'k', 'G': 'k', 'C': 'f', 'b': '', 'B': '', 'e': '', 'q': '', 'l': '', 'f': '', 'k': '',
+             'i': '', 'w': '', 'v': ''}
+MICRO_ONLY = {'e': "stage up", 'q': "stage down", 'f': "autofocus", 'k': "focus point here", 'l': "light",
+              'i': "laser", 'w': "white balance", 'v': "open the view", ' ': "picture", 'E': "stage up",
+              'Q': "stage down", 'F': "autofocus", 'K': "focus point", 'L': "light", 'I': "laser", 'W': "white balance",
+              'V': "open the view"}
+HELP_V2 = "Arrows / drag: move  Wheel: zoom  0: whole  , / .: selection  Ctrl+click: mark  H: all keys  Shift+Esc: exit"
 HELP_MODE = {
-    'look': "S: stitch (preview)  C: crosses  F: frames onto the crosses  N: numbers  T: level  M: select cells (selections, draft)  2-9, 10: finer grid of a selection  R: ruler  O: transparency  L: align  Ctrl+click: mark  G: objective  Q: queue scans  Y: others  E: export",
-    'cross': "Click: cross exactly there (2 in a row = tilt)  Shift+click: snap to centre  Drag a mark: move  Right click: remove  Shift+C: again  F: frames onto the crosses  C / Esc: done",
-    'select': "Click: square  Drag: box  Shift: unselect  Right click: remove a square (Shift: the whole area)  A: all  X: none  Esc: done",
+    'look': "C: crosses  M: select cells (Enter: a selection)  N: numbers  T: level  2-9, 10: finer grid  R: ruler  [ ]: transparency  A: align  O: objective  S: scan (queue)  X: export  Y: others",
+    'cross': "Click: cross exactly there (2 in a row = tilt)  Shift+click: snap to centre  Drag a mark: move  Right click: remove  Del: start again  Shift+C: frames onto the crosses  C / Esc: done",
+    'select': "Click: square  Drag: box  Shift: unselect  Right click: remove a square (Shift: the whole area)  Ctrl+A: all / none  Enter: make a selection  Esc: done",
     'stitch': "Click a seam dot: seam off/on  Click a frame: its row  Shift+click: its column  Arrows: 1 px  Shift+arrows: 10 px  Backspace: automatic  J: save",
-    'paint': "Drag a rectangle: select all squares in it  Shift+drag: unselect  Click: one square  Right click: remove one (Shift: whole area)  A: all  X: none  Esc: done",
+    'paint': "Drag a rectangle: select all squares in it  Shift+drag: unselect  Click: one square  Right click: remove one (Shift: whole area)  Ctrl+A: all / none  Enter: make a selection  Esc: done",
     'label': "Click a square, type its number X Y  Enter: set  Esc: done",
     'ruler': "R: point-point / line-line / point-line / off. Click the points: the distance (and the angle)  Drag: move  Esc: off",
-    'align': "Drag / arrows (Shift: x10): move the higher-objective pictures onto this scan  Space: by itself  Enter: save  Backspace: no shift  Esc: cancel",
-    'refine': "Over a selection: 2-9 its finer grid (1, 0 quickly: 1/10; 1: none), then M selects its cells: they become selections (draft) inside it",
+    'align': "Drag / arrows (Shift: x10): move the other pictures onto this scan  Space: by itself  Enter or A: save  Backspace: no shift  Esc: cancel",
+    'refine': "Over a selection: 2-9 its finer grid (1, 0 quickly: 1/10; 1: none), then M selects its cells, Enter makes them selections",
 }
-HELP_V = ("S: stitch (preview)   C: crosses (2 in a row = tilt; right click = remove, Shift+C = again)   F: frames onto the crosses   M: select "
-          "(click, box; Shift = unselect; right click = remove a square, Shift + right click = the whole area)   N: number squares (X Y)   "
-          "A / X: all / none   R: ruler   E: export   Esc: exit")
+HELP_V = ("C: crosses   Shift+C: frames onto the crosses   M: select cells, Enter: a selection   N: number squares (X Y)   "
+          "R: ruler   S: scan (queue)   X: export   Esc: leave the mode")
 HELP_ALL = [
+    ("Same keys", "One letter means one thing in both windows; keys of the microscope only (E Q F K L I W V Space) say so here"),
     ("Look", "Arrows or drag (right / middle in any mode): move   Wheel, + / -: zoom   0: whole"),
     ("", "T: level (tilt removed, from the crosses) / as shot   , / .: previous / next selection   H: this help   Esc: leave the mode"),
     ("Undo", "Ctrl+Z: undo any change (crosses, grid, squares, numbers, removed selection)   Ctrl+Y: redo"),
     ("Exit", "Shift+Esc (or Ctrl+Esc), or close the window"),
-    ("Stitch", "S: stitch this selection right here: frames by their overlaps, the preview (the view reopens)"),
-    ("", "F (after C: 2-3 crosses): exact - every frame onto the crosses, the grid and the lens distortion (the view reopens)"),
-    ("Ruler", "R: click two points -> distance in um (a third click starts again); R or Esc: off"),
+    ("Stitch", "J: edit the stitch by hand - seam dots (green < 0.5 px, yellow < 1.5, red; grey = off): click to switch a seam; "
+               "click a frame: its row (Shift: its column), arrows: 1 px (Shift: 10), Backspace: automatic, J: save"),
+    ("", "Shift+J: stitch this selection right here (frames by their overlaps; the view reopens)   G: straight edges (crop the steps)"),
     ("Crosses", "C: mark crosses: click two neighbouring crosses in one row = tilt; more crosses far apart = more exact"),
     ("", "The mark goes exactly where you click   Shift+click: snap to the cross centre   Drag a mark: move it"),
-    ("", "Right click: remove a cross   Backspace: the last one   Shift+C: start again   F: frames onto the crosses"),
+    ("", "Right click: remove a cross   Backspace: the last one   Del: start again   Shift+C: frames onto the crosses (exact)"),
     ("Numbers", "N: click a square, type the number written next to it (X Y), Enter. Two squares fix all numbers"),
-    ("Select", "M: click a square (again: off) / drag a box (Shift: unselect)   A / X: all / none"),
+    ("Select", "M: click a square (again: off) / drag a box (Shift: unselect)   Ctrl+A: all / none   Enter: they become a selection"),
     ("", "Right click on green: remove that square (or cell)   Shift + right click: the whole green area"),
-    ("Export", "E: export the selected squares (PNG + DXF)"),
-    ("Stitch", "J: edit the stitch by hand - seams are dots coloured by their error (green < 0.5 px, yellow < 1.5, red; "
-               "grey = off): click a dot to switch the seam off or on, the frames are placed again at once; "
-               "click a frame: its row (Shift+click: its column), arrows: move it by 1 px "
-               "(Shift: 10), Backspace: back to the automatic stitch, J: save.  K: straight edges (crop the steps)"),
-    ("Layers", "O over a picture of a higher objective: more transparent (100 / 75 / 50 / 25 / 0 % = outline), Shift+O: less"),
-    ("", "L: align this scan with the higher one: drag (or arrows), Space - by the picture itself, Enter - save (align.json)"),
-    ("", "Y: pictures of the other selections too (same and lower objectives: lower ones only where this scan has none)"),
-    ("Many", "Ctrl+click selections (on the picture or their cards): mark several; Esc: unmark. Then (or for the one under "
-             "the mouse): G - objective (draft, 4x ... 100x), Q - queue their scans (the microscope window's queue), "
-             "O - transparency, Del - delete (not scanned)"),
-    ("", "Shift+G: the objective of new selections made from cells (M): draft or 4x ... 100x"),
-    ("Profiles", "P: two profile lines (cyan, pink) with R, G, B along them, averaged over a band: edges, width, contrast"),
-    ("", "Drag the line ends on the map: any tilt and length (Shift: 15 deg)   Click: pin   In the window: drag the edges, wheel: band"),
+    ("Ruler", "R: point-point -> line-line -> point-line -> off; click the points"),
+    ("Layers", "All pictures in the order of the list (top = on top); the chosen card - on top for now   Y: the others on / off"),
+    ("", "[ / ]: the picture under the mouse (or the marked ones) more / less transparent (100 / 75 / 50 / 25 / 0 % = outline)"),
+    ("", "A: align this scan with the others: drag (or arrows), Space - by the picture itself, Enter - save (it moves with its selection)"),
+    ("Many", "Ctrl+click selections (picture or cards): mark several; Esc: unmark. For the marked (or the one under the mouse): "
+             "O - objective (draft, 4x ... 100x), S - queue their scans, [ ] - transparency, Del - delete (not scanned)"),
+    ("", "Shift+O: the objective of new selections made from cells (M, Enter): draft or 4x ... 100x"),
+    ("Export", "X: everything ticked on the cards -> <sample>/export/: drawing, pictures, mixed.png (asks its pixel)"),
+    ("Profiles", "P: two profile lines (cyan, pink): 4 clicks, then R, G, B along them, averaged over a band: edges, width, contrast"),
 ]
 
 
@@ -348,7 +351,7 @@ def _seed(folder, g, LAT, smp0, sc, px_um, need_crosses=False):
             if nfx_:
                 g.save(px_um)
                 msg_ = (f"   The grid snapped to {nfx_} crosses of this scan "
-                        f"(moved by {np.hypot(*dfx_) * px_um:.2f} um); F: frames onto the crosses")
+                        f"(moved by {np.hypot(*dfx_) * px_um:.2f} um); Shift+C: frames onto the crosses")
         except Exception:
             nfx_ = 0
         if need_crosses and not g.crosses_seen():               # крестов здесь не видно — сетку не рисовать
@@ -421,7 +424,7 @@ def _view_one(folder, fullscreen, keys, car):
     st = dict(cx=sc.size[0] / 2, cy=sc.size[1] / 2, s=None, rot=0.0, mode='look', down=None, box=None,
               poly=[], dirty=True, Wv=Wv - SM.CAR_W, Hv=Hv, straight=False, switch=None, ruler=[], mouse=None,
               msg=car.pop('msg', None) or (f"Selection {SM.sample_index(folder)} ({subs.index(folder) + 1} of {len(subs)})" if len(subs) > 1 else "")
-              + (f"   Crosses moved with the stitched frames ({moved_}); F: frames onto the crosses" if moved_ else "")
+              + (f"   Crosses moved with the stitched frames ({moved_}); Shift+C: frames onto the crosses" if moved_ else "")
               + ("   The grid comes from the crosses marked before (this selection, the larger one around it or the "
                  "sample): no crosses to mark here; C: mark your own" if seeded_ else "")
               + st0_msg)
@@ -460,7 +463,7 @@ def _view_one(folder, fullscreen, keys, car):
                     st['car_dirty'] = True
                 elif mp_[k][1] and not str(mp_[k][1]).startswith('cell:'):
                     car['focus'] = mp_[k][1]                # не снятое: выбрано (рамка на картинке, дела — ему)
-                    st['msg'] = ("Not scanned yet: G - its objective, S - queue its scan, Del - delete; "
+                    st['msg'] = ("Not scanned yet: O - its objective, S - queue its scan, Del - delete; "
                                  "Ctrl+click - mark several")
                     st['car_dirty'] = True
                 st['dirty'] = True
@@ -572,9 +575,31 @@ def _view_one(folder, fullscreen, keys, car):
     st['_t'] = dict(delete_draft=lambda *a_: delete_draft(*a_), regions=lambda: regions_now()[0],
                     seam_pt=lambda k_: seam_pt(k_))   # для тестов
 
+    def VIEW_M():
+        """Мозаика -> вид по осям столика (одинаково для всех съёмок): знаковая перестановка осей, при которой
+        +X столика — вправо, +Y — вниз (у съёмок разных объективов мозаика может идти по X / Y навстречу столику)."""
+        if st.get('_V') is None:
+            V_ = np.eye(2)
+            try:
+                from .snap import geometry
+                Mo_ = np.asarray(geometry(folder)['Mo'], float)        # px мозаики на шаг: столбцы — оси столика
+                best_ = None
+                for P_ in (np.eye(2), np.array([[0, 1], [1, 0]])):
+                    for sx_ in (1, -1):
+                        for sy_ in (1, -1):
+                            Vc_ = np.diag([sx_, sy_]) @ P_
+                            sc_ = np.trace(Vc_ @ Mo_)              # после V: ось X столика -> +x, Y -> +y
+                            if best_ is None or sc_ > best_[0]:
+                                best_ = (sc_, Vc_)
+                V_ = best_[1].astype(float)
+            except Exception:
+                pass
+            st['_V'] = V_
+        return st['_V']
+
     def R():
         t = np.radians(st['rot'])
-        return np.array([[np.cos(t), -np.sin(t)], [np.sin(t), np.cos(t)]])
+        return VIEW_M() @ np.array([[np.cos(t), -np.sin(t)], [np.sin(t), np.cos(t)]])
 
     mid = lambda: np.array([st['Wv'] / 2, st['Hv'] / 2])
     to_view = lambda M: mid() + st['s'] * (R() @ (np.asarray(M, float) - (st['cx'], st['cy'])))
@@ -754,7 +779,7 @@ def _view_one(folder, fullscreen, keys, car):
         else:
             car['msg'] = (f"Stitched in {st['busy_s']:.0f} s: seams {r.get('Seams accepted', '-')}, "
                           f"error {r.get('Seam error, px', '-')} px; " +
-                          ("F: frames onto the crosses (exact)" if g.ready() else "C: mark 2-3 crosses, then F: frames onto the crosses (exact)"))
+                          ("Shift+C: frames onto the crosses (exact)" if g.ready() else "C: mark 2-3 crosses, then Shift+C: frames onto the crosses (exact)"))
         st['switch'] = folder
 
     RK_N = {'pp': 2, 'll': 4, 'pl': 3}                     # линейка: сколько точек у вида измерения
@@ -873,12 +898,12 @@ def _view_one(folder, fullscreen, keys, car):
             return
         n_nodes = sum(1 for _ in g.cells_range((0, 0), sc.size))
         if n_nodes > 600:
-            st['msg'] += "   F: frames onto the crosses (exact)"
+            st['msg'] += "   Shift+C: frames onto the crosses (exact)"
             return
         n_, rms_ = fit_grid()
         if rms_ is not None and n_ >= 4:
             st['msg'] += (f"   Grid fitted to all {n_} crosses: {rms_ * px_um:.2f} um off on average. "
-                          "F: frames onto the crosses (exact)")
+                          "Shift+C: frames onto the crosses (exact)")
 
     def fit_grid():
         """F: сетка по всем крестам мозаики (mask.Grid.refine) — с полосой прогресса в окне."""
@@ -1035,8 +1060,10 @@ def _view_one(folder, fullscreen, keys, car):
             st['hov'] = (x, y)
             if st.get('prof'):
                 st['prof_dirty'] = True
-        if ev == cv2.EVENT_MOUSEMOVE and st['mode'] == 'ruler' and len(st['ruler']) == 1:
-            st['mouse'] = (x + 0.5, y + 0.5)               # линейка тянется за мышью до второй точки
+        if ev == cv2.EVENT_MOUSEMOVE and st['mode'] == 'ruler' and 0 < len(st['ruler']) < RK_N[st.get('rk', 'pp')]:
+            st['mouse'] = (x + 0.5, y + 0.5)               # линейка тянется за мышью до следующей точки:
+            if not st['dirty']:                            # картинку и слои не пересчитывать — только линейку
+                st['ruler_only'] = True
             st['dirty'] = True
         if ev in (cv2.EVENT_LBUTTONDOWN, cv2.EVENT_RBUTTONDOWN, cv2.EVENT_MBUTTONDOWN):
             st['down'] = (x, y, st['cx'], st['cy'], ev, shift, False)
@@ -1795,17 +1822,23 @@ def _view_one(folder, fullscreen, keys, car):
 
     def render():
         Wv, Hv = st['Wv'], st['Hv']
-        if abs(st['rot']) < 1e-6:
-            img = sc.render(st['cx'], st['cy'], st['s'], Wv, Hv, fast=st['down'] is not None)
-        else:                                               # повёрнутый вид: квадрат с запасом, затем поворот
-            D = int(math.hypot(Wv, Hv)) + 2
-            big = sc.render(st['cx'], st['cy'], st['s'], D, D, fast=st['down'] is not None)
-            Rm = R()
-            t = mid() - Rm @ np.array([D / 2, D / 2])
-            img = cv2.warpAffine(big, np.float32(np.c_[Rm, t]), (Wv, Hv), flags=cv2.INTER_LINEAR)
-        img = crop_edges(img)                               # K: ровные края, без ступенек
-        img = cut_outline(img)                              # за контуром выделения — не показывать
-        img = draw_finer(img)                               # снятое крупнее — поверх, в своих контурах
+        lk_ = (st['cx'], st['cy'], st['s'], st['rot'], Wv, Hv, tuple(np.ravel(VIEW_M())))
+        lc_ = st.get('_layers')
+        if st.pop('ruler_only', False) and lc_ is not None and lc_[0] == lk_:
+            img = lc_[1].copy()                             # тянется только линейка: картинка и слои — готовые
+        else:
+            if abs(st['rot']) < 1e-6 and np.allclose(VIEW_M(), np.eye(2)):
+                img = sc.render(st['cx'], st['cy'], st['s'], Wv, Hv, fast=st['down'] is not None)
+            else:                                           # повёрнутый (или по осям столика) вид: с запасом, потом поворот
+                D = int(math.hypot(Wv, Hv)) + 2
+                big = sc.render(st['cx'], st['cy'], st['s'], D, D, fast=st['down'] is not None)
+                Rm = R()
+                t = mid() - Rm @ np.array([D / 2, D / 2])
+                img = cv2.warpAffine(big, np.float32(np.c_[Rm, t]), (Wv, Hv), flags=cv2.INTER_LINEAR)
+            img = crop_edges(img)                           # G: ровные края, без ступенек
+            img = cut_outline(img)
+            img = draw_finer(img)                           # снимки всех выделений — слоями по списку
+            st['_layers'] = (lk_, img.copy())
         red, green, yellow = (40, 40, 255), SM.sample_color(folder), (0, 220, 255)   # выбранные — цветом выделения
         base_, void_ = img.copy(), cv2.inRange(img, (0, 0, 0), (22, 22, 22))   # вне мозаики сетку не рисуем
         if g.ready():
@@ -2148,7 +2181,7 @@ def _view_one(folder, fullscreen, keys, car):
         st['car_dirty'] = True
         nm_ = ", ".join(f"Selection {sh_._regions[k_]['num']}" for k_ in new_)
         return (f"{nm_} made ({'draft' if no_ == 'draft' else f'{no_}x'}), chosen on the right"
-                + (f"; {bad_[0]}" if bad_ else "") + "   Shift+G: objective of the next new ones")
+                + (f"; {bad_[0]}" if bad_ else "") + "   Shift+O: objective of the next new ones")
 
     def sel_geoms():
         """Выделения образца на столике: [(uid, shapely, площадь)] — для щелчков по ним (кэш как у контуров)."""
@@ -2194,7 +2227,7 @@ def _view_one(folder, fullscreen, keys, car):
         (mk_.discard if uid in mk_ else mk_.add)(uid)
         regs_ = {r_['uid']: r_ for r_ in regions_now()[0]}
         st['msg'] = (f"Marked {len(mk_)}: " + ", ".join(f"Selection {regs_[u_]['num']}" for u_ in mk_ if u_ in regs_)
-                     + "   G: objective, Q: queue the scans, O: transparency, Del: delete, Esc: unmark") if mk_ else "Nothing marked"
+                     + "   O: objective, S: queue the scans, [ ]: transparency, Del: delete, Esc: unmark") if mk_ else "Nothing marked"
         st['car_dirty'] = st['dirty'] = True
 
     def targets():
@@ -2890,6 +2923,8 @@ def _view_one(folder, fullscreen, keys, car):
             show(np.hstack([with_prof(st['scene']), carousel_img()]))
             st['car_dirty'] = st['prof_dirty'] = False
         key = next(keys, EXIT) if keys is not None else cv2.waitKeyEx(8 if st['down'] else 20)
+        if key != -1:
+            st.pop('ruler_only', None)                     # клавиша могла поменять картинку: слои — заново
         if keys is not None:
             cv2.waitKey(1)
             if isinstance(key, tuple):                      # тест: ('click'|'rclick', x, y[, shift]) или ('drag', ...)
@@ -2983,6 +3018,27 @@ def _view_one(folder, fullscreen, keys, car):
             st['regrid'] = (np.array(g.cr.O, float), np.array(v1_, float), np.array(v2_, float))
         step = 0.25 * min(st['Wv'], st['Hv']) / st['s']    # стрелки — четверть окна
         ch = ch.lower()
+        # единые клавиши (одна буква — один смысл в обоих окнах): новая клавиша -> внутреннее действие
+        if raw and st['mode'] == 'align':
+            raw = 'l' if raw in 'aA' else raw
+            ch = raw.lower()
+        elif raw and not st.get('lab'):
+            if key == 1:                                    # Ctrl+A: все клетки (ещё раз — ни одной)
+                if st['mode'] in ('select', 'paint') and g.ready():
+                    W_a, H_a = sc.size
+                    all_ = inside_only(g.cells_in([(0, 0), (W_a, 0), (W_a, H_a), (0, H_a)], sc.size))[0]
+                    raw = 'x' if g.selected and set(all_) <= g.selected else 'a'
+                else:
+                    raw = ''
+            elif raw in MICRO_ONLY:
+                st['msg'] = f"{raw.upper() if raw != ' ' else 'Space'}: only in the microscope window ({MICRO_ONLY[raw]})"
+                st['dirty'] = True
+                continue
+            else:
+                raw = VIEW_KEYS.get(raw, raw)
+            if key in (3014656, 65535, 0x2E0000) and st['mode'] == 'cross':   # Del в режиме крестов: заново
+                raw = 'C'
+            ch = raw.lower()
         if st['mode'] == 'align':                           # L: совместить эту съёмку с более точной
             a_ = _arrow(key)
             u_ = lambda: (f"{st['al']['name']}: " if st['al'].get('name') else "")
@@ -2993,7 +3049,7 @@ def _view_one(folder, fullscreen, keys, car):
                 d_ = align_save()
                 st['mode'], st['al'] = 'look', None
                 st['msg'] = (f"This scan is shifted on the stage by {d_[0]:+.2f}, {d_[1]:+.2f} um (align.json): the grid, "
-                             "the selections, the map and the export go with it. L again: change it")
+                             "the selections, the map and the export go with it. A again: change it")
             elif key == 8:                                  # Backspace: как по столику (сдвиг 0)
                 from .snap import geometry
                 G_ = geometry(folder)
@@ -3083,19 +3139,19 @@ def _view_one(folder, fullscreen, keys, car):
                 cur_ = car.get('new_obj', 'draft')
                 car['new_obj'] = cyc_[(cyc_.index(cur_) + 1) % len(cyc_) if cur_ in cyc_ else 0]
                 st['msg'] = (f"New selections from cells (M): " + ("draft (no objective)" if car['new_obj'] == 'draft'
-                                                                     else f"{car['new_obj']}x") + "   Shift+G: next")
+                                                                     else f"{car['new_obj']}x") + "   Shift+O: next")
             else:
                 us_ = targets()
                 if not us_:
-                    st['msg'] = "G: point at a selection (or Ctrl+click several) to change its objective"
+                    st['msg'] = "O: point at a selection (or Ctrl+click several) to change its objective"
                 else:
                     r0_ = next(r_ for r_ in regions_now()[0] if r_['uid'] == us_[0])
                     cur_ = 'draft' if r0_.get('kind') == 'draft' else r0_.get('obj')
                     nxt_ = cyc_[(cyc_.index(cur_) + 1) % len(cyc_)] if cur_ in cyc_ else cyc_[1]
-                    st['msg'] = set_objective(us_, nxt_) + "   G: next objective"
+                    st['msg'] = set_objective(us_, nxt_) + "   O: next objective"
         elif ch == 'q':                                      # Q: съёмки отмеченных / под мышью — в очередь
             us_ = targets()
-            st['msg'] = queue_scans(us_) if us_ else "Q: point at a selection with an objective (or Ctrl+click several)"
+            st['msg'] = queue_scans(us_) if us_ else "S: point at a selection with an objective (or Ctrl+click several)"
         elif key in (3014656, 65535, 0x2E0000):              # Delete: отмеченные / под мышью, не снятые
             us_ = targets()
             regs_ = {r_['uid']: r_ for r_ in regions_now()[0]}
@@ -3118,7 +3174,7 @@ def _view_one(folder, fullscreen, keys, car):
         elif ch == 'y':                                      # Y: картинки других выделений вместе с этой — вкл / выкл
             car['others'] = not car.get('others', True)
             st['_fl_key'] = None
-            st['msg'] = ("Pictures of the other selections: on (each in its outline; O - transparency)" if car['others']
+            st['msg'] = ("Pictures of the other selections: on ([ ] - transparency)" if car['others']
                          else "Only this scan and the higher objectives over it")
         elif ch == 'o':                                      # O / Shift+O: прозрачность картинки выделения под мышью
             q_o = from_view(st['hov']) if st.get('hov') else None
@@ -3128,7 +3184,7 @@ def _view_one(folder, fullscreen, keys, car):
                 me_u_ = sc.st.meta.get('sample_uid')
                 L_ = (sc.st.meta.get('objective') or 0, None, None, None, me_u_, folder, SM.sample_index(folder))
             if L_ is None:
-                st['msg'] = "O: point at a picture of a higher objective (a selection drawn over this scan)"
+                st['msg'] = "[ ]: point at a picture (or Ctrl+click selections)"
             else:
                 lv_ = [1.0, 0.75, 0.5, 0.25, 0.0]
                 a0_ = alphas().get(L_[4], 1.0)
@@ -3136,7 +3192,7 @@ def _view_one(folder, fullscreen, keys, car):
                 a1_ = lv_[(i_ + (-1 if raw == 'O' else 1)) % len(lv_)]
                 alphas({L_[4]: a1_})
                 st['msg'] = (f"Selection {L_[6]} ({L_[0]}x): picture {100 * a1_:.0f} %" +
-                             (" (outline only)" if a1_ == 0 else "") + "   O: more transparent, Shift+O: less")
+                             (" (outline only)" if a1_ == 0 else "") + "   [: more transparent, ]: less")
         elif ch == 'c':                                      # C: отмечать кресты (ещё раз C — выйти)
             if st['mode'] == 'cross' and not g.cr.marks:     # крестов ещё нет (только что Shift+C) — остаться
                 st['msg'] = "Click a cross, then its neighbour in the same row (C again — when done)"
@@ -3146,7 +3202,7 @@ def _view_one(folder, fullscreen, keys, car):
             else:
                 st['mode'] = 'cross'
                 st['msg'] = ("Click a cross, then its neighbour in the same row: the picture turns level. "
-                             "Shift+C: start again")
+                             "Del: start again")
         elif ch in 'mb' and ch:                              # M (и B по привычке): выбирать клетки
             if not g.ready() and not g.cr.marks:            # крестов нет — квадраты по координатам столика
                 try:

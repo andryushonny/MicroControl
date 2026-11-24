@@ -1904,6 +1904,21 @@ class Microscope:
             r.title = "Scan finished" if r.title == "Program finished" else "Scan stopped"
             print(r)
             done.append(folder)
+            if r.title == "Scan finished" and not reg.get('shape') and not reg.get('cells') and mode_ != 'quality':
+                try:                                       # прямоугольник — ровно по снятому: кадры стоят на шагах
+                    import csv as _csv                     # мотора, край картинки = граница выделения
+                    with open(os.path.join(folder, 'index.csv'), encoding='utf-8') as f_:
+                        xy_ = np.array([(float(q['x_um']), float(q['y_um'])) for q in _csv.DictReader(f_)])
+                    if len(xy_):
+                        a_ = (float(xy_[:, 0].min()) + off['x'], float(xy_[:, 1].min()) + off['y'])
+                        b_ = (float(xy_[:, 0].max()) + off['x'], float(xy_[:, 1].max()) + off['y'])
+                        if max(abs(a_[0] - min(reg['A'][0], reg['B'][0])), abs(a_[1] - min(reg['A'][1], reg['B'][1])),
+                               abs(b_[0] - max(reg['A'][0], reg['B'][0])), abs(b_[1] - max(reg['A'][1], reg['B'][1]))) \
+                                <= 1.01 * self.motor_step + 1e-6:
+                            reg['A'], reg['B'] = a_, b_
+                            P_.save_regions(self)
+                except (OSError, ValueError, KeyError):
+                    pass
             if r.title != "Scan finished":
                 break
             if stitch == 'quick':                              # сразу — быстрый обзор; точно — m.quality()

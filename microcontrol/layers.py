@@ -121,12 +121,11 @@ def objective_to(m, k, o):
     if obj(m, r) == o:
         return True, f"Selection {r['num']}: {o}x already"
 
-    def set_o(mm, kk):
+    def set_o(mm, kk):                                  # контур — тот же (меняется только объектив и кадр)
         r2 = mm._regions[kk]
         g2 = geom(mm, r2)
         r2.update(obj=o, fw=m.frame_size[0] * m.objective / o, fh=m.frame_size[1] * m.objective / o)
-        if r2.get('shape'):
-            set_geom(mm, r2, g2)
+        set_geom(mm, r2, g2)
         return kk
     bad = _try(m, lambda t_: set_o(t_, k))
     if bad:
@@ -169,8 +168,7 @@ def next_objective_of(m, k, objectives):
         r2 = mm._regions[kk]
         g2 = geom(mm, r2)
         r2.update(obj=o_, fw=m.frame_size[0] * m.objective / o_, fh=m.frame_size[1] * m.objective / o_)
-        if r2.get('shape'):                                     # углы A, B — по кадру нового объектива
-            set_geom(mm, r2, g2)
+        set_geom(mm, r2, g2)                                    # контур — тот же: углы A, B — по кадру нового объектива
         return kk
     for j in range(1, len(objectives) + 1):
         o_ = objectives[(i0 + j) % len(objectives)]

@@ -6,13 +6,18 @@
   Стрелки             На шаг X / Y в сторону (буквы — для действий)
   E / Q (PgUp/PgDn)   Столик вверх / вниз на шаг Z (Shift — x5)
   F                   Автофокус;  K — точка фокуса (Z здесь)
-  1 / 2               Углы выделения;  C — удалить выделение (дважды)
+  1 / 2               Углы выделения;  Del — удалить выбранное
+  O                   Объектив (следующий)
   S, Scan area        Поставить в очередь съёмку выбранного (Ctrl+щелчок — несколько); внизу — очередь, x — стоп
+  J / Shift+J         Сверка с мозаикой / точная сшивка выбранного
+  X                   Экспорт отмеченного в <образец>/export/
   V                   Открыть последний скан в просмотре, после — снова сюда
   L / I / W           Свет / лазер / баланс белого
   R                   Линейка: два щелчка — расстояние
+  [ ]                 Прозрачность картинки выбранного на карте
   Пробел              Снимок в photos/
-  0 / Shift+0         Ноль здесь / настоящие координаты
+  0                   Вся картинка
+  Settings            Prepare, дисторсия, ноль здесь, шаг = кадр, направления, стрелки, поворот карты
   Ctrl+Z / Ctrl+Y     Отменить / вернуть
   H                   Подсказка
   Shift+Esc           Выход
@@ -37,41 +42,44 @@ from . import timing as TM
 from . import ui as UI
 
 WIN = "MicroControl"
-HELP = ["Shift+Esc: Exit (or close the window)", "P: Hide / show the left panel",
+HELP = ["Same keys: one letter means one thing here and in the view (M C N P G A Y - only in the view: they say so here)",
+        "Shift+Esc: Exit (or close the window)   H: these keys   Esc: leave the mode   Ctrl+Z / Ctrl+Y: undo / redo",
         "Arrows: Move by Step X / Step Y   E / Q (PgUp / PgDn): Stage up / down by Step Z (Shift: x5)",
         "Click to edit steps (X / Y: 5 um increments, Z: 1 um), exposure or objective. Enter to save",
-        "G: Steps X, Y = one frame", "M: Next objective (4x, 10x, 20x, 50x, 100x)",
-        "1 / 2: Corners of a selection, one after another (their Z is kept as focus points); a higher objective may mark inside a lower one",
+        "O: Next objective (4x, 10x, 20x, 50x, 100x) - put it in place",
+        "1 / 2: Corners of a selection, one after another (their Z is kept as focus points)",
         "F: Autofocus   K: Keep Z here as a focus point of this selection",
-        "Y (or the box): Z follows the focus points of the area: when moving with the arrows and in the scan",
-        "B (or the box): One-side approach against backlash: X and Y always stop coming from the same side (remembered); best at 50x, 100x",
-        "Selections (right, as layers 10x > 50x > 100x): click = choose, Go = drive there, x = delete;  , / . = previous / next;  Enter = drive",
-        "C: Cancel the new selection / delete the chosen one (Ctrl+Z brings it back)",
+        "Selections (right; the list order = the layers, top on top): click = choose, Go = drive there, x = delete;"
+        "  , / . = previous / next;  Enter = drive;  Del = delete the chosen one (Ctrl+Z brings it back)",
         "S / Scan area: Queue the scan of the chosen selection (Ctrl+click several cards: all of them); each is quick stitched in the background",
+        "J: check the live picture against the stitched mosaic   Shift+J / Stitch: exact (quality) stitch of the chosen selection",
+        "X / Export: everything ticked on the cards -> <sample>/export/ (drawing, pictures, mixed.png)",
         "Queue (bar at the bottom, menu Queue): scans one after another, stitches on other cores; x stops a job, Stop all; the window lives",
         "V: Open the last scan in the view (crosses, squares, export); closing it brings you back here",
         "L: Light on / off   I: Laser on / off   W: White balance (aim at an empty place)   Space: Picture",
-        "A (or Prepare): step by step before a scan: lamp, even light, dark frame, flat field + white balance + exposure, focus + settling, distortion; saved for the objective",
-        "D: Distortion of this objective: 3 x 3 overlapping pictures around details (crosses, a flake edge); remembered, used for every scan",
-        "R: Ruler: click two points (distance, um)   0: Zero here   Shift+0: Real coordinates",
-        "Wheel: zoom   Drag (middle button too): move the zoomed picture   Z: whole frame",
+        "R: Ruler: click two points (distance, um)   T: Turn the camera picture by 180 degrees (remembered)",
+        "[ / ]: the picture of the chosen selection on the map more / less transparent (100 ... 0 % = outline)",
+        "Wheel: zoom   Drag (middle button too): move the zoomed picture   0: whole frame",
         "Map (top right): click - the stage goes there, drag - a new area on this objective, wheel - zoom, right drag - move",
-        "Ctrl+drag on the map: a draft box (e.g. around a crystal), not snapped to the squares: edges on motor steps, with a"
-        " margin for the backlash and the stage error; Scan area shoots it with the objective in place; the overview chosen"
-        " + Scan area: all boxes inside it",
+        "Ctrl+drag on the map: a box (e.g. around a crystal), not snapped to the squares: edges on motor steps, with a"
+        " margin for the backlash and the stage error; Scan area shoots it with the objective in place",
         "Tab: big map / big camera   Double-click a shot area on the map: open it (crosses, brush, export)",
-        "Buttons on top: Prepare (as A), Scan area (scan + quick stitch: a fast overview), Stitch (quality stitch of the chosen"
-        " selection: exact, re-shoots what is needed; only these go into the drawing), New area, Export (drawing for"
-        " AutoCAD: DWG + DXF), Settings",
-        "Selections are layers: Ctrl+click cards to mark them, then Merge / Minus / Overlap above the list; drag a card up / down: the layer order (top = on top), the box on a card: in the export",
-        "The eye on a card hides the selection on the maps (and shows it again); Show all above the list",
-        "Squares selected in the view (M) become selections without an objective (draft), one per figure;"
-        " the objective chip on a card goes 4x ... 100x, draft   Shift+drag over a selection: move it",
-        "T: Turn the camera picture by 180 degrees (remembered)   \\: Turn the map by 90 degrees anticlockwise (remembered)",
-        "[ / ]: Arrows left-right / up-down the other way; the mini map always follows the arrows (remembered)",
-        "O: check with the camera which way the picture moves",
-        "Ctrl+Z: undo (selections, focus points, moves: the stage drives back)   Ctrl+Y: redo", "H: Hide this help"]
+        "Settings panel: Z follows the focus points, One-side approach, Prepare, Distortion, Zero here, Steps = frame,"
+        " Check directions, Arrows X / Y the other way, Map 90 deg",
+        "Cards: Ctrl+click to mark, then Merge / Minus / Overlap above the list; drag a card up / down: the layer order;"
+        " the box: in the export; the objective chip: 4x ... 100x, draft; the eye: hide on the maps",
+        "Shift+drag over a selection: move it",
+        ]
 LEFT, UP, RIGHT, DOWN = {2424832, 65361}, {2490368, 65362}, {2555904, 65363}, {2621440, 65364}
+INT = 0x110000                       # внутреннее дело (кнопка панели Settings): INT + ord(буква), мимо единых клавиш
+DEL_KEYS = {3014656, 65535, 0x2E0000}
+# одна буква — один смысл в обоих окнах (просмотр — viewer.VIEW_KEYS): клавиша -> внутреннее дело окна микроскопа
+MAN_KEYS = {'o': 'm', 'O': 'm', '0': 'z'}
+VIEW_ONLY = {'m': "select cells", 'M': "select cells", 'c': "crosses", 'C': "crosses", 'n': "square numbers",
+             'N': "square numbers", 'p': "profiles", 'P': "profiles", 'g': "straight edges", 'G': "straight edges",
+             'a': "align the scans", 'A': "align the scans", 'y': "the other pictures", 'Y': "the other pictures"}
+SETTINGS_ONLY = {'d': "Distortion", 'D': "Distortion", 'b': "One-side approach", 'B': "One-side approach",
+                 '\\': "Map 90 deg"}
 PGUP, PGDN = {2162688, 65365}, {2228224, 65366}
 
 
@@ -357,9 +365,9 @@ def _ar_cache(f):
 STEPS = ["1 Overview", "2 Pick areas", "3 Detail", "4 Export"]
 STEP_HELP = [
     "Step 1: put a small objective (4x or 10x), drag a rectangle on the map over the chip, then Scan area",
-    "Step 2: open the overview (double-click it on the map or V), mark 3 crosses (C), number two squares (N), select the squares with flakes (M)",
+    "Step 2: open the overview (double-click it on the map or V), mark 3 crosses (C), number two squares (N), select the squares with flakes (M) and press Enter",
     "Step 3: put 50x or 100x, choose an area on the right and press Scan area",
-    "Step 4: press Export, tick the areas: one drawing for AutoCAD (DWG + DXF with pictures, outlines, crosses)"]
+    "Step 4: tick the areas on their cards, press Export (X): drawing for AutoCAD, pictures and mixed.png in <sample>/export/"]
 BUTTONS = ["Prepare", "New area", "Scan area", "Stitch", "Export", "Settings"]
 PREP_STEPS = [                                        # мастер Prepare: шаг, что сделать руками, что делает программа
     ('lamp', "Lamp and room", [
@@ -1030,7 +1038,8 @@ def _run(m, fullscreen=False, _keys=None):
         camsmall = cv2.resize(view[:mh_ * 0 + H - bh_, :Wl], (mw_, int(mw_ * (H - bh_) / Wl))) if nv['big'] else None
         ls_ = latest_scans()
         from .layers import rings as _rings
-        mp = nav.base([f_ for f_, _k in ls_], w_, h_, clip={f_: _rings(m, m._regions[k_]) for f_, k_ in ls_})
+        al_ = map_alpha()                                  # прозрачность картинок выделений ([ ]), без обрезки по контуру
+        mp = nav.base([f_ for f_, _k in ls_], w_, h_, alpha={f_: al_.get(m._regions[k_]['uid'], 1.0) for f_, k_ in ls_})
         boxes_ = {}
         from .layers import geom as _gm
         base0_ = mp.copy()
@@ -1196,6 +1205,21 @@ def _run(m, fullscreen=False, _keys=None):
                                          MENU, menu['hover'])
         tb_, menu['thits'] = UI.tool_bar(W_, STEPS, step_now(), BUTTONS, menu['thover'])
         return np.vstack([img_, tb_])
+
+    def map_alpha(new=None):
+        """Прозрачность картинок выделений (общая с просмотром: view.json образца). new — {uid: 0..1}."""
+        p_ = os.path.join(m.sample.folder, 'view.json')
+        try:
+            d_ = json.load(open(p_, encoding='utf-8'))
+        except (OSError, ValueError):
+            d_ = {}
+        if new is not None:
+            al_ = dict(d_.get('alpha', {}))
+            al_.update(new)
+            d_['alpha'] = {k_: v_ for k_, v_ in al_.items() if v_ < 0.99}
+            with open(p_, 'w', encoding='utf-8') as fo_:
+                json.dump(d_, fo_, indent=1)
+        return d_.get('alpha', {})
 
     def latest_scans():
         """Основные съёмки видимых выделений: [(папка, индекс выделения)] — снизу списка вверх (верх списка рисуется
@@ -1971,7 +1995,7 @@ def _run(m, fullscreen=False, _keys=None):
                 qw_.wait()
             return
         if m._pending:                                     # новая область без угла 2 — она и выделена в меню
-            msg = "Finish the new area first: key 2 sets its second corner (C: drop it)"
+            msg = "Finish the new area first: key 2 sets its second corner (Del: drop it)"
             return
         mult_ = [k_ for k_ in car['multi'] if k_ < len(m._regions)]
         if len(mult_) > 1:                                 # Ctrl+щелчок по нескольким карточкам: все — в очередь
@@ -2028,7 +2052,7 @@ def _run(m, fullscreen=False, _keys=None):
                     in_ = inner_of(rs_)                        # обзор другого объектива: все области этого внутри
                     if not in_:
                         msg = (f"Selection {rs_['num']} is for {SM.obj(m, rs_)}x, the objective is {m.objective}x: "
-                               f"switch it (M), choose another selection or Ctrl+drag boxes inside it on the map")
+                               f"switch it (O), choose another selection or Ctrl+drag boxes inside it on the map")
                         return
                     only_ = in_
                 else:
@@ -2038,7 +2062,7 @@ def _run(m, fullscreen=False, _keys=None):
         if not ks:
             msg = (f"Only selections without an objective here: click the 'draft' chip on a card to give it {m.objective}x, then Scan area"
                    if any(r_.get('kind') == 'draft' for r_ in m._regions) else
-                   f"No area for {m.objective}x: drag a rectangle on the map (or switch the objective, M)")
+                   f"No area for {m.objective}x: drag a rectangle on the map (or switch the objective, O)")
             return
         q_ = m.queue
         inq_ = {j_.uid for j_ in q_.active() if j_.kind == 'scan'}
@@ -2507,7 +2531,7 @@ def _run(m, fullscreen=False, _keys=None):
             for ax_ in FIELDS:
                 lab_ = {'exp': "Exposure", 'obj': "Objective", 'afs': "AF step", 'afr': "AF window ±"}.get(ax_, f"Step {ax_.upper()}")
                 unit_ = {'exp': "ms", 'obj': "x"}.get(ax_, "um")
-                hint_ = {'z': "Shift: x5", 'obj': "M: next", 'afs': f"{m.objective}x" + ("" if m.af_step else ", auto"),
+                hint_ = {'z': "Shift: x5", 'obj': "O: next", 'afs': f"{m.objective}x" + ("" if m.af_step else ", auto"),
                          'afr': f"{m.objective}x" + ("" if m.af_range else ", auto")}.get(ax_, "")
                 act = bool(edit and edit[0] == ax_)
                 val = (edit[1] + "_") if act else f"{cur_[ax_]:g}"
@@ -2525,7 +2549,7 @@ def _run(m, fullscreen=False, _keys=None):
             ops.append(('c', cb, m._use_fp))
             t_ = "Z follows the focus points"
             ops.append(('t', t_, cb[2] + 10, y, FS, UI.TEXT if m._use_fp else UI.DIM, 1))
-            ops.append(('t', "Y", cb[2] + 22 + UI.size(t_, FS)[0], y, FS, UI.ACCENT, 1))
+            pass
             rects['usefp'] = (x_l - 6, cb[1] - 4, cb[2] + 40 + UI.size(t_, FS)[0], cb[3] + 4)
             right = max(right, rects['usefp'][2], rects['obj'][2] + 60)
             y += LH
@@ -2535,10 +2559,24 @@ def _run(m, fullscreen=False, _keys=None):
             ops.append(('c', cb, os_))
             t_ = f"One-side approach (backlash, overshoot {m.overshoot} steps)"
             ops.append(('t', t_, cb[2] + 10, y, FS, UI.TEXT if os_ else UI.DIM, 1))
-            ops.append(('t', "B", cb[2] + 22 + UI.size(t_, FS)[0], y, FS, UI.ACCENT, 1))
+            pass
             rects['oneside'] = (x_l - 6, cb[1] - 4, cb[2] + 40 + UI.size(t_, FS)[0], cb[3] + 4)
             right = max(right, rects['oneside'][2])
             y += LH
+            xb_ = x_l                                      # редкие дела прибора — кнопками (их буквы — у просмотра)
+            for nm_, kc_ in (("Prepare", 'a'), ("Distortion", 'd'), ("Zero here", '0'), ("Steps = frame", 'g'),
+                             ("Check directions", 'o'), ("Arrows X", '['), ("Arrows Y", ']'), ("Map 90 deg", '\\')):
+                bw_ = UI.size(nm_, FS * 0.9)[0] + 14
+                if xb_ + bw_ > max(right, x_l + 330) and xb_ > x_l:
+                    xb_ = x_l
+                    y += LH
+                bx_ = (xb_, y - th0 - 4, xb_ + bw_, y + 5)
+                ops.append(('b', bx_, False))
+                ops.append(('t', nm_, xb_ + 7, y, FS * 0.9, UI.TEXT, 1))
+                rects['act:' + kc_] = bx_
+                xb_ += bw_ + 6
+                right = max(right, xb_)
+            y += LH + 2
             lt_ = f"Light {'on' if m.light else 'off'}"   # свет и лазер: состояние и клавиши
             ops.append(('t', lt_, x_l, y, FS, UI.TEXT if m.light else UI.DIM, 1))
             ops.append(('t', "L", x_l + UI.size(lt_ + "  ", FS)[0], y, FS, UI.ACCENT, 1))
@@ -2949,13 +2987,16 @@ def _run(m, fullscreen=False, _keys=None):
             if edit:
                 commit(edit)
             if hit and hit[0] == 'usefp':
-                key, edit = ord('y'), None
+                key, edit = INT + ord('y'), None
                 break
             if hit and hit[0] == 'oneside':
-                key, edit = ord('b'), None
+                key, edit = INT + ord('b'), None
                 break
             if hit and hit[0] == 'panel':                # кнопка «спрятать / показать панель»
-                key, edit = ord('p'), None
+                key, edit = INT + ord('p'), None
+                break
+            if hit and hit[0].startswith('act:'):        # кнопки панели Settings: редкие дела прибора
+                key, edit = INT + ord(hit[0][4:]), None
                 break
             edit = (hit[0], "") if hit else None
         if key == -1:
@@ -3029,7 +3070,39 @@ def _run(m, fullscreen=False, _keys=None):
             elif key == 27:
                 edit = None
             continue
-        raw = chr(key) if 0 <= key < 128 else ''
+        if isinstance(key, int) and INT <= key < INT + 256:   # кнопка панели: внутреннее дело как есть
+            raw = chr(key - INT)
+        else:                                              # одна буква — один смысл в обоих окнах
+            raw = chr(key) if 0 <= key < 128 else ''
+            if key in DEL_KEYS:
+                raw = 'c'                                  # Del: удалить выбранное / отменить новое
+            elif raw in VIEW_ONLY:
+                msg, msg_t = f"{raw.upper()}: only in the view ({VIEW_ONLY[raw]}; V opens it)", time.monotonic()
+                continue
+            elif raw in ('x', 'X'):                        # X: экспорт
+                export_drawing()
+                continue
+            elif raw == 'J':                               # Shift+J: точная сшивка (quality) выбранного
+                stitch_quality()
+                continue
+            elif raw in ('[', ']'):                        # [ ]: прозрачность картинки выбранного на карте
+                if m._sel is None or m._sel >= len(m._regions):
+                    msg, msg_t = "[ ]: choose a selection (its card) first", time.monotonic()
+                    continue
+                lv_ = [1.0, 0.75, 0.5, 0.25, 0.0]
+                u_ = m._regions[m._sel]['uid']
+                a0_ = map_alpha().get(u_, 1.0)
+                i_ = min(range(len(lv_)), key=lambda i2_: abs(lv_[i2_] - a0_))
+                a1_ = lv_[max(0, min(len(lv_) - 1, i_ + (1 if raw == '[' else -1)))]
+                map_alpha({u_: a1_})
+                msg, msg_t = (f"{SM.title(m, m._sel)}: picture {100 * a1_:.0f} %" + (" (outline only)" if a1_ == 0 else "")
+                              + "   [: more transparent, ]: less"), time.monotonic()
+                continue
+            elif raw in SETTINGS_ONLY:
+                msg, msg_t = f"{raw.upper()}: {SETTINGS_ONLY[raw]} is a button on the Settings panel now", time.monotonic()
+                continue
+            else:
+                raw = MAN_KEYS.get(raw, raw)
         ch = raw.lower()
         if qbusy() and (key in LEFT or key in RIGHT or key in UP or key in DOWN or key in PGUP or key in PGDN
                         or key in (13, 10) or (ch and ch in 'eqfkliwoadm 12') or raw in ('0', ')')):

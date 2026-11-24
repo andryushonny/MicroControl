@@ -81,7 +81,7 @@ class NavMap:
         self._prev[folder] = (mt, pyr, g)
         return pyr, g
 
-    def _warp(self, canvas, folder, clip=None):
+    def _warp(self, canvas, folder, clip=None, alpha=1.0):
         got = self._preview(folder)
         if got is None:
             return
@@ -102,15 +102,19 @@ class NavMap:
             cm = np.zeros((h, w), np.uint8)                 # до шага мотора) не путает
             cv2.fillPoly(cm, [np.int32(np.round(self.to_px(np.asarray(r_, float)))) for r_ in clip], 1, cv2.LINE_8)
             msk &= cm > 0
-        canvas[msk] = pic[msk]
+        if alpha >= 0.99:
+            canvas[msk] = pic[msk]
+        elif alpha > 0.01:                                  # полупрозрачная: видно, что под ней
+            canvas[msk] = (pic[msk].astype(np.float32) * alpha + canvas[msk].astype(np.float32) * (1 - alpha)).astype(np.uint8)
 
-    def base(self, scans, w, h, clip=None):
+    def base(self, scans, w, h, clip=None, alpha=None):
         """Подложка карты: мозаики scans (папки, сначала меньшее увеличение), каждая — по контуру своего
         выделения (clip: папка -> кольца, мкм). Кэш, пока вид не менялся."""
         self.size = (w, h)
         clip = clip or {}
         ck_ = tuple((f, tuple(round(float(v), 2) for r_ in clip.get(f, []) for p_ in r_ for v in p_)) for f in scans)
-        key = (w, h, tuple(np.round(self.c, 3)), round(self.s, 6), self.turn, ck_,
+        alpha = alpha or {}
+        key = (w, h, tuple(np.round(self.c, 3)), round(self.s, 6), self.turn, ck_, tuple(sorted(alpha.items())),
                tuple((f, os.path.getmtime(os.path.join(f, 'join', 'preview_all.jpg'))
                       if os.path.exists(os.path.join(f, 'join', 'preview_all.jpg')) else 0) for f in scans))
         if key != self._key:
@@ -126,7 +130,7 @@ class NavMap:
                 cv2.line(canvas, tuple(np.int32(a_)), tuple(np.int32(b_)), (34, 34, 38), 1)
             for f in scans:
                 try:
-                    self._warp(canvas, f, clip.get(f))
+                    self._warp(canvas, f, clip.get(f), alpha.get(f, 1.0))
                 except Exception:
                     pass
             self._base, self._key = canvas, key

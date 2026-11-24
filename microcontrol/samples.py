@@ -384,14 +384,14 @@ def corner(m, which, img=None):
         k = len(m._regions)
         persist(m)
         return (f"Selection {num(m, k)} ({m.objective}x): corner 1 at X {p.x:.0f}, Y {p.y:.0f} um, focus point "
-                f"{len(numbered(m)) - len(m._pending['pts']) + 1}. Go to the other corner, press 2 (C: cancel)")
+                f"{len(numbered(m)) - len(m._pending['pts']) + 1}. Go to the other corner, press 2 (Del: cancel)")
     if which != 2:
         raise MicroControlError('E703', "Corner is 1 or 2")
     if not m._pending:
         raise MicroControlError('E701', "Press 1 first: the first corner of a new selection")
     if obj(m, m._pending) != m.objective:
         raise MicroControlError('E705', f"Corner 1 was set with {obj(m, m._pending)}x, now the objective is "
-                                        f"{m.objective}x: switch back (M) or start again (C, then 1)")
+                                        f"{m.objective}x: switch back (O) or start again (Del, then 1)")
     Aw = (m._pending['A'][0] - m._off['x'], m._pending['A'][1] - m._off['y'])
     Bw = snap(m, Aw, (p.x, p.y))                           # угол 2 — ровно на сетке кадров от угла 1
     new = dict(A=m._pending['A'], B=(Bw[0] + m._off['x'], Bw[1] + m._off['y']),

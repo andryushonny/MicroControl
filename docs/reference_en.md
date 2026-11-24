@@ -4,7 +4,7 @@
 
 **Full technical reference** (formulas, protocol, parameters, error codes). For a short introduction see the [README](../README.md). Русский: [reference_ru.md](reference_ru.md) · 中文: [reference_zh.md](reference_zh.md).
 
-![Viewer: red grid of squares, selection (green), carousel of samples](img/view.jpg)
+![Overview: the 10x scan with the grid of the sample, numbered squares, a draft, 50x and 100x inside](img/view.jpg)
 
 > Independent project, not affiliated with Optosky. Provided as is, without warranty — see the [Disclaimer](#disclaimer) and the [MIT licence](../LICENSE).
 
@@ -744,10 +744,10 @@ The `F` (feed) parameter is not supported (`E902`): the speed is set by the cont
 
 | | |
 |---|---|
-| ![Big map (Tab): 10x overview with drafts, 50x and 100x inside, the red grid of the selected area, the camera in the corner](img/map_zoom.jpg) | ![The 50x scan: its grid comes from the sample lattice — tilt and pitch match the overview, no crosses marked](img/view_50x.jpg) |
-| *Layers on the map: 10x → Draft (grid 1/4) → 50x → 100x, the camera in the corner* | *50x scan: the grid comes from the crosses marked before — its own, else the 10x around it (no crosses to mark), 1/4 and 1/8 cells* |
-| ![Export of the sample: the tilted scan is drawn square to the lattice, crosses with numbers from 1,1](img/export.jpg) | ![Export, close-up: 10x picture, Draft 2 squares, 50x cells 1/4 and 100x cells 1/8 with their addresses](img/export_zoom.jpg) |
-| *Drawing for AutoCAD: the 2.5° tilted chip comes out square to the lattice, crosses from 1,1* | *Close-up: every cell is a closed square on its own layer, address 16,10 > 2,3 > 1,1* |
+| ![Big map (Tab): the 10x overview with its grid, a draft, 50x and 100x inside, the camera in the corner](img/map_zoom.jpg) | ![The 50x scan: the grid of the sample is there as it is, no crosses marked on it](img/view_50x.jpg) |
+| *Layers on the map: 10x → draft → 50x → 100x, the camera in the corner* | *50x scan: one grid for the sample — from the crosses marked on the 10x* |
+| ![Export of the sample: the 10° tilted scan comes out square to the lattice, crosses with numbers](img/export.jpg) | ![Export, close-up: the 50x and 100x pictures over the 10x one, the fine crosses](img/export_zoom.jpg) |
+| *Drawing for AutoCAD: the tilted chip is square to the lattice, its crosses on the drawn ones* | *Close-up: 50x and 100x quality pictures, each on its own layer* |
 
 **Export of the sample** (button Export in the microscope window, `X` in the view, or `mc.export_sample(m, [k, ...], mixed_um=None)`): everything ticked on the cards goes into **one folder `<sample>/export/`** — the previous export there is replaced: `drawing.dxf` (+ `.dwg` with ODA File Converter) — every selection on its own layer `S03_50x` (draft — `S03_draft`), in the lattice frame (cross 1,1 at $(0, 0)$) or in stage µm; the pictures of quality-stitched selections `S03_50x.png` (quick ones — outline only in the drawing); **`mixed.png`** — all ticked scans (quick and quality) in one picture, laid over each other in the order of the list (top of the list on top), with thin outlines; its pixel is that of the finest ticked scan (`mixed_um=` in Python sets your own; at most 200 Mpx — then coarser, and `drawing.json` says so); `drawing.json` — the report (frame, layers, pictures, `mixed`: µm per pixel). **Every ticked selection must be quality-stitched**, otherwise the export is refused and the message names the ones that are not (pictures of different accuracy would mislead). **The drawing is made only when the crosses are marked**: the crosses are the beacons that put the pictures together without an error for the lithography; without them the export has the pictures and `mixed.png` without the drawing, and the message (and `drawing.json`, `no_drawing`) says why. In Python `drawing=True` / `False` makes it with / without the drawing anyway.
 

@@ -2405,4 +2405,8 @@ B1 = np.array(json.load(open(m.sample.file))['selections'][1]['A'], float)
 d66 = np.array(SN66.align(fB66))
 assert d66[0] > 0 and np.allclose(B1 - B0, d66, atol=1e-3), (B1 - B0, d66)                 # контур — вместе с картинкой
 assert not np.allclose(nm66._preview(fB66)[1]['c'], g0_66) or not np.allclose(nm66._preview(fB66)[1]['Mo'], 0), "map cache"
+cv66 = np.full((300, 400, 3), 24, np.uint8); nm66.size = (400, 300); nm66.s = 1.0
+nm66.c = np.array(SN66.mosaic_to_stage(fB66, [[200, 150]])[0], float)
+nm66._warp(cv66, fB66)                                                      # картинка на карте есть (уровни пирамиды — на пиксель)
+assert (cv66 != 24).any(axis=2).mean() > 0.2, (cv66 != 24).any(axis=2).mean()
 m.close(); print("Align moves only the chosen selection (the others stay), its outline goes with it, the map takes it at once: OK")

@@ -2,9 +2,9 @@
 
 **Python control of the Optosky ATR8300 Raman microscope: scan a substrate, stitch one picture of it, put the lithography grid on it, choose the squares you need and export them for AutoCAD.**
 
-**Authors:** A. Lyapeikov, S. Domenko · **Version:** 0.33.0 · Русский: [docs/README_ru.md](docs/README_ru.md) · 中文: [docs/README_zh.md](docs/README_zh.md) · PDF: [EN](docs/MicroControl_en.pdf), [RU](docs/MicroControl_ru.pdf), [中文](docs/MicroControl_zh.pdf) · Full technical reference: [EN](docs/reference_en.md), [RU](docs/reference_ru.md), [中文](docs/reference_zh.md)
+**Authors:** A. Lyapeikov, S. Domenko · **Version:** 0.33.1 · Русский: [docs/README_ru.md](docs/README_ru.md) · 中文: [docs/README_zh.md](docs/README_zh.md) · PDF: [EN](docs/MicroControl_en.pdf), [RU](docs/MicroControl_ru.pdf), [中文](docs/MicroControl_zh.pdf) · Full technical reference: [EN](docs/reference_en.md), [RU](docs/reference_ru.md), [中文](docs/reference_zh.md)
 
-![Overview: numbered lithography squares, chosen squares as drafts, the 20x and 100x areas inside, the status bar at the bottom](docs/img/view.jpg)
+![Overview: the 10x scan with the grid of the sample, numbered squares, a draft, 50x and 100x inside](docs/img/view.jpg)
 
 > Independent project, not affiliated with Optosky. Provided as is, without warranty — see the [Disclaimer](#disclaimer) and the [MIT licence](LICENSE).
 
@@ -83,10 +83,10 @@ Squares selected in the viewer (`M`) become a selection on **Enter** — a **dra
 
 | | |
 |---|---|
-| ![Big map (Tab): 10x overview with drafts, 50x and 100x inside, the red grid of the selected area, the camera in the corner](docs/img/map_zoom.jpg) | ![The 50x scan: its grid comes from the sample lattice — tilt and pitch match the overview, no crosses marked](docs/img/view_50x.jpg) |
-| *Layers on the map: 10x → Draft (grid 1/4) → 50x → 100x, the camera in the corner* | *50x scan: the grid comes from the crosses marked before — its own, else the 10x around it (no crosses to mark), 1/4 and 1/8 cells* |
-| ![Export of the sample: the tilted scan is drawn square to the lattice, crosses with numbers from 1,1](docs/img/export.jpg) | ![Export, close-up: 10x picture, Draft 2 squares, 50x cells 1/4 and 100x cells 1/8 with their addresses](docs/img/export_zoom.jpg) |
-| *Drawing for AutoCAD: the 2.5° tilted chip comes out square to the lattice, crosses from 1,1* | *Close-up: every cell is a closed square on its own layer, address 16,10 > 2,3 > 1,1* |
+| ![Big map (Tab): the 10x overview with its grid, a draft, 50x and 100x inside, the camera in the corner](docs/img/map_zoom.jpg) | ![The 50x scan: the grid of the sample is there as it is, no crosses marked on it](docs/img/view_50x.jpg) |
+| *Layers on the map: 10x → draft → 50x → 100x, the camera in the corner* | *50x scan: one grid for the sample — from the crosses marked on the 10x* |
+| ![Export of the sample: the 10° tilted scan comes out square to the lattice, crosses with numbers](docs/img/export.jpg) | ![Export, close-up: the 50x and 100x pictures over the 10x one, the fine crosses](docs/img/export_zoom.jpg) |
+| *Drawing for AutoCAD: the tilted chip is square to the lattice, its crosses on the drawn ones* | *Close-up: 50x and 100x quality pictures, each on its own layer* |
 
 ## Accuracy for lithography
 

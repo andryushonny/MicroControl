@@ -244,7 +244,12 @@ def _car_items(subs, cur, car):
             except Exception:
                 pass
         else:
-            lines.append("no grid yet (C)")
+            try:                                            # сетка образца одна: уже есть — она будет и здесь
+                lat_ = json.load(open(os.path.join(os.path.dirname(os.path.dirname(f)), 'sample.json'),
+                                      encoding='utf-8')).get('lattice') or {}
+            except (OSError, ValueError):
+                lat_ = {}
+            lines.append("grid of the sample" if lat_ and not lat_.get('stage') else "no grid yet (C)")
         items.append(dict(title=f"Selection {SM.sample_index(f)}", color=SM.sample_color(f),
                           lines=lines, thumbs=[_preview(f, SM.CAR_W - 36)], confirm=car.get('confirm') == f, go=False))
     return items

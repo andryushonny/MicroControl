@@ -367,6 +367,8 @@ def warp_clean(img, M, size, alpha=None, inverse=False):
     fl = cv2.INTER_LINEAR | (cv2.WARP_INVERSE_MAP if inverse else 0)
     M = np.asarray(M, np.float32)
     g = img.max(2) if img.ndim == 3 else img
+    if alpha is not None and np.asarray(alpha).shape[:2] != g.shape[:2]:   # маска уровнем пирамиды на пиксель меньше
+        alpha = cv2.resize(np.asarray(alpha), (g.shape[1], g.shape[0]), interpolation=cv2.INTER_NEAREST)
     a = ((g > 6) if alpha is None else (np.asarray(alpha) > 0)).astype(np.float32)
     pm = img.astype(np.float32) * (a[..., None] if img.ndim == 3 else a)
     w = cv2.warpAffine(pm, M, tuple(int(v) for v in size), flags=fl, borderMode=cv2.BORDER_CONSTANT, borderValue=0)

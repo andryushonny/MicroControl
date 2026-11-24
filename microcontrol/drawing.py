@@ -113,10 +113,13 @@ def _overview_png(path, pics, outlines, max_side=12000, res=None, max_px=200e6):
         if bx1 <= bx0 or by1 <= by0:
             continue
         from .util import warp_clean                               # только свой прямоугольник; без чёрной каймы
-        Mb = Mo @ np.array([[1, 0, bx0], [0, 1, by0], [0, 0, 1]], float)
-        wimg, wm = warp_clean(img, Mb[:2], (bx1 - bx0, by1 - by0), alpha=mk, inverse=True)
-        sub = out[by0:by1, bx0:bx1]
-        sub[wm] = wimg[wm]
+        step = max(64, int(2e7 / max(1, bx1 - bx0)))              # полосами: память не на весь (до 200 Мпикс) снимок
+        for ty0 in range(by0, by1, step):
+            ty1 = min(by1, ty0 + step)
+            Mb = Mo @ np.array([[1, 0, bx0], [0, 1, ty0], [0, 0, 1]], float)
+            wimg, wm = warp_clean(img, Mb[:2], (bx1 - bx0, ty1 - ty0), alpha=mk, inverse=True)
+            sub = out[ty0:ty1, bx0:bx1]
+            sub[wm] = wimg[wm]
     for q, n in outlines:
         pq = np.c_[(q[:, 0] - x0) / res, (y1 - q[:, 1]) / res]
         cv2.polylines(out, [np.int32(np.round(pq))], True, (0, 0, 255), max(1, W // 3000), cv2.LINE_AA)

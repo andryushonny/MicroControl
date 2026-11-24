@@ -2,9 +2,9 @@
 
 **用 Python 控制 Optosky ATR8300 拉曼显微镜：扫描基底，把它拼接成一张图，叠加光刻网格，选出需要的方格并导出给 AutoCAD。**
 
-**作者：** A. Lyapeikov, S. Domenko · **版本：** 0.33.0 · English: [README.md](../README.md) · Русский: [README_ru.md](README_ru.md) · PDF: [中文](MicroControl_zh.pdf) · 完整技术参考：[中文](reference_zh.md)、[EN](reference_en.md)、[RU](reference_ru.md)
+**作者：** A. Lyapeikov, S. Domenko · **版本：** 0.33.1 · English: [README.md](../README.md) · Русский: [README_ru.md](README_ru.md) · PDF: [中文](MicroControl_zh.pdf) · 完整技术参考：[中文](reference_zh.md)、[EN](reference_en.md)、[RU](reference_ru.md)
 
-![扫描查看器：方格的红色网格、选中的方格（绿色）、右侧的样品列表](img/view.jpg)
+![总览：带样品网格的 10x 拍摄、方格编号、草稿、其中的 50x 与 100x](img/view.jpg)
 
 > 独立项目，与 Optosky 无关。按「原样」提供，不提供担保 —— 见[免责声明](#免责声明)和 [MIT 许可证](../LICENSE)。
 
@@ -83,10 +83,10 @@ m.close()
 
 | | |
 |---|---|
-| ![大地图（Tab）：带草稿的 10x 总览、其中的 50x 与 100x、所选区域的红色网格、角落为相机](img/map_zoom.jpg) | ![50x 拍摄：网格来自样品晶格，倾角和周期与总览一致，无需标十字](img/view_50x.jpg) |
-| *地图上的层：10x → 草稿（1/4 网格）→ 50x → 100x，角落为相机* | *50x 拍摄：网格来自之前标的十字 —— 自己的，否则外围 10x 的（无需标十字），1/4 与 1/8 单元* |
-| ![样品导出：倾斜的拍摄按晶格摆正，十字编号从 1,1 开始](img/export.jpg) | ![导出特写：10x 图像、Draft 2 方格、1/4（50x）与 1/8（100x）单元及其地址](img/export_zoom.jpg) |
-| *AutoCAD 图纸：旋转 2.5° 的芯片按晶格摆正，十字从 1,1 开始* | *特写：每个单元是其图层上的闭合方格，地址 16,10 > 2,3 > 1,1* |
+| ![大地图（Tab）：带网格的 10x 总览、草稿、其中的 50x 与 100x，角落为相机](img/map_zoom.jpg) | ![50x 拍摄：样品网格按原样显示，其上未标十字](img/view_50x.jpg) |
+| *地图上的层：10x → 草稿 → 50x → 100x，角落为相机* | *50x 拍摄：整个样品一个网格 —— 来自 10x 上标的十字* |
+| ![样品导出：旋转 10° 的拍摄按晶格摆正，十字带编号](img/export.jpg) | ![导出特写：10x 之上的 50x 与 100x 图片、小十字](img/export_zoom.jpg) |
+| *AutoCAD 图纸：倾斜的芯片按晶格摆正，其十字落在绘制的十字上* | *特写：50x 与 100x 的 quality 图片，各在自己的图层* |
 
 ## 用于光刻的精度
 

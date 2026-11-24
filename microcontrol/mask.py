@@ -142,7 +142,9 @@ class Grid:
     def snap_to_crosses(self, render, size, px_um, min_resp=0.1, render_s=None):
         """Сетка поставлена не по этим кадрам (по решётке образца через координаты столика): сдвинуть её на
         настоящие кресты этой мозаики. Каждый крест, куда попадает решётка, ищется по симметрии (до 16 узлов — быстро); сдвиг — медиана.
-        Точно по всем крестам — F (refine) или сшивка по крестам. -> (найдено крестов, сдвиг px или None)."""
+        Точно по всем крестам — F (refine) или сшивка по крестам. -> (найдено крестов, сдвиг px или None);
+        self.sure_crosses — сколько из них точно кресты (отклик ≥ 0.8 и тот же сдвиг, ±2 мкм): пыль и края
+        чешуек дают слабый отклик и случайный сдвиг."""
         if not self.ready():
             return 0, None
         # окно ±30 мкм: сетка, перенесённая с другого объектива, может промахнуться на 10-15 мкм;
@@ -156,7 +158,8 @@ class Grid:
             c_ = np.asarray(size, float) / 2
             nodes.sort(key=lambda q: np.hypot(*(q - c_)))
             nodes = [nodes[int(t)] for t in np.linspace(0, len(nodes) - 1, 16)]
-        ds, arms = [], []
+        ds, arms, rs = [], [], []
+        self.sure_crosses = 0
         arm = None if k < 1 else self.arm
         for q in nodes:
             reg = render_s(q[0], q[1], k, 4 * r + 1, 4 * r + 1) if render_s is not None else \
@@ -168,6 +171,7 @@ class Grid:
             d, resp = snap_cross(gq, r, arm=arm, info=info, angle=self.angle_deg())
             if resp >= min_resp and np.any(d):
                 ds.append(np.asarray(d, float) / k)
+                rs.append(resp)
                 if arm is None and info.get('arm'):
                     arms.append(info['arm'])
                     if len(arms) >= 3:                        # плечо найдено — дальше без перебора
@@ -176,7 +180,13 @@ class Grid:
                 break
         if not ds:
             return 0, None
-        d = np.median(np.array(ds), axis=0)
+        D, rs = np.array(ds), np.array(rs)
+        strong = rs >= 0.8
+        if strong.any():                                      # сдвиг — по уверенным крестам, если они есть
+            d = np.median(D[strong], axis=0)
+            self.sure_crosses = int((strong & (np.hypot(*(D - d).T) <= 2.0 / px_um)).sum())
+        else:
+            d = np.median(D, axis=0)
         self.cr.marks = [np.asarray(p, float) + d for p in self.cr.marks]
         self.cr._fit()
         self.refined = None

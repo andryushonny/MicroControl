@@ -205,6 +205,8 @@ class SimWorld:
         ax, ay = np.abs(dx), np.abs(dy)
         edge = lambda d, h: np.clip((h - d) / soft + 0.5, 0, 1)
         m = np.maximum(edge(ax, wl) * edge(ay, L), edge(ay, wl) * edge(ax, L)).astype(np.float32)[..., None]
+        for x0_, y0_, x1_, y1_ in getattr(self, 'cross_free', ()):   # участки без крестов (мкм образца)
+            m[(Y[:, None] >= y0_) & (Y[:, None] <= y1_) & (X[None] >= x0_) & (X[None] <= x1_)] = 0
         img = img * (1 - m) + np.array([70, 185, 225], np.float32) * m
         for bx, by, br in self.burns:                  # следы лазера
             d2 = (X[None] - bx) ** 2 + (Y[:, None] - by) ** 2

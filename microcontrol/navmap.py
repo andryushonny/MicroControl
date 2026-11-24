@@ -81,7 +81,7 @@ class NavMap:
         self._prev[folder] = (mt, pyr, g)
         return pyr, g
 
-    def _warp(self, canvas, folder):
+    def _warp(self, canvas, folder, clip=None):
         got = self._preview(folder)
         if got is None:
             return
@@ -98,12 +98,19 @@ class NavMap:
         M = np.c_[A, t]
         pic = cv2.warpAffine(img, M, (w, h), flags=cv2.INTER_LINEAR)
         msk = cv2.warpAffine(ok, M, (w, h), flags=cv2.INTER_NEAREST) > 0
+        if clip:                                            # только внутри контура выделения: лишнее (кадры за краем,
+            cm = np.zeros((h, w), np.uint8)                 # до шага мотора) не путает
+            cv2.fillPoly(cm, [np.int32(np.round(self.to_px(np.asarray(r_, float)))) for r_ in clip], 1, cv2.LINE_8)
+            msk &= cm > 0
         canvas[msk] = pic[msk]
 
-    def base(self, scans, w, h):
-        """Подложка карты: мозаики scans (папки, сначала меньшее увеличение). Кэш, пока вид не менялся."""
+    def base(self, scans, w, h, clip=None):
+        """Подложка карты: мозаики scans (папки, сначала меньшее увеличение), каждая — по контуру своего
+        выделения (clip: папка -> кольца, мкм). Кэш, пока вид не менялся."""
         self.size = (w, h)
-        key = (w, h, tuple(np.round(self.c, 3)), round(self.s, 6), self.turn,
+        clip = clip or {}
+        ck_ = tuple((f, tuple(round(float(v), 2) for r_ in clip.get(f, []) for p_ in r_ for v in p_)) for f in scans)
+        key = (w, h, tuple(np.round(self.c, 3)), round(self.s, 6), self.turn, ck_,
                tuple((f, os.path.getmtime(os.path.join(f, 'join', 'preview_all.jpg'))
                       if os.path.exists(os.path.join(f, 'join', 'preview_all.jpg')) else 0) for f in scans))
         if key != self._key:
@@ -119,7 +126,7 @@ class NavMap:
                 cv2.line(canvas, tuple(np.int32(a_)), tuple(np.int32(b_)), (34, 34, 38), 1)
             for f in scans:
                 try:
-                    self._warp(canvas, f)
+                    self._warp(canvas, f, clip.get(f))
                 except Exception:
                     pass
             self._base, self._key = canvas, key

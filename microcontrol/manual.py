@@ -146,7 +146,7 @@ def draw_lattice(img, cr, to, rect=None, solid=False):
     for q in cr.marks:
         u, v = to(q + cr.drift)
         if rect is None or (rect[0] <= u <= rect[0] + rect[2] and rect[1] <= v <= rect[1] + rect[3]):
-            UI.plus(img, u + 0.5, v + 0.5, RED, r=8, gap=3)
+            UI.dot(img, u + 0.5, v + 0.5, RED)
 
 
 def zoom_view(shape, W, H, zoom=1.0, zc=None, rot=0.0):
@@ -866,7 +866,7 @@ def _run(m, fullscreen=False, _keys=None):
         except MicroControlError as e:
             msg, msg_t = str(e), time.monotonic()
     rects = {}
-    live = _Live(m) if keys is None else None             # в тестах — синхронно
+    live = _Live(m) if keys is None or getattr(m, '_test_live', False) else None   # в тестах — синхронно
     last_n, last_t, img = -1, 0.0, None
     W, H = WH0 if WH0 else (1280, 900)
 
@@ -1007,7 +1007,9 @@ def _run(m, fullscreen=False, _keys=None):
                 bx = [(c_[0] - 4 * fw_, c_[1] - 3 * fw_, c_[0] + 4 * fw_, c_[1] + 3 * fw_)]
             nav.fit(bx, w_, h_)
         camsmall = cv2.resize(view[:mh_ * 0 + H - bh_, :Wl], (mw_, int(mw_ * (H - bh_) / Wl))) if nv['big'] else None
-        mp = nav.base([f_ for f_, _k in latest_scans()], w_, h_)
+        ls_ = latest_scans()
+        from .layers import rings as _rings
+        mp = nav.base([f_ for f_, _k in ls_], w_, h_, clip={f_: _rings(m, m._regions[k_]) for f_, k_ in ls_})
         boxes_ = {}
         from .layers import geom as _gm
         base0_ = mp.copy()
@@ -1417,14 +1419,18 @@ def _run(m, fullscreen=False, _keys=None):
         from . import dialogs as D
         from .drawing import export_sample
         msg_t = time.monotonic()
-        cand = [k_ for k_, r_ in enumerate(m._regions) if r_.get('kind') not in ('group', 'draft') and shot_of(k_)]
+        cand = [k_ for k_, r_ in enumerate(m._regions) if r_.get('kind') != 'group']   # всё: снятое, не снятое, черновики
         if not cand:
-            msg = "Nothing scanned yet: Scan area first"
+            msg = "No selections yet: drag a rectangle on the map"
             return
-        rows = [f"{SM.title(m, k_):<14} {SM.obj(m, m._regions[k_]):>4}x   " +
-                (f"scanned {shot_of(k_)}" if m._regions[k_].get('kind') != 'draft' else "draft: outline and cells")
-                for k_ in cand]
-        dflt = [m._regions[k_].get('export', m._regions[k_].get('kind') != 'draft') for k_ in cand]
+        def row_(k_):
+            r_ = m._regions[k_]
+            if r_.get('kind') == 'draft':
+                return f"{SM.title(m, k_):<14}  --    draft: outline and cells"
+            return f"{SM.title(m, k_):<14} {SM.obj(m, r_):>4}x   " + \
+                (f"scanned {shot_of(k_)}" if shot_of(k_) else "not scanned: outline only")
+        rows = [row_(k_) for k_ in cand]                    # отмечено: что выбрано в прошлый раз, иначе — снятое
+        dflt = [m._regions[k_].get('export', bool(m._regions[k_].get('kind') != 'draft' and shot_of(k_))) for k_ in cand]
         try:
             got = D.checklist("Export: which areas go into the drawing", rows, dflt,
                               header="Area            Obj.  Scan")
@@ -1433,11 +1439,8 @@ def _run(m, fullscreen=False, _keys=None):
         if got is None:
             msg = "Export cancelled"
             return
-        for k_, on_ in zip(cand, got):
-            if on_ == (m._regions[k_].get('kind') != 'draft'):
-                m._regions[k_].pop('export', None)
-            else:
-                m._regions[k_]['export'] = bool(on_)
+        for k_, on_, d_ in zip(cand, got, dflt):
+            m._regions[k_]['export'] = bool(on_)
         SM.persist(m)
         ks_ = [k_ for k_, on_ in zip(cand, got) if on_]
         if not ks_:
@@ -1474,10 +1477,21 @@ def _run(m, fullscreen=False, _keys=None):
             hit_ = (hit_[0], hit_[1] + oy_, hit_[2], hit_[3] + oy_) if hit_ else \
                 ((r2_[0], r2_[1] + oy_, r2_[2], r2_[3] + oy_) if r2_ else None)
             return np.vstack([menu_img(W), fr_]), hit_
+        # клавиша держит камеру (live.hold) в этом потоке, а дело берёт кадры в своём: замок — делу на всё время,
+        # иначе первый же кадр (автофокус, снимок, баланс белого, Prepare) ждёт вечно
+        lk_, n_ = m.__dict__.get('_cam_lock'), 0
+        while lk_ is not None:
+            try:
+                lk_.release()
+                n_ += 1
+            except RuntimeError:                            # этот поток его больше не держит
+                break
         try:
             return UI.run_busy(WIN, title, fn, frame, plan=plan, expect=expect, wait_ms=60 if keys is None else 1,
                                on_stop=on_stop)
         finally:
+            for _ in range(n_):
+                lk_.acquire()
             cv2.setMouseCallback(WIN, on_mouse)
 
     def busy_live(title, fn, expect=None):

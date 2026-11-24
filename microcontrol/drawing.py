@@ -85,8 +85,10 @@ def local_picture(folder, g, uv0, uv1, pitch, max_px=8000, nodes=None):
 
 
 def export_sample(m, ks=None, out=None, dwg=True, verbose=True):
-    """Один чертёж образца из участков ks (индексы m._regions; по умолчанию — снятые и не снятые с экспорта).
-    Возвращает путь к DXF (и DWG рядом, если есть ODA File Converter)."""
+    """Один чертёж образца из участков ks (индексы m._regions; по умолчанию — снятые и не снятые с экспорта):
+    у каждого свой слой S<номер>_<объектив>x (черновик — S<номер>_draft), объективы любые вместе. Снятый —
+    картинка и контур, не снятый и черновик — контур (и клетки). Решётка с номерами — чертёж от креста 1,1;
+    без неё — в координатах столика (мкм, Y вверх). Возвращает путь к DXF (и DWG рядом, если есть ODA)."""
     import ezdxf
     from .project import Selection
     from .samples import obj, num, title
@@ -97,18 +99,19 @@ def export_sample(m, ks=None, out=None, dwg=True, verbose=True):
     if ks is None:
         ks = [k for k, r in enumerate(m._regions) if r.get('kind') not in ('group', 'draft') and r.get('export', True)
               and Selection(m.sample, r).latest]
-    ks = [k for k in ks if m._regions[k].get('kind') not in ('group', 'draft')]   # черновик — вспомогательный
+    ks = [k for k in ks if m._regions[k].get('kind') != 'group']
     if not ks:
-        raise ValueError("Nothing to export: no scanned area is chosen")
+        raise ValueError("Nothing to export: no area is chosen")
     out = out or os.path.join(m.sample.folder, 'export', time.strftime('%Y-%m-%d_%H%M%S'))
     os.makedirs(os.path.join(out, 'images'), exist_ok=True)
     from . import lattice as LT
     from .layers import lattice_of
     L = lattice_of(m)
-    if L is None or not L.get('numbered'):
-        raise ValueError("The drawing needs the lattice with real numbers: in the viewer mark the crosses (C) and "
-                         "number two squares in different rows and columns (N)")
     P = float(getattr(m, 'mask_pitch', 0) or 100.0)          # шаг крестов маски: все размеры чертежа — от него
+    stage_frame = L is None or not L.get('numbered') or L.get('stage')
+    if stage_frame and verbose:
+        print("  [!] No numbered cross lattice: the drawing is in stage coordinates (um). For the lithography frame "
+              "mark the crosses (C) and number two squares (N) in the viewer")
     from .mask import Grid as _G
     try:
         lab_ = list(_G(L['src']).labels.values())
@@ -116,7 +119,8 @@ def export_sample(m, ks=None, out=None, dwg=True, verbose=True):
         lab_ = []
     if any(not (1 <= X <= 58 and 1 <= Y <= 58) for X, Y in lab_) and verbose:
         print("  [!] Some square numbers are outside 1..58: check the numbering (N in the viewer)")
-    D = lambda S: LT.to_uv(L, S) * (P, -P)                      # столик -> чертёж: крест 1,1 в (0, 0), Y вверх
+    D = (lambda S: np.asarray(S, float) * (1.0, -1.0)) if stage_frame else \
+        (lambda S: LT.to_uv(L, S) * (P, -P))                    # столик -> чертёж: крест 1,1 в (0, 0), Y вверх
 
     doc = ezdxf.new('R2010', setup=True)
     doc.units = 13
@@ -125,19 +129,19 @@ def export_sample(m, ks=None, out=None, dwg=True, verbose=True):
         doc.layers.add(name, color=color)
     msp = doc.modelspace()
     pr = Progress(len(ks) + 2, "Export: drawing", unit='steps') if verbose else None
-    order = sorted(ks, key=lambda k: obj(m, m._regions[k]))     # мелкое увеличение снизу, крупное сверху
+    order = sorted(ks, key=lambda k: obj(m, m._regions[k]) or 0)   # мелкое увеличение снизу, крупное сверху
     placed = []
     local_rep = {}
     for i, k in enumerate(order):
         r = m._regions[k]
-        lay = f"S{num(m, k):02d}_{obj(m, r)}x" + ("_draft" if r.get('kind') == 'draft' else "")
+        lay = f"S{num(m, k):02d}_draft" if r.get('kind') == 'draft' else f"S{num(m, k):02d}_{obj(m, r)}x"
         doc.layers.add(lay, color=(i % 6) + 1)
-        sc = Selection(m.sample, r).latest
+        sc = Selection(m.sample, r).latest if r.get('kind') != 'draft' else None
         jp = os.path.join(sc.folder, 'join', 'preview_all.jpg') if sc else None
         if pr:
             pr.update(1, f"{title(m, k)}: picture and outline")
         gs_ = None
-        if sc:
+        if sc and not stage_frame:
             try:
                 gs_ = _G(sc.folder)
                 gs_ = gs_ if gs_.ready() and _grid_uv(gs_) is not None else None
@@ -193,7 +197,7 @@ def export_sample(m, ks=None, out=None, dwg=True, verbose=True):
         for ring in rings(m, r):
             q = D(ring)
             msp.add_lwpolyline([tuple(p) for p in q], close=True, dxfattribs={'layer': lay})
-        if r.get('cells'):                                     # клетки — каждая целиком (общие грани — на каждом слое)
+        if r.get('cells') and not stage_frame:                 # клетки — каждая целиком (общие грани — на каждом слое)
             N = LT.level(r)
             many = len(r['cells']) > 400
             from .layers import geom as _geom
@@ -215,11 +219,12 @@ def export_sample(m, ks=None, out=None, dwg=True, verbose=True):
         q = np.vstack([D(rg) for rg in rings(m, r)])
         x0, y1 = q[:, 0].min(), q[:, 1].max()
         hgt = max(1.0, min(0.12 * P, 0.03 * max(np.ptp(q[:, 0]), np.ptp(q[:, 1]))))
-        msp.add_text(f"{title(m, k)}  {obj(m, r)}x", height=hgt, dxfattribs={'layer': 'LABELS', 'insert': (x0, y1 + hgt * 0.4)})
+        msp.add_text(f"{title(m, k)}  " + (f"{obj(m, r)}x" if r.get('kind') != 'draft' else "draft"), height=hgt, dxfattribs={'layer': 'LABELS', 'insert': (x0, y1 + hgt * 0.4)})
         placed.append(dict(selection=num(m, k), objective=obj(m, r), layer=lay, scan=sc.folder if sc else None,
-                           placed="by the crosses of its squares" if lay in local_rep else "by the stage",
+                           placed=("by the crosses of its squares" if lay in local_rep else
+                                   "by the stage" if sc else "outline only (not scanned)"),
                            crosses=local_rep.get(lay)))
-        if obj(m, r) < 50 and verbose:
+        if sc and (obj(m, r) or 0) < 50 and verbose:
             print(f"  [!] {title(m, k)} is {obj(m, r)}x: for lithography outline the flakes at 50x / 100x "
                   "(at 10x the optics blur edges by ~1 um)")
     if pr:                                                       # кресты литографии с их номерами
@@ -227,7 +232,7 @@ def export_sample(m, ks=None, out=None, dwg=True, verbose=True):
     allq = np.vstack([D(rg) for k in ks for rg in rings(m, m._regions[k])])
     (x0, y0), (x1, y1) = allq.min(0), allq.max(0)
     arm = 0.1 * P
-    for X in range(max(1, int(np.floor(x0 / P)) + 1), int(np.ceil(x1 / P)) + 2):
+    for X in ([] if stage_frame else range(max(1, int(np.floor(x0 / P)) + 1), int(np.ceil(x1 / P)) + 2)):
         for Y in range(max(1, int(np.floor(-y1 / P)) + 1), int(np.ceil(-y0 / P)) + 2):
             cx, cy = (X - 1) * P, -(Y - 1) * P
             msp.add_line((cx - arm, cy), (cx + arm, cy), dxfattribs={'layer': 'CROSSES'})
@@ -235,7 +240,8 @@ def export_sample(m, ks=None, out=None, dwg=True, verbose=True):
             msp.add_text(f"{X},{Y}", height=0.06 * P, dxfattribs={'layer': 'NUMBERS', 'insert': (cx + 0.04 * P, cy + 0.04 * P)})
     path = os.path.join(out, 'drawing.dxf')
     doc.saveas(path)
-    json.dump(dict(frame="lattice: cross 1,1 at (0, 0), X to cross 2,1, Y up (to cross 1,2 is -Y)", pitch_um=P,
+    json.dump(dict(frame=("stage coordinates, um, Y up" if stage_frame else
+                          "lattice: cross 1,1 at (0, 0), X to cross 2,1, Y up (to cross 1,2 is -Y)"), pitch_um=P,
                    lattice=L, areas=placed), open(os.path.join(out, 'drawing.json'), 'w'), indent=1, default=float)
     dw = dxf_to_dwg(path) if dwg else None
     if pr:

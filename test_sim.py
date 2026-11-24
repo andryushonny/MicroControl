@@ -925,7 +925,7 @@ k50 = next(k for k, r in enumerate(m._regions) if r['obj'] == 50)
 r50 = m._regions[k50]
 assert r50['parent'] == uid and r50['factors'] == [3] and all(c[0] // 3 in (5, 6) and c[1] // 3 == 6 for c in r50['cells']), r50
 m.scan(); [mc.stitch(x, verbose=False) for x in m.last_scans]
-dx = mc.export_sample(m, ks=[0, kd, k50])                            # 10x и 50x; черновик в экспорт не идёт
+dx = mc.export_sample(m, ks=[0, kd, k50])                            # 10x и 50x и черновик: каждый на своём слое
 doc = ezdxf.readfile(dx if dx.endswith('.dxf') else dx[:-4] + '.dxf')
 ms = doc.modelspace()
 ims = ms.query('IMAGE')
@@ -933,7 +933,9 @@ assert len(ims) == 2, len(ims)
 nums = {t.dxf.text: np.array(t.dxf.insert)[:2] for t in ms.query('TEXT[layer=="NUMBERS"]')}
 assert "6,7" in nums and np.allclose(nums["6,7"] - (500, -600), (4, 4), atol=0.5), nums.get("6,7")  # крест 6,7: (5P, -6P)
 assert not any(k.startswith('0,') or k.endswith(',0') for k in nums)
-assert not any('draft' in l_.dxf.name for l_ in doc.layers)
+lays_ = {l_.dxf.name for l_ in doc.layers}
+assert {f"S{m._regions[0]['num']:02d}_10x", f"S{m._regions[k50]['num']:02d}_50x", f"S{m._regions[kd]['num']:02d}_draft"} <= lays_, lays_
+assert [p for p in ms.query('LWPOLYLINE') if p.dxf.layer == f"S{m._regions[kd]['num']:02d}_draft"]   # черновик — контур, без картинки
 for k_ in (k50,):                                                    # каждая клетка — замкнутый квадрат на слое выделения
     from shapely.geometry import Polygon as _Pg
     r_ = m._regions[k_]
@@ -1053,12 +1055,13 @@ m.close(); print("Small map in the corner: wheel zooms in and out, click drives 
 import microcontrol.viewer as V_
 from microcontrol import samples as SM, layers as LY, project as P_
 from microcontrol.mask import Grid
-m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp()); m.focus()
+m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp()); m._world.turn_deg = 0.0; m.focus()
 fw, fh = m.frame_size
 m.area = mc.Area(0, 0, 3 * fw, 2 * fh); f = m.scan(); mc.stitch(f, verbose=False)
 m.area = mc.Area(5 * fw, 0, 6 * fw, fh); f2 = m.scan(); mc.stitch(f2, verbose=False)
 px_um = json.load(open(os.path.join(f, 'meta.json')))['pixel_size_um']
-g = Grid(f); p0 = np.array([66.0, 52.8]) / px_um; a_ = 100 / px_um   # 66, 53 мкм от угла мозаики
+from microcontrol.snap import stage_to_mosaic
+g = Grid(f); p0 = stage_to_mosaic(f, [[100.0, 100.0]])[0]; a_ = 100 / px_um   # на настоящих крестах
 g.cr.add(p0); g.cr.add(p0 + (a_, 0)); g.cr.add(p0 + (0, a_)); g.labels = {(0, 0): (5, 7), (2, 1): (7, 8)}
 g.selected |= {(0, 0), (1, 0), (2, 0), (2, 1)}; g.save(px_um)
 LY.sync_brush(m); SM.persist(m)
@@ -1622,6 +1625,23 @@ def cross_stage(i, j):
     return np.array([np.cos(T) * PT * i - np.sin(T) * PT * j, np.sin(T) * PT * i + np.cos(T) * PT * j])
 
 
+def crosses_seen(f_):
+    """Сколько настоящих крестов (сим-мира) целиком в мозаике съёмки (не ближе 10 мкм к краю)."""
+    from microcontrol.storage import ScanData as _SD
+    import microcontrol.viewer as _V
+    sc_ = _V._Scene(f_)
+    S_ = mosaic_to_stage(f_, [[0, 0], [sc_.size[0], 0], [sc_.size[0], sc_.size[1]], [0, sc_.size[1]]])
+    sc_.st.close()
+    x0, y0 = S_.min(0) + 10
+    x1, y1 = S_.max(0) - 10
+    n_ = 0
+    for i in range(-5, 60):
+        for j in range(-5, 60):
+            c_ = cross_stage(i, j)
+            n_ += int(x0 <= c_[0] <= x1 and y0 <= c_[1] <= y1)
+    return n_
+
+
 def manual(keys, name=None):
     try:
         M.run(m, fullscreen=False, _keys=[-1] + keys + [-1, -1])
@@ -1858,8 +1878,8 @@ mc.stitch(f50, verbose=False)
 view(f50, [], 'view_seeded50')
 d50 = json.load(open(os.path.join(f50, 'grid.json')))
 log(f"  seeded {d50.get('seeded')}, labels {len(Grid(f50).labels)}")
-if not Grid(f50).ready():
-    issue("new 50x scan inside a marked 10x has no grid")
+if Grid(f50).ready() != (crosses_seen(f50) > 0):                # сетка — только если кресты видны
+    issue(f"new 50x scan inside a marked 10x: grid {Grid(f50).ready()}, crosses seen {crosses_seen(f50)}")
 check("50x seeded")
 
 step("50x view: mark own crosses (Shift+C, then 2 crosses)")
@@ -1896,7 +1916,7 @@ m.scan()
 f50b = m.last_scans[-1]
 mc.stitch(f50b, verbose=False)
 view(f50b, [])
-if not Grid(f50b).ready():
+if not Grid(f50b).ready() and crosses_seen(f50b):
     issue("second version of the 50x has no grid")
 log(f"  versions: {[os.path.basename(s.folder) for s in P_.Selection(m.sample, R50()).scans]}")
 check("50x v2")
@@ -1919,8 +1939,8 @@ else:
     f100 = m.last_scans[-1]
     mc.stitch(f100, verbose=False)
     view(f100, [], 'view_seeded100')
-    if not Grid(f100).ready():
-        issue("new 100x scan has no grid")
+    if Grid(f100).ready() != (crosses_seen(f100) > 0):
+        issue(f"new 100x scan: grid {Grid(f100).ready()}, crosses seen {crosses_seen(f100)}")
     check("100x seeded")
 
 step("delete the 50x (middle level) and Ctrl+Z")
@@ -2248,3 +2268,78 @@ assert 'e' not in r and all(b >= a - 1e-9 for a, b in zip(fr_, fr_[1:])) and \
 cv2.destroyWindow('busy test')
 print("Stop: with a progress bar at the next step, plain Python by force, a scan softly after its frame; a stitch stops "
       "in 1-3 s and the old results stay; the bar goes by stages and by time, not 0 -> 100: OK")
+
+# ------------------------------------------------------------------ 53. Клавиши с камерой при живом потоке камеры (как на приборе): F, пробел, W не ждут вечно замок камеры, который держит клавиша
+import threading
+import microcontrol.manual as M
+cv2.getWindowImageRect = lambda w: (0, 0, 1440, 900)
+m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp())
+m._test_live = True                                            # живой поток камеры, как без тестовых клавиш
+m.goto(z=m.position.z + 40)
+z0 = m.position.z
+out = {}
+def run_():
+    try:
+        M.run(m, fullscreen=False, _keys=[-1, -1, ord('f'), -1, ord(' '), -1, ord('w'), -1, -1])
+        out['ok'] = True
+    except Exception as e:
+        out['e'] = e
+th = threading.Thread(target=run_, daemon=True); th.start(); th.join(90)
+assert not th.is_alive(), "autofocus / picture / white balance from the keys hang (camera lock)"
+assert out.get('ok'), out
+assert abs(m.position.z - z0) > 5, (z0, m.position.z)          # фокус двигал Z
+m.close()
+print(f"Keys with the live camera thread: F focused (Z {z0:.0f} -> {m.position.z:.0f} um), Space, W done, no hang: OK")
+
+# ------------------------------------------------------------------ 54. Сетка сама — только там, где видны кресты (по столику — никогда сама); черновик удаляется из списка в просмотре
+import microcontrol.manual as M, microcontrol.viewer as V
+from microcontrol import samples as SM, layers as LY
+from microcontrol.mask import Grid
+cv2.getWindowImageRect = lambda w: (0, 0, 1440, 900)
+m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp()); w = m._world
+w.cross_free = [(1500, -1500, 4500, 1500)]                         # здесь крестов нет
+m.focus()
+M.run(m, fullscreen=False, _keys=[-1, -1]); n_ = m._nav
+M.run(m, fullscreen=False, _keys=[-1, ('maprect', *n_.to_px((0, 0)), *n_.to_px((420, 320))), -1,
+                                  ('maprect', *n_.to_px((2000, 0)), *n_.to_px((2420, 320))), -1, -1])
+fs_ = []
+for num_ in (1, 2):                                                 # 1 — с крестами, 2 — без
+    u_ = next(r_['uid'] for r_ in m._regions if r_['num'] == num_)
+    m.last_scans = []; m.scan(only=[u_]); fs_.append(m.last_scans[-1]); mc.stitch(fs_[-1], verbose=False)
+fA, fB = fs_
+P_, T_ = w.pitch, np.radians(w.turn_deg)
+Lc = dict(O=[0.0, 0.0], e1=[P_ * np.cos(T_), P_ * np.sin(T_)], e2=[-P_ * np.sin(T_), P_ * np.cos(T_)], pitch=P_,
+          numbered=False, stage=False, src=None)
+for f_, want in ((fA, True), (fB, False)):                          # подставить по крестам: есть кресты — есть сетка
+    gp_ = os.path.join(f_, 'grid.json')
+    if os.path.exists(gp_):
+        os.remove(gp_)
+    sc_ = V._Scene(f_)
+    g2, msg_ = V._seed(f_, Grid(f_), Lc, None, sc_, sc_.st.meta.get('pixel_size_um'), need_crosses=True)
+    sc_.st.close()
+    assert g2.ready() == want and (want or not os.path.exists(gp_)), (f_, g2.ready(), msg_, open(gp_).read()[:300] if os.path.exists(gp_) else None)
+def opened(f_, lat):
+    m._sample.data['lattice'] = lat; m._sample.save()
+    gp_ = os.path.join(f_, 'grid.json')
+    if os.path.exists(gp_):
+        os.remove(gp_)
+    mc.view(f_, _keys=[-1, -1, 27, 27])
+    return Grid(f_).ready()
+assert not opened(fA, dict(O=[0.0, 0.0], e1=[100.0, 0.0], e2=[0.0, 100.0], pitch=100.0, numbered=False, stage=True, src=None))
+assert opened(fA, Lc) and not opened(fB, Lc)                       # по столику — не сама; по крестам — где они видны
+# черновик: выбрать квадраты (M, рамка), крестик на его карточке — квадраты сняты, черновика нет
+box_ = {}
+def keys54():
+    yield -1; yield ord('m'); yield -1
+    yield ('drag', 420, 300, 700, 520); yield -1
+    yield ('call', lambda st: box_.update(t=st['_t'])); yield -1
+    dr_ = [r_ for r_ in box_['t']['regions']() if r_.get('kind') == 'draft']
+    assert dr_ and Grid(fA).selected, (dr_, Grid(fA).selected)
+    box_['msg'] = box_['t']['delete_draft'](dr_[0]['uid'], -1)
+    yield -1
+    assert not [r_ for r_ in box_['t']['regions']() if r_.get('kind') == 'draft'], box_['t']['regions']()
+    yield 27; yield 27
+mc.view(fA, _keys=keys54())
+assert not Grid(fA).selected and 'deleted' in box_['msg'], box_['msg']
+m.close()
+print(f"Grid by itself only where crosses are seen (none by the stage coordinates); draft x in the view: {box_['msg']}: OK")

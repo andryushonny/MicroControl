@@ -301,14 +301,17 @@ def _arrow(key):
     return _ARROWS.get(key) or _ARROWS.get(key & 0xFFFF)
 
 
-def _seed(folder, g, LAT, smp0, sc, px_um):
+def _seed(folder, g, LAT, smp0, sc, px_um, need_crosses=False):
     """Сетка без своих крестов — из решётки LAT (выделения, большего вокруг, образца или по столику):
     подставлена (seeded), кисть прежних съёмок перенесена, затем притянута к крестам этих кадров, если они есть.
+    need_crosses (сама, при открытии): в этих кадрах не нашлось ни одного креста — сетки нет, grid.json как был.
     -> (Grid, сообщение)."""
     from . import lattice as LT
     from .mask import Grid
     import time as _t
     msg_ = ""
+    gp0_ = os.path.join(folder, 'grid.json')
+    old_ = open(gp0_, encoding='utf-8').read() if os.path.exists(gp0_) else None
     LT.seed_grid(folder, g, LAT)
     if not LAT.get('numbered'):                             # номеров нет — подписи не выдумывать
         g.labels = {}
@@ -329,6 +332,7 @@ def _seed(folder, g, LAT, smp0, sc, px_um):
     with open(os.path.join(folder, 'grid.json'), 'w', encoding='utf-8') as f_:
         json.dump(d_, f_, indent=1)
     g = Grid(folder)
+    nfx_ = 0
     if not LAT.get('stage'):
         try:                                                # по координатам столика — на кресты этих кадров
             nfx_, dfx_ = g.snap_to_crosses(lambda x, y, w, h: sc.render(x, y, 1.0, w, h), sc.size, px_um,
@@ -338,7 +342,15 @@ def _seed(folder, g, LAT, smp0, sc, px_um):
                 msg_ = (f"   The grid snapped to {nfx_} crosses of this scan "
                         f"(moved by {np.hypot(*dfx_) * px_um:.2f} um); F: frames onto the crosses")
         except Exception:
-            pass
+            nfx_ = 0
+        if need_crosses and not getattr(g, 'sure_crosses', 0):   # крестов здесь не видно — сетку не рисовать
+            if old_ is None:
+                os.remove(gp0_)
+            else:
+                with open(gp0_, 'w', encoding='utf-8') as f_:
+                    f_.write(old_)
+            return Grid(folder), ("   No crosses in this scan: no grid drawn (C: mark crosses; M: squares by the "
+                                  "stage coordinates)")
     return g, msg_
 
 
@@ -385,10 +397,10 @@ def _view_one(folder, fullscreen, keys, car):
         except Exception:
             pass
     seeded_, st0_msg = False, ""
-    if not g.ready() and not g.cr.marks and LAT is not None:   # решётка выделения (или образца) есть: кресты не нужны
-        try:
-            g, st0_msg = _seed(folder, g, LAT, smp0, sc, px_um)
-            seeded_ = True
+    if not g.ready() and not g.cr.marks and LAT is not None and not LAT.get('stage'):
+        try:                                                # решётка по крестам есть: сетка — если кресты здесь видны
+            g, st0_msg = _seed(folder, g, LAT, smp0, sc, px_um, need_crosses=True)
+            seeded_ = g.ready()
         except Exception:
             pass
     ses, subs = SM.session_of(folder)
@@ -415,7 +427,11 @@ def _view_one(folder, fullscreen, keys, car):
         mp_ = car.get('map')
         if mp_ is not None and 0 <= k < len(mp_):           # в меню и черновики: карточка -> съёмка
             if mp_[k][0] != 'sub':
-                st['msg'] = "Drafts: select / unselect their squares here (M); delete in the microscope window"
+                if act == 'del':                            # крестик черновика: убрать его (Ctrl+Z вернёт квадраты)
+                    st['msg'] = delete_draft(mp_[k][1], mp_[k][2])
+                    st['car_dirty'] = True
+                else:
+                    st['msg'] = "Draft: its squares are selected here (M); x on its card deletes it"
                 st['dirty'] = True
                 return
             k = mp_[k][1]
@@ -438,6 +454,90 @@ def _view_one(folder, fullscreen, keys, car):
             st['msg'] = f"Selection {SM.sample_index(dst)} removed to {dst} (Ctrl+Z: bring it back)"
             st['switch'] = (folder if f != folder else (rest[min(k, len(rest) - 1)] if rest else False))
         st['dirty'] = True
+
+    def delete_draft(uid, k_sub):
+        """Черновик из списка: его квадраты (или клетки подсетки) больше не выбраны в съёмке, где их выбрали,
+        запись образца (и его черновики внутри) — прочь сразу. -> сообщение."""
+        from . import lattice as LT
+        from .snap import mosaic_to_stage
+        regs_, rf_ = regions_now()
+        r_ = next((x_ for x_ in regs_ if x_.get('uid') == uid), None)
+        if r_ is None:
+            return "This draft is gone already"
+        cells_ = {tuple(c) for c in r_.get('cells') or []}
+        name_ = "The new draft" if r_.get('pending') else f"Draft {r_.get('num', '')}"
+        f_ = subs[k_sub] if 0 <= k_sub < len(subs) else folder
+        gone_ = 0
+        if r_.get('factors'):                               # клетки подсетки выделения-родителя
+            for f2_ in [f_] + [x_ for x_ in subs if x_ != f_]:
+                gp_ = os.path.join(f2_, 'grid.json')
+                try:
+                    d_ = json.load(open(gp_, encoding='utf-8'))
+                except (OSError, ValueError):
+                    continue
+                rq_ = (d_.get('refine') or {}).get(r_.get('parent'))
+                if not rq_:
+                    continue
+                have_ = {tuple(c) for c in rq_.get('cells', [])}
+                if f2_ == folder:
+                    write_refine(r_['parent'], rq_.get('n'), have_ - cells_)
+                else:
+                    rq_['cells'] = [list(c) for c in sorted(have_ - cells_)]
+                    d_['brush_t'] = _t.time()
+                    with open(gp_, 'w', encoding='utf-8') as fo_:
+                        json.dump(d_, fo_, indent=1)
+                gone_ += len(have_ & cells_)
+        else:                                               # квадраты литографии этой съёмки
+            if f_ == folder:
+                g_, L_ = g, lat_now()
+            else:
+                g_ = Grid(f_)
+                L_ = None
+                try:
+                    from .layers import lattice_in, _sel_dir
+                    regs0_ = smp0.data.get('selections', []) if smp0 is not None else []
+                    me2_ = next((x_ for x_ in regs0_ if x_.get('kind') not in ('group', 'draft') and
+                                 os.path.abspath(f_).startswith(os.path.abspath(_sel_dir(f_, x_)) + os.sep)), None)
+                    L_ = (lattice_in(smp0, regs0_, me2_, self_too=True) if me2_ is not None else None) or LAT
+                except Exception:
+                    L_ = LAT
+            if L_ is not None and g_.ready() and g_.selected:
+                sq_ = sorted(g_.selected)
+                uv_ = LT.to_uv(L_, mosaic_to_stage(f_, np.array([g_.cr.point(i + 0.5, j + 0.5) for i, j in sq_])))
+                off_ = {c for c, (u_, v_) in zip(sq_, uv_) if (int(np.floor(u_)), int(np.floor(v_))) in cells_}
+                if off_:
+                    g_.selected -= off_
+                    try:
+                        from .storage import ScanData as _SD
+                        px2_ = px_um if f_ == folder else (_SD(f_).meta.get('pixel_size_um') or 1.0)
+                    except Exception:
+                        px2_ = px_um
+                    g_.save(px2_)
+                    gp_ = os.path.join(f_, 'grid.json')
+                    d_ = json.load(open(gp_, encoding='utf-8'))
+                    d_['brush_t'] = _t.time()               # окно микроскопа: кисть этой съёмки — свежая
+                    with open(gp_, 'w', encoding='utf-8') as fo_:
+                        json.dump(d_, fo_, indent=1)
+                    gone_ = len(off_)
+        if not r_.get('pending') and smp is not None:       # запись образца — сразу (и черновики внутри неё)
+            try:
+                d_ = json.load(open(smp.file, encoding='utf-8'))
+                sel_ = d_.get('selections', [])
+                dead_, grew_ = {uid}, True
+                while grew_:
+                    grew_ = False
+                    for x_ in sel_:
+                        if x_.get('kind') == 'draft' and x_.get('parent') in dead_ and x_['uid'] not in dead_:
+                            dead_.add(x_['uid'])
+                            grew_ = True
+                d_['selections'] = [x_ for x_ in sel_ if x_.get('uid') not in dead_]
+                smp.data = d_
+                smp.save()
+            except (OSError, ValueError) as e_:
+                return f"{name_}: its squares are unselected, but the sample file could not be written: {e_}"
+        return f"{name_} deleted ({gone_} square{'s' if gone_ != 1 else ''} unselected; Ctrl+Z: select them again)"
+
+    st['_t'] = dict(delete_draft=lambda *a_: delete_draft(*a_), regions=lambda: regions_now()[0])   # для тестов
 
     def R():
         t = np.radians(st['rot'])
@@ -734,6 +834,27 @@ def _view_one(folder, fullscreen, keys, car):
             st['msg'] = f"Fit grid failed: {type(e_).__name__}: {e_}"
             return 0, None
         return r_
+
+    def cut_outline(img):
+        """Снятое за контуром выделения (кадры шире контура — до шага мотора, по краям) не показывается:
+        картинка — ровно то, что выделено."""
+        pm_ = st.get('_outline_px')
+        if pm_ is None:
+            pm_ = False
+            try:
+                pg_ = scan_outline()
+                if pg_ is not None and not pg_.is_empty:
+                    from .snap import stage_to_mosaic
+                    ps_ = [pg_] if pg_.geom_type == 'Polygon' else list(getattr(pg_, 'geoms', []))
+                    pm_ = [(stage_to_mosaic(folder, np.array(p_.exterior.coords)),
+                            [stage_to_mosaic(folder, np.array(h_.coords)) for h_ in p_.interiors]) for p_ in ps_]
+            except Exception:
+                pm_ = False
+            st['_outline_px'] = pm_
+        if not pm_:
+            return img
+        return UI.tint_outside(img, [(to_view_arr(e_), [to_view_arr(h_) for h_ in hs_]) for e_, hs_ in pm_],
+                               (24, 24, 24), 1.0)
 
     def scan_outline():
         """Контур выделения этой съёмки (мкм столика) или None — по нему окно микроскопа принимает квадраты."""
@@ -1516,6 +1637,7 @@ def _view_one(folder, fullscreen, keys, car):
             t = mid() - Rm @ np.array([D / 2, D / 2])
             img = cv2.warpAffine(big, np.float32(np.c_[Rm, t]), (Wv, Hv), flags=cv2.INTER_LINEAR)
         img = crop_edges(img)                               # K: ровные края, без ступенек
+        img = cut_outline(img)                              # за контуром выделения — не показывать
         img = draw_finer(img)                               # снятое крупнее — поверх, в своих контурах
         red, green, yellow = (40, 40, 255), SM.sample_color(folder), (0, 220, 255)   # выбранные — цветом выделения
         base_, void_ = img.copy(), cv2.inRange(img, (0, 0, 0), (22, 22, 22))   # вне мозаики сетку не рисуем
@@ -1591,7 +1713,7 @@ def _view_one(folder, fullscreen, keys, car):
         draw_subgrids(img)                                    # подсетки выделений и их клетки кисти
         for k_, q in enumerate([] if st.get('seeded') else g.cr.marks):   # подставленные кресты — не показывать
             u_, v_ = to_view(q)
-            UI.plus(img, u_, v_, yellow if k_ == st.get("mdrag") else red)
+            UI.dot(img, u_, v_, yellow if k_ == st.get("mdrag") else red)
         if st['box']:
             bx0, by0, bx1, by1, shb = st['box']
             cv2.rectangle(img, (bx0, by0), (bx1, by1), (0, 140, 255) if shb else yellow, 1)
@@ -1729,7 +1851,7 @@ def _view_one(folder, fullscreen, keys, car):
                                        lines=[f"{nc_} square{'s' if nc_ != 1 else ''}, from the view (M)" +
                                               ("" if not new_ else "  - saved on closing")],
                                        depth=depth_(r_), go=False, muted=new_))
-                    cmap_.append(('draft', r_.get('uid')))
+                    cmap_.append(('draft', r_.get('uid'), k_))
         car['map'] = cmap_
         pan_, car['hits'], car['content'] = SM.carousel(st['Hv'], items_, sel_k, car['scroll'], title="Selections",
                                                         go=False, hover=car.get('hxy'))

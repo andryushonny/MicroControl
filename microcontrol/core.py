@@ -214,6 +214,14 @@ def _safety_hooks(logdir):
         except Exception:
             pass
 
+
+class _nullctx:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        pass
+
 class Microscope:
     """Микроскоп Optosky ATR8300.
 
@@ -515,6 +523,7 @@ class Microscope:
         af_ = self._af_mem().get(str(v), {})                  # шаг и окно автофокуса — свои у объектива
         from .optics import pixel_cal
         pc_ = pixel_cal(getattr(self, 'device', None), v)     # пиксель, откалиброванный по крестам
+        self._px_src = 'crosses' if pc_ else 'table'          # откуда размер пикселя (quality: в отчёт)
         self._cfg.update(pixel_size=float(pc_['pixel_um']) if pc_ else prof['pixel_size'], focus_range=float(prof['focus_range']),
                          focus_step=float(prof['focus_step']), af_step=float(af_.get('step', 0.0)),
                          af_range=float(af_.get('range', 0.0)))
@@ -1778,7 +1787,7 @@ class Microscope:
         from .config import scan_overlap
         return plan(self, area=area, focus=focus, overlap=scan_overlap(self.objective) if overlap is None else overlap, path=path)
 
-    def scan(self, area=None, focus='auto', overlap=None, path='snake', name='', notes='', only=None):
+    def scan(self, area=None, focus='auto', overlap=None, path='snake', name='', notes='', only=None, mode=None):
         """Снять выделения ТЕКУЩЕГО объектива. Для каждого кадра: встать на координаты, Z, пауза, снимок.
         Каждая съёмка — новая версия в папке своего выделения: projects/<проект>/selections/Sxx_NNx/scans/<дата>/
         (прежние съёмки остаются; на картах и в списке — последняя). Выделения других объективов (слои: участки
@@ -1787,6 +1796,9 @@ class Microscope:
                'points', 'off', 'plane', 'each' — см. справку. overlap — перекрытие 0..0.5; path — 'snake' / 'rows'.
         area=Area(...) — снять эту зону: она становится новым выделением проекта.
         name, notes — подпись съёмки (в имени папки и в meta.json). only — uid выделений: снять только их.
+        mode — вид сшивки: 'quick' (обзор) или 'quality' (точный ровный снимок рамки для чертежа: перекрытие больше,
+        подъезд с одной стороны, PNG, после съёмки — сшивка, проверка и пересъёмка); по умолчанию — как у выделения
+        (чип на карточке; рамки кристаллов — quality), для area= — обычная сшивка.
         Возвращает папку съёмки (одно выделение) или папку проекта (несколько); все — в m.last_scans."""
         from .scan import plan, Area
         from .config import scan_overlap
@@ -1809,7 +1821,7 @@ class Microscope:
             self._area_seq = getattr(self, '_area_seq', 0) + 1
             self._regions.append(dict(A=(area.x0 + off['x'], area.y0 + off['y']), B=(area.x1 + off['x'], area.y1 + off['y']),
                                       pts=[], thumbs=[], num=self._area_seq, uid=_uuid.uuid4().hex,
-                                      obj=self.objective, fw=fw_, fh=fh_))
+                                      obj=self.objective, fw=fw_, fh=fh_, prog=True))
             regs = [self._regions[-1]]
         else:
             regs_all = self._regions
@@ -1842,35 +1854,44 @@ class Microscope:
         off, pf, done = self._off, self._sample.folder, []
         n0 = 0
         for k, reg in enumerate(regs):
-            from .samples import _area
-            area_ = _area(self, reg)                       # края — наружу до целого шага мотора
+            from .samples import _area, stitch_mode
+            from .config import QUALITY_OVERLAP
+            from . import quality as Q
+            mode_ = mode or stitch_mode(self, reg)
+            area_ = Q.plan_area(self, reg, max(ov, QUALITY_OVERLAP)) if mode_ == 'quality' else _area(self, reg)
             pts = [dict(p, tag=str(n0 + i + 1)) for i, p in enumerate(reg['pts'])]
             nums = [n0 + 1, n0 + len(pts)]
             n0 += len(pts)
             kk = self._regions.index(reg)
             pk = _par(self, kk)
             extra = dict(sample_index=reg['num'], selection=reg['num'], sample_uid=reg['uid'], project_name=self.project.name, project_uid=self.project.uid, sample_name=self._sample.name,
-                         focus_points=nums, area_real_um=[*reg['A'], *reg['B']], outline_um=reg.get('shape'))
+                         focus_points=nums, area_real_um=[*reg['A'], *reg['B']], outline_um=reg.get('shape'),
+                         pixel_source=getattr(self, '_px_src', 'table'), **({'stitch_mode': mode_} if mode_ else {}))
+            if mode_ == 'quality':
+                extra['quality_rect_um'] = list(Q.rect_um(self, reg))
             if pk is not None:
                 extra.update(parent_uid=self._regions[pk]['uid'], parent_selection=self._regions[pk]['num'],
                              parent_objective=self._regions[pk].get('obj'))
             folder = P_.scan_folder(pf, reg, name)
             keep = None
-            if reg.get('shape'):                               # не прямоугольник: только кадры, задевающие контур
+            if reg.get('shape') and mode_ != 'quality':        # не прямоугольник: только кадры, задевающие контур
                 from .layers import touches_frame
                 fw_, fh_ = self.frame_size
                 keep = (lambda X, Y, r_=reg, w_=fw_, h_=fh_: touches_frame(self, r_, X, Y, w_, h_))
             area_._of_selection = True                     # m.area после съёмки — не «новая зона руками»
-            prog = plan(self, area=area_, focus=focus, overlap=ov,
-                        path='rows' if self._cfg.get('one_side') and path == 'snake' else path, pts=pts, keep=keep)
-            if len(regs) > 1:
-                print(f"Selection {reg['num']} ({k + 1} of {len(regs)}): {area_}")
-            r = self.gcode(prog, save=name or f"Selection {reg['num']}", notes=notes, folder=folder, extra=extra)
+            with (Q.settings(self) if mode_ == 'quality' else _nullctx()):
+                prog = plan(self, area=area_, focus=focus, overlap=max(ov, QUALITY_OVERLAP) if mode_ == 'quality' else ov,
+                            path='rows' if self._cfg.get('one_side') and path == 'snake' else path, pts=pts, keep=keep)
+                if len(regs) > 1:
+                    print(f"Selection {reg['num']} ({k + 1} of {len(regs)}, {mode_}): {area_}")
+                r = self.gcode(prog, save=name or f"Selection {reg['num']}", notes=notes, folder=folder, extra=extra)
             r.title = "Scan finished" if r.title == "Program finished" else "Scan stopped"
             print(r)
             done.append(folder)
             if r.title != "Scan finished":
                 break
+            if mode_ == 'quality' and self._cfg.get('quality_finish', True):   # сшить, проверить, доснять — у прибора
+                Q.finish(self, folder)
         self.last_scans = done
         self.last_scan = done[-1] if done else None
         return done[0] if len(regs) == 1 else pf

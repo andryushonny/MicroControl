@@ -290,15 +290,74 @@ def _pair_full(st, ia, ib, d, W, H, sigma, min_ov=0.15, peaks=8):
     return best[0], best[1]
 
 
+class _Reduced:
+    """Кадры скана, уменьшенные в r раз (quick): JPEG раскрывается сразу уменьшенным (в разы быстрее)."""
+    FLAGS = {2: cv2.IMREAD_REDUCED_COLOR_2, 4: cv2.IMREAD_REDUCED_COLOR_4, 8: cv2.IMREAD_REDUCED_COLOR_8}
+
+    def __init__(self, st, r, verbose=False):
+        from concurrent.futures import ThreadPoolExecutor
+        self.index, self.meta, self.r = st.index, st.meta, r
+        H, W = st.shape[:2]
+        self.W, self.H = W // r, H // r
+        self.shape = (self.H, self.W) + tuple(st.shape[2:])
+        pr = Progress(len(st), "Quick stitch: reading", unit='frames') if verbose else None
+
+        def rd(i):
+            row = st.index[i]
+            if row.get('file') and r in self.FLAGS and row['file'].lower().endswith(('.jpg', '.jpeg')):
+                a = cv2.imdecode(np.fromfile(os.path.join(st.folder, 'frames', row['file']), np.uint8), self.FLAGS[r])
+            else:
+                with st.lock:
+                    a = st.frame(i) if st.fix is None else st._jpg(row['file']) if row.get('file') else st.frame(i)
+                a = cv2.resize(a, (self.W, self.H), interpolation=cv2.INTER_AREA) if r > 1 else a
+            if a.shape[1] != self.W or a.shape[0] != self.H:
+                a = cv2.resize(a, (self.W, self.H), interpolation=cv2.INTER_AREA)
+            return a
+        self.img = [None] * len(st)
+        with ThreadPoolExecutor(max_workers=max(1, min(8, (os.cpu_count() or 2)))) as ex:
+            for i, a in enumerate(ex.map(rd, range(len(st)))):
+                self.img[i] = a
+                if pr:
+                    pr.update(1, f"frame {i + 1} of {len(st)}")
+        if pr:
+            pr.close()
+
+    def frame(self, i, crop=None):
+        a = self.img[i]
+        if crop is None:
+            return a
+        x0, y0, x1, y1 = crop
+        return a[y0:y1, x0:x1]
+
+
+def _quick(st, pred, p, W, H, max_shift_um, px, verbose, A):
+    """Quick: тот же движок, но на кадрах, уменьшенных до ~320 px по ширине, без перебора ложных пар сверх
+    нужного; положения — обратно в полный размер."""
+    r = max([k for k in (1, 2, 4, 8) if W // k >= 300] or [1])
+    red = _Reduced(st, r, verbose=verbose)
+    ms = min(max_shift_um / (px * r), 0.5 * min(red.W, red.H))
+    pos, info = _builtin(red, pred / r, p, red.W, red.H, ms, 0.0, 0.01, verbose, A=A / r)
+    sm = info.get('_seams')
+    if sm is not None:                                       # швы — в пикселях полного кадра (кресты, F)
+        sm['meas'] = sm['meas'] * r
+        sm['base'] = sm['base'] * r
+    info.update(reduced=r)
+    return pos * r, info
+
+
 @_per_sample
 @timed_fn('Stitch (all of it)')
 def stitch(folder, engine='builtin', max_shift_um=40.0, sigma=None, alpha=0.01, preview=True, verbose=True,
-           flat=True):
-    """Сшить скан: найти точные положения кадров. engine='auto' | 'builtin' | 'ashlar'.
-    max_shift_um — насколько столик может ошибиться между соседними кадрами. Это первый шаг (превью);
-    второй, точный — mc.fit_crosses(folder): кадры на кресты (после разметки крестов в mc.view)."""
+           flat=True, mode=None):
+    """Сшить скан: найти положения кадров. mode — 'quick' (быстро, на уменьшенных кадрах: обзор; править и
+    отправлять в экспорт нельзя) или 'quality' (точно: только сдвиги кадров, все поправки; для рамки — ровный
+    прямоугольник join/quality.png). По умолчанию — как снято (meta: stitch_mode), иначе quality.
+    max_shift_um — насколько столик может ошибиться между соседними кадрами."""
     t0 = time.monotonic()
     st = ScanData(folder)
+    mode = mode or st.meta.get('stitch_mode') or 'standard'   # съёмка без вида (m.scan(area=...)): точный движок
+    if mode == 'quick':
+        flat = False
     H, W = st.shape[:2]
     from .optics import flatfield, attach
     os.makedirs(os.path.join(folder, 'join'), exist_ok=True)
@@ -346,6 +405,9 @@ def stitch(folder, engine='builtin', max_shift_um=40.0, sigma=None, alpha=0.01, 
             if engine == 'ashlar':
                 raise
             L.event('STI-002', f"ASHLAR not used ({type(e).__name__}: {e}); built-in engine.", 20)
+    if used is None and mode == 'quick':
+        pos, info = _quick(st, pred, p, W, H, max_shift_um, px, verbose, A)
+        used = 'quick'
     if used is None:
         pos, info = _builtin(st, pred, p, W, H, max_shift, sigma, alpha, verbose, A=A)
         used = 'builtin'
@@ -366,10 +428,10 @@ def stitch(folder, engine='builtin', max_shift_um=40.0, sigma=None, alpha=0.01, 
         np.savez(sp, theta0=dist_vec(load_dist(folder, meta)), **sm)
     elif os.path.exists(sp):
         os.remove(sp)
-    info.update(engine=used, frames=n, frame_px=[W, H], pixel_size_um=px, time_s=round(time.monotonic() - t0, 1))
+    info.update(engine=used, mode=mode, frames=n, frame_px=[W, H], pixel_size_um=px, time_s=round(time.monotonic() - t0, 1))
     with open(os.path.join(out, 'stitch.json'), 'w', encoding='utf-8') as f:
         json.dump(info, f, indent=1)
-    r = Result("Stitched", Engine=used, Frames=n,
+    r = Result("Stitched (quick)" if mode == 'quick' else "Stitched", Engine=used, Frames=n,
                **{"Seams accepted": f"{info.get('accepted', '-')} of {info.get('pairs', '-')}",
                   "Seam error, px": info.get('residual_px', '-'),
                   "Camera vs stage": info.get('camera', '-'),
@@ -405,9 +467,19 @@ def stitch(folder, engine='builtin', max_shift_um=40.0, sigma=None, alpha=0.01, 
     except Exception as e:                                  # сшивка важнее: кресты можно поставить заново
         L.event('STI-003', f"Crosses not moved: {type(e).__name__}: {e}", 30)
     if preview:
-        r['Preview'] = make_preview(folder, pos, verbose=verbose)
+        r['Preview'] = make_preview(folder, pos, verbose=verbose, fast=mode == 'quick')
         r['Time, s'] = round(time.monotonic() - t0, 1)
     st.close()
+    if mode == 'quality' and meta.get('quality_rect_um'):     # рамка: ровный прямоугольник
+        from . import quality as Q
+        q = Q.render(folder, verbose=verbose)
+        if q:
+            r['Quality'] = (f"{q['size_px'][0]} x {q['size_px'][1]} px, {q['pixel_um']:.5f} um/px"
+                            + ("" if q['pixel_source'] == 'crosses' else " (pixel not calibrated)")
+                            + ("" if q['ok'] else "; " + "; ".join(q['problems'])))
+    for f_ in ('quality.png', 'quality.json'):               # другой вид — прежний снимок рамки не годится
+        if mode != 'quality' and os.path.exists(os.path.join(folder, 'join', f_)):
+            os.remove(os.path.join(folder, 'join', f_))
     L.event('STI-001', f"{folder}: {dict(r)}")
     return r
 
@@ -708,7 +780,7 @@ def _write_levels(img, i, W, H, lvdir):
 
 
 @timed_fn('Stitch: preview and small copies')
-def make_preview(folder, pos=None, max_side=4000, levels=True, verbose=False):
+def make_preview(folder, pos=None, max_side=4000, levels=True, verbose=False, fast=False):
     """Уменьшенная мозаика (JPG) для быстрого взгляда: кадры уменьшаются и кладутся по положениям.
     Заодно (levels=True) каждый кадр пишется уменьшенным в 2, 4, 8 раз в viewer/levels/ — просмотр больших
     сканов на слабом ПК берёт оттуда маленькие файлы, а не раскрывает целые кадры."""
@@ -729,7 +801,23 @@ def make_preview(folder, pos=None, max_side=4000, levels=True, verbose=False):
     pr = Progress(n + 2, "Stitch: saving", unit='files') if verbose else None   # кадры + thumbs + preview_all.jpg
     from concurrent.futures import ThreadPoolExecutor
     pool, jobs = ThreadPoolExecutor(max_workers=3), []
-    for i, img in st.frames():
+    def frames_():
+        if not fast or not st.index[0].get('file'):
+            yield from st.frames()
+            return
+        from concurrent.futures import ThreadPoolExecutor as _TP
+
+        def rd(i):                                          # quick: кадр раскрывается сразу вдвое меньше
+            f_ = st.index[i]['file']
+            if f_.lower().endswith(('.jpg', '.jpeg')):
+                a = cv2.imdecode(np.fromfile(os.path.join(folder, 'frames', f_), np.uint8), cv2.IMREAD_REDUCED_COLOR_2)
+            else:
+                a = cv2.resize(st._jpg(f_), (W // 2, H // 2), interpolation=cv2.INTER_AREA)
+            return cv2.resize(a, (W, H), interpolation=cv2.INTER_LINEAR)
+        with _TP(max_workers=max(1, min(8, os.cpu_count() or 2))) as ex_:
+            for i, a in enumerate(ex_.map(rd, range(n))):
+                yield i, a
+    for i, img in frames_():
         if pr:
             pr.update(1, f"frame {i + 1} of {n}: preview and 3 small copies")
         if levels:                                          # уровни пишутся в фоне (кодирование JPG — в потоках)

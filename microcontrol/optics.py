@@ -166,8 +166,8 @@ def _dist_path(meta):
 
 def _pix_path(device, objective):
     serial = str((device or {}).get('Serial', 'unknown'))
-    if serial.upper().startswith('SIM') or not objective:
-        return None
+    if not objective or (serial.upper().startswith('SIM') and not os.environ.get('MC_SIM_PIXEL_CAL')):
+        return None                                   # симулятор: только для проверки калибровки (MC_SIM_PIXEL_CAL=1)
     safe = ''.join(ch if ch.isalnum() else '_' for ch in serial)
     return os.path.join(HOME, 'devices', f"pixel_{safe}_{objective}x.json")
 

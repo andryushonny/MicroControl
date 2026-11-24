@@ -632,9 +632,10 @@ def _snap_plain(region, r, arm=None, info=None):
 # ------------------------------------------------------------------ сборка нужных квадратов из кадров
 class Frames:
     """Кадры скана с положениями (px мозаики) — для сборки любого участка без всей мозаики в памяти."""
-    def __init__(self, folder):
+    def __init__(self, folder, skip=()):
         from .stitch import load_positions
         self.st = ScanData(folder)
+        self.skip = set(int(i) for i in skip)                        # не брать (заменённые при пересъёмке)
         self.H, self.W = self.st.shape[:2]
         P = load_positions(folder, self.st)
         self.P = P - P.min(0)
@@ -655,6 +656,8 @@ class Frames:
         hit = np.flatnonzero((self.P[:, 0] < hi[0]) & (self.P[:, 0] + self.W > lo[0]) &
                              (self.P[:, 1] < hi[1]) & (self.P[:, 1] + self.H > lo[1]))
         for k in hit:
+            if int(k) in getattr(self, 'skip', ()):
+                continue
             img = self.st.frame(int(k))
             img = img if img.ndim == 3 else cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
             M = Mout2mos.copy()

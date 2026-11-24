@@ -1155,8 +1155,8 @@ def _run(m, fullscreen=False, _keys=None):
                 TM.fmt(TM.estimate(m, nfr_, 'points' if m._use_fp and reg['pts'] else 'off', o_)[0])
             hd_ = SM.hidden(m, k)
             sh_ = shot_of(k)
-            items.append(dict(title=SM.title(m, k), obj=f"{o_}x", color=SM.col(m, k), chosen=k in car['multi'],
-                              thumbs=[] if hd_ else reg.get('thumbs', []), confirm=car['confirm'] == k, depth=depth,
+            items.append(dict(title=SM.title(m, k), obj=f"{o_}x", mode=SM.stitch_mode(m, reg), color=SM.col(m, k),
+                              chosen=k in car['multi'], thumbs=[] if hd_ else reg.get('thumbs', []), confirm=car['confirm'] == k, depth=depth,
                               muted=o_ != m.objective or hd_, hidden=bool(reg.get('hidden')),
                               lines=([(f"scanned {sh_}" + ("" if reg.get('export', True) else ", not in export")
                                        if sh_ else "not scanned yet") +
@@ -1476,8 +1476,16 @@ def _run(m, fullscreen=False, _keys=None):
             r_ = m._regions[k_]
             if r_.get('kind') == 'draft':
                 return f"{SM.title(m, k_):<14}  --    draft: outline and cells"
+            if not shot_of(k_):
+                return f"{SM.title(m, k_):<14} {SM.obj(m, r_):>4}x   not scanned: outline only"
+            from . import quality as Q
+            sc_ = SM.Selection(m.sample, r_).latest if hasattr(SM, 'Selection') else None
+            if sc_ is None:
+                from .project import Selection as _Sel
+                sc_ = _Sel(m.sample, r_).latest
+            q_ = sc_ is not None and Q.is_quality(sc_.folder) and Q.info(sc_.folder) is not None
             return f"{SM.title(m, k_):<14} {SM.obj(m, r_):>4}x   " + \
-                (f"scanned {shot_of(k_)}" if shot_of(k_) else "not scanned: outline only")
+                (f"quality {shot_of(k_)}" if q_ else f"quick {shot_of(k_)}: outline only (picture - quality only)")
         rows = [row_(k_) for k_ in cand]                    # отмечено: что выбрано в прошлый раз, иначе — снятое
         dflt = [m._regions[k_].get('export', bool(m._regions[k_].get('kind') != 'draft' and shot_of(k_))) for k_ in cand]
         try:
@@ -2693,6 +2701,17 @@ def _run(m, fullscreen=False, _keys=None):
                         SM.persist(m)
                         msg, msg_t = (f"{SM.title(m, k)} " + ("hidden on the maps (the eye shows it again)"
                                                                 if rg_.get('hidden') else "shown on the maps")), time.monotonic()
+                        continue
+                    if act == 'mode' and k < len(m._regions):      # плашка вида сшивки: quick <-> quality
+                        rg_ = m._regions[k]
+                        rg_['mode'] = 'quick' if SM.stitch_mode(m, rg_) == 'quality' else 'quality'
+                        rg_.pop('prog', None)
+                        SM.persist(m)
+                        msg, msg_t = (f"{SM.title(m, k)}: " + (
+                            "quality - exact geometry for the drawing (larger overlap, one-side approach, frames "
+                            "re-shot if needed, a straight-edged picture; goes to export)" if rg_['mode'] == 'quality'
+                            else "quick - a fast overview (not editable, not for export)") + "; the next scan"), \
+                            time.monotonic()
                         continue
                     if act == 'obj' and k < len(m._regions):       # плашка объектива: следующий (пока не снято)
                         msg, msg_t = cycle_objective(k), time.monotonic()

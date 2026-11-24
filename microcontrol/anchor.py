@@ -37,7 +37,8 @@ def _detect(st, g, P, D0, px, verbose):
     R = float(np.hypot(W / 2, H / 2))
     rr = max(8.0, 15.0 / px)                                # поиск ±15 мкм вокруг узла
     s = min(1.0, 4.0 * px)                                  # 50x, 100x: крест крупнее перебора плеч — уменьшить
-    m = 6.0 / px                                            # узел не ближе 6 мкм к краю кадра (полкреста видно)
+    m = min(6.0 / px, 0.12 * min(W, H))                     # узел не ближе 6 мкм к краю кадра (полкреста видно);
+                                                            # на 50x / 100x кадр мал — доля кадра (крест крупнее его)
     arm = g.arm * s if g.arm else None
     ang = g.angle_deg()                                     # крест стоит с наклоном сетки
     arms = []
@@ -270,7 +271,14 @@ def anchor(folder, save=True, fit_dist=True, verbose=True, preview=True):
                 seam_px=round(float(np.median(seam_res)), 3) if len(seam_res) else None,
                 pitch_px=round(pitch_px, 3), distortion=D, corner_px=round(corner, 2), fitted=bool(fit_th),
                 mask_pitch_um=mp, pixel_um=round(px_cal, 6), pixel_um_was=px, aspect=aspect, skew_deg=skew)
-    if save:
+    bad_fit = info['rms_px'] is not None and info['rms_px'] * px > max(1.0, 3 * px)   # кресты не на одной решётке
+    if bad_fit:
+        info['refused'] = (f"the crosses found do not lie on one square lattice ({info['rms_px']:.0f} px = "
+                           f"{info['rms_px'] * px:.1f} um off): wrong places taken for crosses. The frames are left "
+                           "as they were. Mark crosses that are whole in the frames (C), or scan a larger area "
+                           "around them")
+        L.event('ANC-002', info['refused'], 30)
+    if save and not bad_fit:
         out = os.path.join(folder, 'join')
         Pabs_n = Pn + P0
         with open(os.path.join(out, 'positions_all.csv'), 'w', newline='', encoding='utf-8') as f:
@@ -322,6 +330,8 @@ def anchor(folder, save=True, fit_dist=True, verbose=True, preview=True):
                 os.makedirs(os.path.dirname(pp), exist_ok=True)
                 json.dump(sc_, open(pp, 'w', encoding='utf-8'), indent=1)
     L.event('STI-005', f"{folder}: crosses {info}")
+    if bad_fit:
+        raise ValueError("Frames not moved: " + info['refused'] + ".")
     r = Result("Stitched on the crosses",
                **{"Crosses": f"{info['used']} used of {info['crosses']} found, in {info['frames_with_crosses']} of {n} frames",
                   f"On the grid within {TOL_UM} um": f"{100 * share0:.1f} % -> {100 * share:.1f} %",

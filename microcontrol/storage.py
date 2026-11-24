@@ -119,6 +119,37 @@ class ScanData:
         st.save_meta()
         return st
 
+    @classmethod
+    def append(cls, folder):
+        """Дописать кадры в готовую съёмку (quality: пересъёмка). Только кадры файлами (jpg / png)."""
+        st = cls(folder)
+        fmt = ((st.meta.get('storage') or {}).get('format') or 'jpg')
+        if not st.index[0].get('file'):
+            raise StoreError('E801', f"{folder}: frames in HDF5 batches cannot be added to")
+        st.fmt = fmt if fmt in ('jpg', 'png') else os.path.splitext(st.index[0]['file'])[1][1:]
+        st.quality = int((st.meta.get('storage') or {}).get('jpg_quality') or 95)
+        st.n, st._h5 = len(st.index), None
+        st._csv_f = open(os.path.join(folder, 'index.csv'), 'a', newline='', encoding='utf-8')
+        st._csv = csv.writer(st._csv_f)
+        return st
+
+    def close_append(self, replaced=(), reshot=0):
+        """Конец дописывания: заменённые кадры помечаются (blurry = 2: в снимок не идут), meta — число кадров."""
+        self._csv_f.close()
+        if replaced:
+            p = os.path.join(self.folder, 'index.csv')
+            with open(p, encoding='utf-8') as f:
+                rows = list(csv.reader(f))
+            hdr, k = rows[0], rows[0].index('blurry')
+            for i in replaced:
+                rows[int(i) + 1][k] = '2'
+            with open(p, 'w', newline='', encoding='utf-8') as f:
+                csv.writer(f).writerows(rows)
+        self.meta['frames'] = self.n
+        self.meta['reshot'] = int(self.meta.get('reshot', 0)) + int(reshot)
+        self.save_meta()
+        self.close()
+
     def save_meta(self):
         with open(os.path.join(self.folder, 'meta.json'), 'w', encoding='utf-8') as f:
             json.dump(self.meta, f, ensure_ascii=False, indent=1, default=str)

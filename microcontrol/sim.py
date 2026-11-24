@@ -73,7 +73,8 @@ class SimWorld:
     def set_objective(self, obj):
         """Настоящий объектив: размер пикселя камеры на образце и апертура (NA)."""
         self.objective = obj
-        self.px_um = SENSOR_PIXEL_UM / obj               # мкм на пиксель камеры
+        self.px_um = SENSOR_PIXEL_UM / obj * (1 + getattr(self, 'scale_err', 0.0))   # мкм на пиксель; scale_err — ошибка
+        # объектива против таблицы (проверка калибровки пикселя по крестам)
         self.na = {4: 0.1, 5: 0.15, 10: 0.25, 20: 0.4, 50: 0.5, 100: 0.9}.get(obj, 0.25)
 
     def handle(self, cmd, data):
@@ -347,7 +348,7 @@ class SimCamera:
         return self.info()
 
     def info(self):
-        return dict(model="SIM", exposure_ms=self.exposure_ms, size=(640, 480))
+        return dict(model="SIM", exposure_ms=self.exposure_ms, size=tuple(getattr(self.w, "size", (640, 480))))
 
     def close(self):
         pass

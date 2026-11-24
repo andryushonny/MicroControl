@@ -108,7 +108,7 @@ def init_areas(m):
         off_ = (m._off['x'], m._off['y'])
         fw_, fh_ = m.frame_size
         m._regions.append(dict(A=(m.area.x0 + off_[0], m.area.y0 + off_[1]),
-                               B=(m.area.x1 + off_[0], m.area.y1 + off_[1]), obj=m.objective, fw=fw_, fh=fh_,
+                               B=(m.area.x1 + off_[0], m.area.y1 + off_[1]), obj=m.objective, fw=fw_, fh=fh_, prog=True,
                                pts=[dict(x=f_['x'], y=f_['y'], z=f_['z'])
                                     for f_ in (getattr(m, '_focus_pts', None) or [])], thumbs=[]))
     if not hasattr(m, '_pending'):
@@ -211,6 +211,17 @@ def _geo_parent(m, k):
             if best is None or key < best[0]:
                 best = (key, i)
     return best[1] if best else None
+
+
+def stitch_mode(m, reg):
+    """Вид сшивки выделения: 'quick' (быстро, обзор) или 'quality' (точно, для чертежа). Задан на карточке (чип) —
+    он; иначе сам: рамки кристаллов (Ctrl+тянуть) — quality, остальные — quick."""
+    md = reg.get('mode')
+    if md in ('quick', 'quality'):
+        return md
+    if reg.get('prog'):                      # зона из программы (m.area = Area(...)): обычная точная сшивка
+        return None
+    return 'quality' if reg.get('free') else 'quick'
 
 
 def frames_of(m, k):
@@ -763,6 +774,8 @@ def carousel(H, items, sel, scroll=0, title="Selections", go=True, hover=None, t
         if ob:                                                             # плашка объектива
             (ow, oh), _ = cv2.getTextSize(ob, _FONT, 0.42, 1)
             right -= ow + 10
+            if it.get('mode'):                                             # и вида сшивки
+                right -= cv2.getTextSize(it['mode'], _FONT, 0.42, 1)[0][0] + 14
         ttl, fs_ = it['title'], 0.5
         while fs_ > 0.36 and cv2.getTextSize(ttl, _FONT, fs_, 1)[0][0] > right - tx:
             fs_ -= 0.02
@@ -774,6 +787,15 @@ def carousel(H, items, sel, scroll=0, title="Selections", go=True, hover=None, t
             cv2.rectangle(img, (ox0, y0 + 9), (ox0 + ow + 8, y0 + 27), dim(c, 0.55), -1)
             cv2.putText(img, ob, (ox0 + 4, y0 + 23), _FONT, 0.42, (245, 245, 245), 1, cv2.LINE_AA)
             hits.append((ox0, y0 + 9, ox0 + ow + 8, y0 + 27, 'obj', k))     # щелчок — другой объектив
+            md_ = it.get('mode')
+            if md_:                                                        # плашка вида сшивки: quick / quality
+                (mw_, _), _ = cv2.getTextSize(md_, _FONT, 0.42, 1)
+                mx0 = ox0 + ow + 14
+                if mx0 + mw_ + 8 < right + ow + 10:
+                    mc_ = (60, 150, 225) if md_ == 'quality' else (120, 120, 128)
+                    cv2.rectangle(img, (mx0, y0 + 9), (mx0 + mw_ + 8, y0 + 27), mc_, -1 if md_ == 'quality' else 1)
+                    cv2.putText(img, md_, (mx0 + 4, y0 + 23), _FONT, 0.42, (245, 245, 245), 1, cv2.LINE_AA)
+                    hits.append((mx0, y0 + 9, mx0 + mw_ + 8, y0 + 27, 'mode', k))   # щелчок — другой вид
         conf = it.get('confirm')
         _button(img, bx0, y0 + 8, bx1, y0 + 28, 'x', over(bx0, y0 + 8, bx1, y0 + 28), True, bool(conf))
         hits.append((bx0, y0 + 8, bx1, y0 + 28, 'del', k))

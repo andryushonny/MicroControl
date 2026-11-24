@@ -132,6 +132,7 @@ def export_sample(m, ks=None, out=None, dwg=True, verbose=True):
     order = sorted(ks, key=lambda k: obj(m, m._regions[k]) or 0)   # мелкое увеличение снизу, крупное сверху
     placed = []
     local_rep = {}
+    skipped_ = []
     for i, k in enumerate(order):
         r = m._regions[k]
         lay = f"S{num(m, k):02d}_draft" if r.get('kind') == 'draft' else f"S{num(m, k):02d}_{obj(m, r)}x"
@@ -140,6 +141,36 @@ def export_sample(m, ks=None, out=None, dwg=True, verbose=True):
         jp = os.path.join(sc.folder, 'join', 'preview_all.jpg') if sc else None
         if pr:
             pr.update(1, f"{title(m, k)}: picture and outline")
+        from . import quality as Q
+        qi = Q.info(sc.folder) if sc else None
+        qscan_ = sc.folder if (sc and qi is not None and Q.is_quality(sc.folder)) else None
+        if sc and (qi is None or not Q.is_quality(sc.folder)):   # quick и обычная сшивка — не для чертежа: контур
+            jp = None
+            skipped_.append(f"{title(m, k)}: {'quick' if not Q.is_quality(sc.folder) else 'quality not stitched'} - "
+                            "outline only (the picture goes to the drawing from a quality scan)")
+            sc = None
+        if sc is not None and qi is not None:                   # quality: ровный снимок рамки, строго по столику
+            qp = os.path.join(sc.folder, 'join', 'quality.png')
+            img = cv2.imread(qp)
+            if img is not None:
+                h_, w_ = img.shape[:2]
+                aff = np.array(qi['pixel_to_stage_um'], float)
+                px2 = lambda u, v: D((aff @ np.array([u, v, 1.0]))[None])[0]
+                C0, Cu, Cv = px2(0, h_), px2(1, h_), px2(0, h_ - 1)      # левый нижний угол; вправо; вверх
+                png = os.path.join('images', f"{lay}.png")
+                cv2.imwrite(os.path.join(out, png), img)
+                idef = doc.add_image_def(filename=png, size_in_pixel=(w_, h_))
+                im = msp.add_image(idef, insert=tuple(C0), size_in_units=(1, 1), dxfattribs={'layer': lay})
+                im.dxf.u_pixel = (float(Cu[0] - C0[0]), float(Cu[1] - C0[1]), 0.0)
+                im.dxf.v_pixel = (float(Cv[0] - C0[0]), float(Cv[1] - C0[1]), 0.0)
+                im.dxf.insert = (float(C0[0]), float(C0[1]), 0.0)
+                im.dxf.flags = 1 | 2 | 8
+                local_rep[lay] = dict(quality=True, pixel_um=qi['pixel_um'], pixel_source=qi['pixel_source'],
+                                      seam_um=qi.get('seam_um'), size_um=qi['size_um'])
+                if qi['pixel_source'] != 'crosses':
+                    skipped_.append(f"{title(m, k)}: pixel size not calibrated by the crosses (distances by the "
+                                    "table value of the objective)")
+            sc, jp = None, None
         gs_ = None
         if sc and not stage_frame:
             try:
@@ -220,11 +251,13 @@ def export_sample(m, ks=None, out=None, dwg=True, verbose=True):
         x0, y1 = q[:, 0].min(), q[:, 1].max()
         hgt = max(1.0, min(0.12 * P, 0.03 * max(np.ptp(q[:, 0]), np.ptp(q[:, 1]))))
         msp.add_text(f"{title(m, k)}  " + (f"{obj(m, r)}x" if r.get('kind') != 'draft' else "draft"), height=hgt, dxfattribs={'layer': 'LABELS', 'insert': (x0, y1 + hgt * 0.4)})
-        placed.append(dict(selection=num(m, k), objective=obj(m, r), layer=lay, scan=sc.folder if sc else None,
-                           placed=("by the crosses of its squares" if lay in local_rep else
-                                   "by the stage" if sc else "outline only (not scanned)"),
+        qd_ = (local_rep.get(lay) or {}).get('quality')
+        placed.append(dict(selection=num(m, k), objective=obj(m, r), layer=lay, scan=qscan_ or (sc.folder if sc else None),
+                           placed=("quality picture, by the stage" if qd_ else
+                                   "by the crosses of its squares" if lay in local_rep else
+                                   "by the stage" if sc else "outline only (not a quality scan)"),
                            crosses=local_rep.get(lay)))
-        if sc and (obj(m, r) or 0) < 50 and verbose:
+        if qscan_ and (obj(m, r) or 0) < 50 and verbose:
             print(f"  [!] {title(m, k)} is {obj(m, r)}x: for lithography outline the flakes at 50x / 100x "
                   "(at 10x the optics blur edges by ~1 um)")
     if pr:                                                       # кресты литографии с их номерами
@@ -242,7 +275,11 @@ def export_sample(m, ks=None, out=None, dwg=True, verbose=True):
     doc.saveas(path)
     json.dump(dict(frame=("stage coordinates, um, Y up" if stage_frame else
                           "lattice: cross 1,1 at (0, 0), X to cross 2,1, Y up (to cross 1,2 is -Y)"), pitch_um=P,
-                   lattice=L, areas=placed), open(os.path.join(out, 'drawing.json'), 'w'), indent=1, default=float)
+                   lattice=L, areas=placed, pictures=local_rep, notes=skipped_),
+              open(os.path.join(out, 'drawing.json'), 'w'), indent=1, default=float)
+    if verbose:
+        for s_ in skipped_:
+            print("  [!] " + s_)
     dw = dxf_to_dwg(path) if dwg else None
     if pr:
         pr.update(1, "DWG" if dw else "DXF (DWG: ODA File Converter not found)")

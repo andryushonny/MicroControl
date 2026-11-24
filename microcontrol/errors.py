@@ -51,6 +51,7 @@ CODES = {
     'E704': "Selections of one objective overlap",
     'E705': "Corner 1 was set with another objective",
     'E706': "No selection for this objective",
+    'E707': "The instrument is busy with the queue",
     'E790': "Stopped by the user",
     'E801': "Scan folder not found or empty",
     'E901': "G-code syntax error",

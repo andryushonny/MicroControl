@@ -167,7 +167,97 @@ def _bar(img, x0, y, x1, h, frac, t):
 
 
 def _tm(s):
-    return f"{int(s // 60):02d}:{int(s % 60):02d}"
+    s = max(0, int(s))
+    return f"{s // 3600}:{s % 3600 // 60:02d}:{s % 60:02d}" if s >= 3600 else f"{s // 60:02d}:{s % 60:02d}"
+
+
+QROWS = 5                                                   # сколько задач очереди видно внизу (остальные — «+N»)
+
+
+def queue_rows(q):
+    """Строки панели очереди: задачи (идущие, ждущие, только что закончившиеся) и «ещё N»."""
+    js = q.recent() if q is not None else []
+    run_ = [j for j in js if j.state == 'running']
+    rest = [j for j in js if j.state != 'running']
+    js = (run_ + rest)[:QROWS]
+    more = len(run_) + len(rest) - len(js)
+    return js, more
+
+
+def queue_height(q, scale=0.45):
+    js, more = queue_rows(q)
+    if not js:
+        return 0
+    lh = size("Xg", scale)[1] + 12
+    return lh * (len(js) + 1 + (1 if more else 0)) + 8
+
+
+def queue_panel(img, x0, y1, x1, q, scale=0.45):
+    """Очередь задач над строкой состояния (снизу вверх кончается на y1): заголовок «Queue: ... все — через
+    ~T» и Stop all; по строке на задачу — дорожка (instrument / cpu), название, этап, полоса, прошло и осталось,
+    x — остановить (ждущую — убрать). -> [(прямоугольник, действие, id задачи)], первым — вся панель."""
+    import time as _t
+    js, more = queue_rows(q)
+    if not js:
+        return []
+    th = size("Xg", scale)[1]
+    lh = th + 12
+    h = queue_height(q, scale)
+    y0 = y1 - h
+    panel(img, x0, y0, x1, y1, 0.9, LINE)
+    out = [((x0, y0, x1, y1), 'none', None)]
+    now = _t.monotonic()
+    y = y0 + 4 + lh // 2
+    head = q.summary() or "Queue: all done"
+    put(img, head, x0 + 12, y + th // 2, scale, ACCENT, 1)
+    if q.active():
+        lab = "Stop all"
+        bw = size(lab, scale)[0] + 16
+        r = (x1 - 12 - bw, y - lh // 2 + 3, x1 - 12, y + lh // 2 - 3)
+        cv2.rectangle(img, r[:2], r[2:], (40, 40, 120), -1)
+        put(img, lab, r[0] + 8, y + th // 2, scale, TEXT, 1)
+        out.append((r, 'all', None))
+    for j in js:
+        y += lh
+        x = x0 + 12
+        col = {'running': ACCENT, 'done': OK, 'failed': ERR, 'stopped': DIM}.get(j.state, DIM)
+        if j.state == 'running':
+            for i in range(3):
+                cv2.circle(img, (x + 5 + 10 * i, y), 3, ACCENT if int(now * 6) % 3 == i else LINE, -1, cv2.LINE_AA)
+        else:
+            cv2.circle(img, (x + 15, y), 4, col, -1 if j.state != 'waiting' and j.state != 'queued' else 1, cv2.LINE_AA)
+        x += 38
+        lane = {'inst': "instrument", 'cpu': "cpu"}.get(j.lane, "")
+        put(img, lane, x, y + th // 2, scale * 0.85, DIM, 1)
+        x += size("instrument", scale * 0.85)[0] + 10
+        t_ = j.title
+        while t_ and size(t_, scale)[0] > 260:
+            t_ = t_[:-2]
+        put(img, t_, x, y + th // 2, scale, TEXT if j.active else DIM, 1)
+        x += 270
+        if j.state == 'running':
+            _bar(img, x, y - 6, x + 120, 12, j.frac, now)
+            x += 130
+            lft = j.remaining()
+            s_ = f"{j.step_title}  {100 * (j.frac or 0):.0f}%  {_tm(j.elapsed())}" + (f", ~{_tm(lft)} left" if lft else "")
+        elif j.active:
+            nx_ = getattr(j, '_next', None)
+            s_ = f"waiting: {nx_[1] if nx_ else 'start'}  ~{_tm(j.remaining())}"
+        else:
+            s_ = (j.note or j.state) if j.state != 'failed' else f"failed: {j.error}"
+        bw = size("x", scale)[0] + 16
+        while s_ and size(s_, scale)[0] > x1 - 24 - bw - x:
+            s_ = s_[:-2]
+        put(img, s_, x, y + th // 2, scale, DIM if j.state != 'failed' else ERR, 1)
+        if j.active:
+            r = (x1 - 12 - bw, y - lh // 2 + 3, x1 - 12, y + lh // 2 - 3)
+            cv2.rectangle(img, r[:2], r[2:], (40, 40, 120), -1)
+            put(img, "x", r[0] + 8, y + th // 2, scale, TEXT, 1)
+            out.append((r, 'stop', j.id))
+    if more:
+        y += lh
+        put(img, f"+{more} more (menu Queue)", x0 + 50, y + th // 2, scale, DIM, 1)
+    return out
 
 
 def progress_panel(img, title, stage, frac, text="", passed=0.0, left=None, footer="", stopping=None):
@@ -192,7 +282,8 @@ def progress_panel(img, title, stage, frac, text="", passed=0.0, left=None, foot
     while t and size(t, 0.45)[0] > pw - 44:
         t = t[:-2]
     put(img, t, x0 + 22, y0 + 136, 0.45, DIM, 1)
-    put(img, f"{_tm(passed)} passed" + (f", about {_tm(left)} left" if left else "") + (f"   {footer}" if footer else ""),
+    put(img, f"{_tm(passed)} passed" + (f", about {_tm(left)} left  (total ~{_tm(passed + left)})" if left else "")
+        + (f"   {footer}" if footer else ""),
         x0 + 22, y0 + 176, 0.45, DIM, 1)
     if stopping is None:
         return None
@@ -230,7 +321,7 @@ def status_bar(img, x0, y0, x1, y1, state=None, facts_=(), scale=0.45):
         el = now - state.get('t0', now)
         lft = state.get('left')
         t_ = ("working" if state.get('frac') is None else f"{100 * state['frac']:.0f}%") + f"  {_tm(el)}" + \
-            (f", ~{_tm(lft)} left" if lft else "")
+            (f", ~{_tm(lft)} left, total ~{_tm(el + lft)}" if lft else "")
         put(img, t_, x, cy + th // 2, scale, TEXT, 1)
         x += size(t_, scale)[0] + 12
         lab = "Stopping..." if state.get('stopping') else "Stop (Esc)"

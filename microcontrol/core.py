@@ -691,8 +691,22 @@ class Microscope:
         self.port = port
         L.event('CON-001', f"Port {port}, 115200 baud.")
 
+    @property
+    def queue(self):
+        """Очередь задач этого микроскопа: съёмки выделений подряд (прибор) и сшивки в фоне (ядра).
+        m.queue.scan(uid), m.queue.quality(folder), m.queue.stop(job), m.queue.wait() — см. microcontrol.jobs."""
+        q = self.__dict__.get('_queue')
+        if q is None:
+            from .jobs import JobQueue
+            q = self.__dict__['_queue'] = JobQueue(self)
+        return q
+
     def close(self):
-        """Отключиться: лазер и свет выключаются, порт и камера закрываются."""
+        """Отключиться: лазер и свет выключаются, порт и камера закрываются (задачи очереди — остановить)."""
+        q_ = self.__dict__.get('_queue')
+        if q_ is not None and q_.active():
+            q_.stop_all()
+            q_.wait(15)
         if self._ser is not None and self._ser.is_open and not self._stopped:
             for name, f in (('laser', lambda: self._raw(P.LASER, b"\x00\x00")),          # как штатное ПО:
                             ('motors', lambda: self._motors_on and self._raw(P.TURN_MOTOR, b"\x00")),  # лазер, моторы,

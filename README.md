@@ -2,7 +2,7 @@
 
 **Python control of the Optosky ATR8300 Raman microscope: scan a substrate, stitch one picture of it, put the lithography grid on it, choose the squares you need and export them for AutoCAD.**
 
-**Authors:** A. Lyapeikov, S. Domenko · **Version:** 0.24.0 · Русский: [docs/README_ru.md](docs/README_ru.md) · 中文: [docs/README_zh.md](docs/README_zh.md) · PDF: [EN](docs/MicroControl_en.pdf), [RU](docs/MicroControl_ru.pdf), [中文](docs/MicroControl_zh.pdf) · Full technical reference: [EN](docs/reference_en.md), [RU](docs/reference_ru.md), [中文](docs/reference_zh.md)
+**Authors:** A. Lyapeikov, S. Domenko · **Version:** 0.25.0 · Русский: [docs/README_ru.md](docs/README_ru.md) · 中文: [docs/README_zh.md](docs/README_zh.md) · PDF: [EN](docs/MicroControl_en.pdf), [RU](docs/MicroControl_ru.pdf), [中文](docs/MicroControl_zh.pdf) · Full technical reference: [EN](docs/reference_en.md), [RU](docs/reference_ru.md), [中文](docs/reference_zh.md)
 
 ![Overview: numbered lithography squares, chosen squares as drafts, the 20x and 100x areas inside, the status bar at the bottom](docs/img/view.jpg)
 
@@ -45,7 +45,7 @@ Both windows close with **Shift+Esc** or the window's ×. A single `Esc` only ca
 
 ![Manual mode](docs/img/manual.jpg)
 
-`m.manual()` opens the live camera. Move with the arrows (one press = one frame), focus with `E` / `Q` (or `F` — autofocus). Letters do things: `L` light, `I` laser, `W` white balance, `R` ruler, `S` (twice) scan and stitch right in the window, `V` open the result in the viewer.
+`m.manual()` opens the live camera. Move with the arrows (one press = one frame), focus with `E` / `Q` (or `F` — autofocus). Letters do things: `L` light, `I` laser, `W` white balance, `R` ruler, `S` queue the scan (it is quick stitched in the background; the queue is at the bottom), `V` open the result in the viewer.
 
 - **One window, four steps.** The bar on top shows where you are — **1 Overview › 2 Pick areas › 3 Detail › 4 Export** (click a step for what to do) — and the main buttons: **New area**, **Scan area** (scan + stitch), **Export** (drawing for AutoCAD: DWG + DXF of the chosen area), **Settings** (steps, exposure, focus points).
 - **Map** (top right; `Tab` — big map, the camera goes to the corner): everything already shot, at its real place (10x under 50x under 100x), the outlines of the areas and a yellow frame where the camera is now. **Click the map — the stage drives there**; **drag on the map — a new area** on the objective in place; **`Ctrl`+drag — a free box** exactly as drawn (around a crystal), not snapped to the squares; wheel — zoom; right drag — move the map; double-click a shot area — open it in the viewer.
@@ -246,6 +246,7 @@ Arrows move; letters do things. As much as possible is done right in the window.
 | `F` · `K` | autofocus · keep $Z$ here as a focus point |
 | Ctrl+click cards · Shift+drag over a selection | mark for Merge / Minus / Overlap / Group / Ungroup · move a selection |
 | menu **Scans** (a selection chosen) · objective chip `… 100x, draft` | its scans oldest first: View, **Make main** (maps, view and export use it) · a selection without an objective (draft) is not scanned |
+| Scan area / `S` · Ctrl+click cards · bar at the bottom, menu **Queue** | queue the scan of the chosen selection (several: Ctrl+click their cards); scans go one after another at the instrument, quick stitches in the background on other cores; the window lives · `x` stops a job, Stop all; the whole queue: all done in ~T; keys that move the stage wait until the instrument is free |
 | Scan area · **Stitch** (buttons on top) | scan + quick stitch (fast overview, not edited, not exported) · quality stitch of the chosen selection: exact straight-edged picture for the drawing, re-shot where needed; export takes only these |
 | Ctrl+drag on the map · `Esc` during a job | a draft box on the objective in place (a crystal): with a margin for backlash, edges on motor steps; Scan area shoots it; the overview chosen + Scan area — all such boxes in it · stop the job (or Stop on its bar) |
 | `1`, `2` | corners of a selection |

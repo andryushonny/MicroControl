@@ -84,14 +84,42 @@ def stop_request():
     _STOP['on'] = True
 
 
+_JOBS = {}                                                 # потоки задач очереди: tid -> {'on', 'hold'}
+
+
+def job_begin(tid):
+    """Поток задачи очереди: его останавливают отдельно от окна (job_stop), Esc окна его не трогает."""
+    _JOBS[tid] = {'on': False, 'hold': 0}
+
+
+def job_end(tid):
+    _JOBS.pop(tid, None)
+    _ProgressMeta._opens.pop(tid, None)
+
+
+def job_stop(tid):
+    if tid in _JOBS:
+        _JOBS[tid]['on'] = True
+
+
 class no_stop:
     """with no_stop(): ...  — внутри дело само знает, как остановиться мягко (скан: после кадра, снятое
     сохраняется), полоса прогресса его не прерывает и силой не останавливают."""
     def __enter__(self):
+        j = _JOBS.get(threading.get_ident())
+        if j is not None:
+            j['hold'] += 1
+            self.tid = 'job'
+            return self
         self.tid, _STOP['tid'] = _STOP['tid'], None
         return self
 
     def __exit__(self, *a):
+        if self.tid == 'job':
+            j = _JOBS.get(threading.get_ident())
+            if j is not None:
+                j['hold'] -= 1
+            return
         _STOP['tid'] = self.tid
 
 
@@ -106,17 +134,42 @@ def stop_active(tid):
 
 def check_stop():
     """В потоке долгого дела: остановку попросили — Stopped. В других потоках (окно, камера) — ничего."""
-    if _STOP['on'] and _STOP['tid'] == threading.get_ident():
+    tid = threading.get_ident()
+    j = _JOBS.get(tid)
+    if (_STOP['on'] and _STOP['tid'] == tid) or (j is not None and j['on'] and not j['hold']):
         from .errors import Stopped
         raise Stopped()
 
 
-class Progress:
+class _ProgressMeta(type):
+    """Progress._open — своя у каждого потока (задачи очереди идут одновременно с делом окна)."""
+    _opens = {}
+
+    @property
+    def _open(cls):
+        t = threading.get_ident()
+        return cls._opens.get(t if t in _JOBS else 0)
+
+    @_open.setter
+    def _open(cls, v):
+        t = threading.get_ident()
+        cls._opens[t if t in _JOBS else 0] = v
+
+
+def _hook_now():
+    """Куда полосе сообщать о себе: поток задачи очереди — своей задаче (или никуда), остальные — окну."""
+    tid = threading.get_ident()
+    if tid in Progress.hooks:
+        return Progress.hooks[tid]
+    return None if tid in _JOBS else Progress.hook
+
+
+class Progress(metaclass=_ProgressMeta):
     """Полоса прогресса в одну строку:
     Scan             [############............]  48.21% / 100.00%   27 of 56 frames   00:41 passed, 00:44 left   Z 102 um
     unit — что считается (frames, seams, squares ...); text — что делается сейчас. Вложенная полоса (фокус
     внутри скана) молчит, пока открыта внешняя. Можно как with Progress(...) as pr: ..."""
-    _open = None                                          # открытая сейчас полоса (вложенные молчат)
+    hooks = {}                                            # tid -> hook: полосы задач очереди
     hook = None                                           # f(title, доля 0..1, подпись, прошло с, осталось с | None)
                                                           # — полоса ещё и в окне (сшивка из mc.view)
 
@@ -161,7 +214,7 @@ class Progress:
                 self.parent._set_sub(f"{self.title} {100 * self.done / self.total:.0f}%" + self._label(" › "),
                                      self._frac())
             return
-        if now - self._t < (0.1 if Progress.hook is not None else 0.25) and self.done < self.total and not force:
+        if now - self._t < (0.1 if _hook_now() is not None else 0.25) and self.done < self.total and not force:
             return
         self._show(now)
 
@@ -209,9 +262,10 @@ class Progress:
         line = (f"{self.title:<18} [{'#' * bar}{'.' * (24 - bar)}] {100 * f:6.2f}% / 100.00%   {cnt}"
                 f"{t(el)} passed" + (f", {t(eta)} left" if eta is not None and self.done < self.total else "")
                 + self._label("   "))
-        if Progress.hook is not None:
+        h_ = _hook_now()
+        if h_ is not None:
             try:
-                Progress.hook(self.title, f, self._label(), el, eta if self.done < self.total else 0.0)
+                h_(self.title, f, self._label(), el, eta if self.done < self.total else 0.0)
             except Exception:
                 pass
         pad = max(0, self._w - len(line))

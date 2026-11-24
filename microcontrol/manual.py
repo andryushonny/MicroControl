@@ -7,7 +7,7 @@
   E / Q (PgUp/PgDn)   Столик вверх / вниз на шаг Z (Shift — x5)
   F                   Автофокус;  K — точка фокуса (Z здесь)
   1 / 2               Углы выделения;  C — удалить выделение (дважды)
-  S (дважды)          Снять выделения этого объектива и сшить, прямо в окне (Esc — стоп)
+  S, Scan area        Поставить в очередь съёмку выбранного (Ctrl+щелчок — несколько); внизу — очередь, x — стоп
   V                   Открыть последний скан в просмотре, после — снова сюда
   L / I / W           Свет / лазер / баланс белого
   R                   Линейка: два щелчка — расстояние
@@ -47,7 +47,8 @@ HELP = ["Shift+Esc: Exit (or close the window)", "P: Hide / show the left panel"
         "B (or the box): One-side approach against backlash: X and Y always stop coming from the same side (remembered); best at 50x, 100x",
         "Selections (right, as layers 10x > 50x > 100x): click = choose, Go = drive there, x = delete;  , / . = previous / next;  Enter = drive",
         "C: Cancel the new selection / delete the chosen one (Ctrl+Z brings it back)",
-        "S: Scan the selections of this objective and stitch them, here in the window (Esc: stop)",
+        "S / Scan area: Queue the scan of the chosen selection (Ctrl+click several cards: all of them); each is quick stitched in the background",
+        "Queue (bar at the bottom, menu Queue): scans one after another, stitches on other cores; x stops a job, Stop all; the window lives",
         "V: Open the last scan in the view (crosses, squares, export); closing it brings you back here",
         "L: Light on / off   I: Laser on / off   W: White balance (aim at an empty place)   Space: Picture",
         "A (or Prepare): step by step before a scan: lamp, even light, dark frame, flat field + white balance + exposure, focus + settling, distortion; saved for the objective",
@@ -786,6 +787,12 @@ def _run(m, fullscreen=False, _keys=None):
             return
         menu['thover'] = None
         y -= UI.MENU_H + UI.TOOL_H
+        if qbar['rects'] and ev in (cv2.EVENT_LBUTTONDOWN, cv2.EVENT_LBUTTONUP, cv2.EVENT_MOUSEWHEEL) and \
+                in_rect(qbar['rects'][0][0], x, y) and not zm['pan'] and nv['press'] is None:   # панель очереди
+            if ev == cv2.EVENT_LBUTTONDOWN:
+                h_ = next((r_ for r_ in qbar['rects'][1:] if in_rect(r_[0], x, y)), None)
+                clicks.append(('queue', h_[1], h_[2]) if h_ else ('queue', 'menu', None))
+            return
         if nv['press'] is not None or nv['pan'] is not None or \
                 (nv['mr'] is not None and in_rect(nv['mr'], x, y) and (not nv['big'] or not in_rect(nv['inset'], x, y))
                  and not (nv['big'] and nv.get('pbox') and in_rect(nv['pbox'], x, y))
@@ -871,6 +878,13 @@ def _run(m, fullscreen=False, _keys=None):
             msg, msg_t = str(e), time.monotonic()
     rects = {}
     live = _Live(m) if keys is None or getattr(m, '_test_live', False) else None   # в тестах — синхронно
+    qbar = {'rects': [], 'paused': False, 'h': 0}
+    QBUSY = "wait for the queue or stop its job at the instrument (x on the bar at the bottom)"
+
+    def qbusy():
+        """Прибор занят очередью (съёмка, пересъёмка): движение, свет, фокус, объектив — нельзя."""
+        q_ = m.__dict__.get('_queue')
+        return q_ is not None and q_.inst_busy()
     last_n, last_t, img = -1, 0.0, None
     W, H = WH0 if WH0 else (1280, 900)
 
@@ -1175,7 +1189,7 @@ def _run(m, fullscreen=False, _keys=None):
         car['order'] = order                               # новая (только угол 1) — в списке после угла 2
         return items
 
-    MENU = ["Open", "New", "Info", "Scans", "View", "Help"]
+    MENU = ["Open", "New", "Info", "Scans", "Queue", "View", "Help"]
 
     def menu_img(W_):
         sm_ = m.sample
@@ -1594,6 +1608,9 @@ def _run(m, fullscreen=False, _keys=None):
         """Действие с прибором в потоке, камера на паузе; в окне — полоса и время (видно, что не зависло).
         Stop (Esc): дело выходит на ближайшем шаге (столик доезжает начатое движение).
         -> результат; ошибка прибора или Stop -> MicroControlError наружу, как без полосы."""
+        if qbusy():
+            from .errors import SafetyError
+            raise SafetyError('E707', QBUSY)
         if live is not None:
             live.paused = True
 
@@ -1612,6 +1629,9 @@ def _run(m, fullscreen=False, _keys=None):
     def prepare_here(what='prepare'):
         """Prepare (кнопка, A): подготовка к снимкам здесь; D — дисторсия объектива. Полоса — в окне."""
         nonlocal msg, msg_t
+        if qbusy():
+            msg, msg_t = "The instrument is busy: " + QBUSY, time.monotonic()
+            return
         if live is not None:
             live.paused = True
         try:
@@ -1666,6 +1686,9 @@ def _run(m, fullscreen=False, _keys=None):
     def prepare_start():
         """Prepare: шаги по очереди (PREP_STEPS). Уже готово для этого объектива — спросить: заново или оставить."""
         nonlocal msg, msg_t
+        if qbusy():
+            msg, msg_t = "The instrument is busy: " + QBUSY, time.monotonic()
+            return
         old_ = prep_mem().get(str(m.objective))
         wiz.clear()
         dev_ = (getattr(m, 'device', None) or {}).get('Serial', 'this microscope')
@@ -1773,6 +1796,28 @@ def _run(m, fullscreen=False, _keys=None):
         from . import dialogs as D
         from . import project as P_
         msg_t = time.monotonic()
+        q_ = m.__dict__.get('_queue')
+        if item == "Queue":                                # все задачи очереди: остановить одну или все
+            js_ = (q_.jobs if q_ is not None else [])[-40:]
+            if not js_:
+                msg = "The queue is empty: Scan area (Ctrl+click several cards) and Stitch put jobs here"
+                return
+            from .jobs import tm as _qtm
+            rows = [f"{j_.id:>3}  {j_.title[:34]:<34}  {j_.state:<8} {('cpu' if j_.lane == 'cpu' else 'instrument' if j_.lane == 'inst' else ''):<10} "
+                    f"{_qtm(j_.elapsed())}  ~{_qtm(j_.remaining())} left  {(j_.note or (str(j_.error) if j_.error else ''))[:50]}"
+                    for j_ in js_]
+            act_ = [i_ for i_, j_ in enumerate(js_) if j_.active]
+            r_ = D.choose(f"Queue: {q_.summary() or 'all done'}", rows, act_[0] if act_ else None, ("Stop", "Stop all"),
+                          header="  #  Job                                 State    Lane       Time   Left")
+            if r_ and r_[0] == "Stop" and r_[1] is not None:
+                msg = f"Stopping: {js_[r_[1]].title}" if q_.stop(js_[r_[1]]) else f"{js_[r_[1]].title}: {js_[r_[1]].state}"
+            elif r_ and r_[0] == "Stop all":
+                q_.stop_all()
+                msg = "Stopping all jobs of the queue"
+            return
+        if item in ("Open", "New") and q_ is not None and q_.active():
+            msg = f"The queue is working on this sample ({q_.summary()}): wait or stop it (menu Queue), then {item}"
+            return
         if live is not None:
             live.paused = True
         try:
@@ -1925,8 +1970,8 @@ def _run(m, fullscreen=False, _keys=None):
         return out_
 
     def scan_here():
-        """S (дважды): снять выделения текущего объектива и сшить их, не выходя из окна. Полоса прогресса —
-        в окне поверх кадра камеры; Esc — остановить после текущего кадра. Потом V — открыть в просмотре."""
+        """Scan area, S: поставить в очередь съёмку выделений текущего объектива (выбранное; Ctrl+щелчком —
+        несколько карточек); каждое после съёмки сшивается quick в фоне. Окно живёт, внизу — очередь (x — стоп)."""
         nonlocal msg, msg_t
         import threading
         from .util import Progress
@@ -1936,7 +1981,29 @@ def _run(m, fullscreen=False, _keys=None):
         if m._pending:                                     # новая область без угла 2 — она и выделена в меню
             msg = "Finish the new area first: key 2 sets its second corner (C: drop it)"
             return
-        if m._sel is None or m._sel >= len(m._regions):    # ничего не выбрано: одно выделение — его, иначе спросить
+        mult_ = [k_ for k_ in car['multi'] if k_ < len(m._regions)]
+        if len(mult_) > 1:                                 # Ctrl+щелчок по нескольким карточкам: все — в очередь
+            only_ = []
+            for k_ in mult_:
+                rs_ = m._regions[k_]
+                if rs_.get('kind') == 'group':
+                    gu_ = {rs_['uid']}
+                    for _ in range(8):
+                        gu_ |= {rg['uid'] for rg in m._regions if rg.get('parent') in gu_}
+                    only_ += [rg['uid'] for rg in m._regions if rg['uid'] in gu_ and rg.get('kind') not in ('group', 'draft')
+                              and SM.obj(m, rg) == m.objective]
+                elif rs_.get('kind') == 'draft':
+                    draft_to_selection(k_)
+                    if m._regions[k_].get('kind') != 'draft':
+                        only_.append(rs_['uid'])
+                elif SM.obj(m, rs_) != m.objective:
+                    only_ += inner_of(rs_)
+                else:
+                    only_.append(rs_['uid'])
+            if not only_:
+                msg = f"None of the chosen selections is for {m.objective}x"
+                return
+        if not mult_[1:] and (m._sel is None or m._sel >= len(m._regions)):    # ничего не выбрано: одно выделение — его, иначе спросить
             own_ = [k_ for k_, rg in enumerate(m._regions) if SM.obj(m, rg) == m.objective
                     and rg.get('kind') not in ('group', 'draft')]
             if len(own_) > 1:
@@ -1944,7 +2011,9 @@ def _run(m, fullscreen=False, _keys=None):
                 return
             if own_:
                 m._sel = own_[0]
-        if m._sel is not None and m._sel < len(m._regions) and m._regions[m._sel].get('kind') == 'group':
+        if mult_[1:]:
+            pass
+        elif m._sel is not None and m._sel < len(m._regions) and m._regions[m._sel].get('kind') == 'group':
             gu_, sub_ = {m._regions[m._sel]['uid']}, []    # группа: все выделения в ней (и во вложенных группах)
             for _ in range(8):
                 for rg in m._regions:
@@ -1979,61 +2048,29 @@ def _run(m, fullscreen=False, _keys=None):
                    if any(r_.get('kind') == 'draft' for r_ in m._regions) else
                    f"No area for {m.objective}x: drag a rectangle on the map (or switch the objective, M)")
             return
-        nfr = sum(int(np.prod(SM.frames_of(m, k_))) for k_ in ks)
+        q_ = m.queue
+        inq_ = {j_.uid for j_ in q_.active() if j_.kind == 'scan'}
+        new_ = [k_ for k_ in ks if m._regions[k_]['uid'] not in inq_]
+        if not new_:
+            msg = "Already in the queue (the bar at the bottom): x there stops a job"
+            return
+        nfr = sum(int(np.prod(SM.frames_of(m, k_))) for k_ in new_)
         fm_ = 'points' if m._use_fp else 'off'
-        est = sum(TM.estimate(m, int(np.prod(SM.frames_of(m, k_))), fm_ if m._regions[k_]['pts'] else 'off')[0] for k_ in ks)
-        L.event('MAN-011', f"Scan from the window: {len(ks)} selection(s) of {m.objective}x, {nfr} frames, ~{TM.fmt(est)}.")
-        res, t0 = {}, time.monotonic()
-        from .util import no_stop
-
-        def work():
-            with no_stop():                                 # скан останавливается сам, после кадра (снятое — цело)
-                folder = m.scan(only=only_)
-            res['folder'] = folder
-            if res.get('stop'):
-                return
-            res['stitch'] = True                             # m.scan сшил сам: quick (обзор)
-
-        def halt():
-            m._abort, res['stop'] = True, True
-
-        m._abort = False
-        if live is not None:
-            live.paused = True                             # камера — скану
-        try:
-            def last_frame():
-                fr_ = getattr(m, '_last_img', None)
-                if fr_ is None:
-                    return None
-                return (render(fr_, W - SM.CAR_W, H, kz, zm['c'], 0.0).astype(np.float32) * 0.75).astype(np.uint8)
-            r_ = busy(f"Scanning {len(ks)} selection{'s' if len(ks) > 1 else ''} of {m.objective}x", work,
-                      expect=est, on_stop=halt, bg=last_frame)
-        finally:
-            if live is not None:
-                live.paused = False
-            m._abort = False
-        if 'e' in r_ and not r_.get('stopped'):
-            res['e'] = r_['e']
-        elif r_.get('stopped'):
-            res['stop'] = True
-        msg_t = time.monotonic()
-        if 'e' in res:
-            msg = f"Scan / stitch failed: {res['e']}"
-        elif res.get('stop'):
-            msg = (f"Stopped. Frames so far: {res['folder']}" if res.get('folder') else "Stopped") + \
-                  (" (not stitched: S in the view stitches it)" if res.get('stitch') else "")
-        else:
-            m._last_view = (m.last_scans or [res['folder']])[-1]
-            msg = (f"Scanned and stitched (quick) in {TM.fmt(time.monotonic() - t0)}: V opens it; Stitch makes the "
-                   "exact (quality) stitch for the drawing")
-            ch_ = m.__dict__.pop('_ori_changed', None)
-            if ch_:                                        # проверка направлений перед съёмкой их исправила
-                msg = (f"Camera directions fixed before the scan ({ch_}). If the arrow keys now go the wrong way: "
-                       "[ - left / right, ] - up / down (remembered)")
+        est = sum(TM.estimate(m, int(np.prod(SM.frames_of(m, k_))), fm_ if m._regions[k_]['pts'] else 'off')[0] for k_ in new_)
+        L.event('MAN-011', f"Scan from the window, to the queue: {len(new_)} selection(s) of {m.objective}x, {nfr} frames, ~{TM.fmt(est)}.")
+        b_ = object()
+        for k_ in new_:
+            q_.scan(m._regions[k_]['uid'], batch=b_)
+        if keys is not None and not getattr(m, '_test_async', False):
+            q_.wait()                                      # тесты по клавишам: как раньше — снято, потом дальше
+        from .jobs import tm as _qtm
+        msg = (f"Queued {len(new_)} scan{'s' if len(new_) > 1 else ''} of {m.objective}x ({nfr} frames, {TM.fmt(est)}), "
+               f"each quick stitched in the background; the queue is done in ~{_qtm(q_.total_left())}. "
+               "The bar at the bottom: x stops a job")
 
     def stitch_quality():
-        """Stitch: точная сшивка (quality) последней съёмки выбранного выделения — здесь, у прибора: сшить, проверить,
-        доснять (размытые кадры, кадры с объектом без швов, непокрытые места рамки), ровный снимок рамки."""
+        """Stitch: точная сшивка (quality) последней съёмки выбранного выделения — в очередь: сшить (в фоне), проверить,
+        доснять у прибора (размытые кадры, кадры с объектом без швов, непокрытые места рамки), ровный снимок рамки."""
         nonlocal msg, msg_t
         from . import quality as Q
         from .project import Selection as _Sel
@@ -2047,21 +2084,18 @@ def _run(m, fullscreen=False, _keys=None):
             msg = f"{SM.title(m, k_)} is not scanned yet: Scan area first"
             return
         same_ = SM.obj(m, m._regions[k_]) == m.objective
-        res = busy(f"Quality stitch: {SM.title(m, k_)}",
-                   (lambda: Q.finish(m, sc_.folder)) if same_ else (lambda: __import__('microcontrol.stitch', fromlist=['x']).stitch(sc_.folder, verbose=True)),
-                   plan=[("Stitch: light", 0.08), ("Stitch: seams", 0.62), ("Stitch: brightness", 0.08),
-                         ("Stitch: saving", 0.22)])
-        msg_t = time.monotonic()
-        if 'e' in res:
-            msg = f"Quality stitch failed: {res['e']}"
+        q_ = m.queue
+        if any(j_.folder == sc_.folder and j_.kind in ('quality', 'stitch') for j_ in q_.active()):
+            msg = f"{SM.title(m, k_)}: its stitch is already in the queue (the bar at the bottom)"
             return
-        q_ = Q.info(sc_.folder) or {}
-        m._last_view = sc_.folder
-        msg = (f"Quality stitch of {SM.title(m, k_)}: " +
-               (f"{q_['size_um'][0]:.1f} x {q_['size_um'][1]:.1f} um, seams {q_['seam_um'][1] if q_.get('seam_um') else '-'} um"
-                if q_.get('size_um') else "done") +
-               ("" if q_.get('ok', True) else "; " + "; ".join(q_.get('problems', []))) +
-               ("" if same_ else f" (the objective is not {SM.obj(m, m._regions[k_])}x: stitched without re-shooting)"))
+        q_.quality(sc_.folder, title=f"Quality stitch {SM.title(m, k_)}", reshoot=same_)
+        if keys is not None and not getattr(m, '_test_async', False):
+            q_.wait()
+        from .jobs import tm as _qtm
+        msg = (f"Quality stitch of {SM.title(m, k_)} queued (in the background" +
+               (", re-shooting at the instrument if needed" if same_ else
+                f"; the objective is not {SM.obj(m, m._regions[k_])}x: without re-shooting") +
+               f"); the queue is done in ~{_qtm(q_.total_left())}")
 
     def open_view():
         """V: открыть последний скан в просмотре (кресты, квадраты, экспорт); закрыли — снова ручной режим."""
@@ -2288,12 +2322,32 @@ def _run(m, fullscreen=False, _keys=None):
                 h_last = (h_sig(), h_snap())             # следствие выбранного в просмотре — не шаг Ctrl+Z
             except Exception as e:
                 L.debug('MAN-013', f"Brush sync skipped: {e}")
+        qb_ = qbusy()                                      # очередь снимает: камера — ей, в окне — её кадр
+        if live is not None:
+            if qb_ and not qbar['paused']:
+                live.paused, qbar['paused'] = True, True
+            elif not qb_ and qbar['paused']:
+                live.paused, qbar['paused'] = False, False
+        qq_ = m.__dict__.get('_queue')
+        if qq_ is not None:                                # закончилось в очереди: сообщение, карты заново
+            for txt_, j_ in qq_.pop_events():
+                msg, msg_t = txt_, time.monotonic()
+                if j_.folder and j_.state == 'done':
+                    m._last_view = j_.folder
+                m._map_win = None
+                car['shot_t'] = -9
+                ch_ = m.__dict__.pop('_ori_changed', None)
+                if ch_:
+                    msg = (f"Camera directions fixed before the scan ({ch_}). If the arrow keys now go the wrong way: "
+                           "[ - left / right, ] - up / down (remembered)")
         need = True
         if live is not None:                               # перерисовать: новый кадр, события мыши или раз в 0.3 с
             now_ = time.monotonic()                        # не чаще UI_FPS: камере 30 кадров/с не нужно
             need = bool(clicks) or now_ - last_t > 0.3 or (live.n != last_n and now_ - last_t >= 1.0 / UI_FPS)
         if need:
-            img = live.img if live is not None else m.image(0)
+            li_ = getattr(m, '_last_img', None) if qb_ else None
+            img = li_ if li_ is not None else (img if qb_ and img is not None else
+                                               (live.img if live is not None else m.image(0)))
             last_n, last_t = (live.n if live is not None else last_n), time.monotonic()
             pos_ = (m._p['x'], m._p['y'], m.objective)          # дополненная реальность: сверка с мозаикой,
             if pos_ != arl['pos']:                              # когда столик постоял
@@ -2589,10 +2643,14 @@ def _run(m, fullscreen=False, _keys=None):
             bh_ = th0 + 20
             UI.status_bar(view, 0, H - bh_, Wl, H, None,                   # «Ready» и факты; дело — в busy
                           [t_.strip() for t_ in line.split("    ") if t_.strip()] + ["H: keys"], scale=FS)
+            qh_ = UI.queue_height(qq_, FS) if qq_ is not None else 0     # очередь — над строкой состояния
+            qbar['rects'] = UI.queue_panel(view, 0, H - bh_, Wl, qq_, FS) if qh_ else []
+            qbar['h'] = qh_
             if not nav_early:
-                draw_nav(view, Wl, bh_, img.shape)
+                draw_nav(view, Wl, bh_ + qh_, img.shape)
+            m.__dict__['_last_msg'] = msg
             if msg and time.monotonic() - msg_t < 5:
-                UI.toast(view, msg, Wl / 2, H - bh_ - 20, FS, 'err' if msg.startswith('[E') else 'ok', Wl - 60)
+                UI.toast(view, msg, Wl / 2, H - bh_ - qh_ - 20, FS, 'err' if msg.startswith('[E') else 'ok', Wl - 60)
             items = car_items()
             selk_ = len(m._regions) if m._pending else m._sel
             sel_ = car['order'].index(selk_) if selk_ in car['order'] else None
@@ -2650,6 +2708,10 @@ def _run(m, fullscreen=False, _keys=None):
                 on_mouse(*key[1:]); key = -1
             elif isinstance(key, tuple) and key[0] == 'call':  # тест: сделать что-то, как кнопкой
                 key[1](); key = -1
+            elif isinstance(key, tuple) and key[0] == 'qwait':   # тест: дождаться очереди
+                if '_queue' in m.__dict__:
+                    m._queue.wait(key[1] if len(key) > 1 else None)
+                key = -1
             elif isinstance(key, tuple) and key[0] == 'wiz':   # тест: кнопка мастера Prepare
                 wiz['click'] = key[1]; key = -1
             elif isinstance(key, tuple):                  # тест: щелчок мышью (x, y)
@@ -2659,6 +2721,19 @@ def _run(m, fullscreen=False, _keys=None):
             continue
         while clicks:                                     # щелчок по полю — ввод значения; по картинке — направляющие
             c_ = clicks.pop(0)
+            if c_[0] == 'queue':                                    # панель очереди: x, Stop all, остальное — список
+                if c_[1] == 'stop':
+                    j_ = next((j_ for j_ in m.queue.jobs if j_.id == c_[2]), None)
+                    if j_ is not None and m.queue.stop(j_):
+                        msg = f"Stopping: {j_.title}" + (" (after the current frame)" if j_.lane == 'inst' else "")
+                elif c_[1] == 'all':
+                    n_ = len(m.queue.active())
+                    m.queue.stop_all()
+                    msg = f"Stopping all {n_} job{'s' if n_ != 1 else ''} of the queue"
+                elif c_[1] == 'menu':
+                    menu_do("Queue")
+                msg_t = time.monotonic()
+                continue
             if c_[0] == 'scroll':                                   # тачпад: увеличенный кадр едет за пальцами
                 if zm['z'] > 1 and zm['c'] is not None:
                     Wl_ = W - SM.CAR_W
@@ -2875,11 +2950,26 @@ def _run(m, fullscreen=False, _keys=None):
             if keys is None and cv2.getWindowProperty(WIN, cv2.WND_PROP_VISIBLE) < 1:
                 break
             try:
-                m._keepalive()               # простой: запрос «на связи», чтобы Windows не усыпляла USB
+                if not qbusy():
+                    m._keepalive()           # простой: запрос «на связи», чтобы Windows не усыпляла USB
             except MicroControlError as e:
                 msg, msg_t = str(e), time.monotonic()
             continue
         if exit_key(key):                                 # Shift+Esc / Ctrl+Esc — выйти
+            q_ = m.__dict__.get('_queue')
+            if q_ is not None and q_.active():            # очередь не кончилась: ждать, остановить или пусть идёт
+                if keys is not None:
+                    q_.wait()
+                else:
+                    from . import dialogs as D
+                    r_ = D.choose("The queue is not done", [j_.line() for j_ in q_.active()], None,
+                                  ("Keep the window", "Stop all and exit", "Exit, the queue goes on"),
+                                  extra="The queue goes on without the window too (m.queue): m.close() stops it")
+                    if r_ is None or r_[0] == "Keep the window":
+                        continue
+                    if r_[0] == "Stop all and exit":
+                        q_.stop_all()
+                        q_.wait(15)
             break
         ud_ = undo_key(key)
         if ud_:                                           # Ctrl+Z — отменить, Ctrl+Y / Ctrl+Shift+Z — вернуть
@@ -2929,10 +3019,14 @@ def _run(m, fullscreen=False, _keys=None):
             continue
         raw = chr(key) if 0 <= key < 128 else ''
         ch = raw.lower()
+        if qbusy() and (key in LEFT or key in RIGHT or key in UP or key in DOWN or key in PGUP or key in PGDN
+                        or key in (13, 10) or (ch and ch in 'eqfkliwoadm 12') or raw in ('0', ')')):
+            msg, msg_t = "The instrument is busy: " + QBUSY, time.monotonic()
+            continue
         ax = m._screen_axes()
         (ah, sh), (av, sv) = ax['h'], ax['v']
         sh, sv = (-sh if m.arrows_flip_x else sh), (-sv if m.arrows_flip_y else sv)   # только клавиши
-        hold = live.hold() if live is not None else None
+        hold = live.hold() if live is not None and not qbusy() else None   # очередь снимает: камера — её
         if hold:
             hold.__enter__()
         try:

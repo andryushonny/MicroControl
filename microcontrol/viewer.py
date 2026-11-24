@@ -1872,7 +1872,9 @@ def _view_one(folder, fullscreen, keys, car):
         UI.panel(img, 0, Hv - hb, Wv, Hv - sbh, 0.82)       # над ней: клавиши этого режима
         for k_, h_ in enumerate(hl):
             UI.keys_line(img, h_, 12, Hv - hb + 6 + (k_ + 1) * (th_ + 12) - 4, fs, Wv - 10)
-        UI.status_bar(img, 0, Hv - sbh, Wv, Hv, None, [mode, f"{len(sc.st)} frames"], scale=0.5)
+        from .jobs import summary_all as _qsum
+        qs_ = _qsum()                                      # очередь окна микроскопа идёт и здесь: видно, что в фоне
+        UI.status_bar(img, 0, Hv - sbh, Wv, Hv, None, [mode, f"{len(sc.st)} frames"] + ([qs_] if qs_ else []), scale=0.5)
         import time as _t
         if st['msg'] != st.get('_lm'):
             st['_lm'], st['_lt'] = st['msg'], _t.monotonic()

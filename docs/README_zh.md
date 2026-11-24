@@ -2,7 +2,7 @@
 
 **用 Python 控制 Optosky ATR8300 拉曼显微镜：扫描基底，把它拼接成一张图，叠加光刻网格，选出需要的方格并导出给 AutoCAD。**
 
-**作者：** A. Lyapeikov, S. Domenko · **版本：** 0.24.0 · English: [README.md](../README.md) · Русский: [README_ru.md](README_ru.md) · PDF: [中文](MicroControl_zh.pdf) · 完整技术参考：[中文](reference_zh.md)、[EN](reference_en.md)、[RU](reference_ru.md)
+**作者：** A. Lyapeikov, S. Domenko · **版本：** 0.25.0 · English: [README.md](../README.md) · Русский: [README_ru.md](README_ru.md) · PDF: [中文](MicroControl_zh.pdf) · 完整技术参考：[中文](reference_zh.md)、[EN](reference_en.md)、[RU](reference_ru.md)
 
 ![扫描查看器：方格的红色网格、选中的方格（绿色）、右侧的样品列表](img/view.jpg)
 
@@ -45,7 +45,7 @@ m.close()
 
 ![手动模式](img/manual.jpg)
 
-`m.manual()` 打开实时相机画面。用方向键移动（按一次 = 一帧），用 `E` / `Q` 对焦（或 `F` —— 自动对焦）。字母用于操作：`L` 照明、`I` 激光、`W` 白平衡、`R` 标尺、`S`（按两次）在窗口内拍摄并拼接、`V` 在查看器中打开结果。
+`m.manual()` 打开实时相机画面。用方向键移动（按一次 = 一帧），用 `E` / `Q` 对焦（或 `F` —— 自动对焦）。字母用于操作：`L` 照明、`I` 激光、`W` 白平衡、`R` 标尺、`S` 将拍摄放入队列（后台 quick 拼接；队列在底部）、`V` 在查看器中打开结果。
 
 - **一个窗口，四个步骤。** 顶部栏显示当前位置 —— **1 Overview › 2 Pick areas › 3 Detail › 4 Export**（点击步骤查看要做什么）—— 以及主要按钮：**New area**、**Scan area**（拍摄 + 拼接）、**Export**（AutoCAD 图纸：所选区域的 DWG + DXF）、**Settings**（步长、曝光、对焦点）。
 - **地图**（右上；`Tab` —— 放大地图，相机移到角落）：所有已拍内容都在其真实位置（10x 在 50x 之下、50x 在 100x 之下），区域轮廓，以及黄色框 —— 相机当前位置。**点击地图 —— 载物台开过去**；**在地图上拖动 —— 新区域**（用当前物镜）；**`Ctrl`+拖动 —— 自由框**，完全按所画位置（框住晶体），不吸附到方格；滚轮 —— 缩放；右键拖动 —— 移动地图；双击已拍区域 —— 在查看器中打开。
@@ -246,6 +246,7 @@ T = T_0 + t\,N,
 | `F` · `K` | 自动对焦 · 把此处的 $Z$ 记为对焦点 |
 | Ctrl+点击卡片 · 在选区上 Shift+拖动 | 标记以 Merge / Minus / Overlap / Group / Ungroup · 移动选区 |
 | 菜单 **Scans**（已选选区） · 物镜标签 `… 100x, draft` | 其拍摄按时间顺序：View、**Make main**（地图、查看器和导出使用它） · 无物镜（draft）的选区不拍摄 |
+| Scan area / `S` · Ctrl+单击卡片 · 底部进度栏、菜单 **Queue** | 所选选区的拍摄进入队列（多个：Ctrl+单击其卡片）；仪器上依次拍摄，quick 拼接在其他核心后台进行；窗口保持可用 · `x` 停止任务，Stop all；整个队列：all done in ~T；移动载物台的按键要等仪器空闲 |
 | Scan area · **Stitch**（顶部按钮） | 拍摄 + quick 拼接（快速概览，不可编辑、不导出） · 所选选区的 quality 拼接：用于图纸的精确平边图像，需要时补拍；只有它们进入导出 |
 | 在地图上 Ctrl+拖动 · 任务进行中按 `Esc` | 当前物镜的草稿框（晶体）：留有回差余量，边落在电机步上；Scan area 拍摄它；选中概览 + Scan area —— 拍其中所有此类框 · 停止任务（或进度条上的 Stop） |
 | `1`、`2` | 选区的角点 |

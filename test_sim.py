@@ -2655,3 +2655,52 @@ m.close()
 print(f"Quick after the scan (reduced frames, outline only in the drawing); pixel by the crosses {rc.info['pixel_um']:.6f} "
       f"(true {w.px_um:.6f}); quality stitch: blurry frame re-shot, distances off by {dmax_:.2f} px, "
       f"{err_um:.3f} um over {span_:.0f} um, picture in the drawing by the stage: OK")
+
+
+# ------------------------------------------------------------------ 58. Очередь: съёмки подряд (прибор один), quick-сшивки в фоне на ядрах, остановка любой задачи, окно живёт
+import microcontrol.manual as M
+from microcontrol import jobs as J, quality as QQ
+m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp()); m.focus(); fw, fh = m.frame_size
+for x0 in (0, 6, 12):                                                  # три выделения
+    m.area = mc.Area(x0 * fw, 0, (x0 + 3) * fw, 2 * fh); m.scan(stitch=None)
+uids = [r['uid'] for r in m._regions]
+q = m.queue
+# 1) три съёмки: на приборе по одной, quick-сшивка предыдущей идёт на ядрах, пока снимается следующая
+js = [q.scan(u) for u in uids]
+seen, tl = set(), []
+while q.active():
+    seen.add(tuple(sorted(j.lane for j in js if j.state == 'running')))
+    tl.append(q.total_left()); time.sleep(0.03)
+assert all(j.state == 'done' and QQ.stitched_as(j.folder) == 'quick' for j in js), [(j.state, j.error) for j in js]
+assert ('cpu', 'inst') in seen, seen                                   # сшивка шла во время съёмки
+assert not any(s_.count('inst') > 1 for s_ in seen), seen               # прибор — один
+assert max(tl) > 0 and tl[-1] < max(tl), tl[:5]
+print("  queue lanes seen:", sorted(seen), "  total left at start:", J.tm(max(tl)))
+# 2) остановить идущую съёмку (после кадра: снятое цело) и ждущую (убрана, не начиналась)
+a_, b_ = q.scan(uids[0]), q.scan(uids[1])
+while not (a_.state == 'running' and a_.lane == 'inst' and a_.frac > 0.2):
+    time.sleep(0.01)
+assert q.inst_busy() and b_.state in ('queued', 'waiting')
+q.stop(b_); q.stop(a_); assert q.wait(60)
+assert a_.state == 'stopped' and b_.state == 'stopped' and b_.folder is None, (a_.state, b_.state, b_.folder)
+assert 0 < J.n_frames(a_.folder) < J.n_frames(js[0].folder), (J.n_frames(a_.folder), J.n_frames(js[0].folder))
+# 3) сшивка в фоне (отдельный процесс) останавливается сразу; прежняя сшивка цела
+P0 = open(os.path.join(js[2].folder, 'join', 'positions_all.csv')).read()
+c_ = q.stitch(js[2].folder, 'quality')
+while c_.state != 'running' or c_.frac < 0.05:
+    time.sleep(0.02)
+t0_ = time.monotonic(); q.stop(c_); assert q.wait(10)
+assert c_.state == 'stopped' and time.monotonic() - t0_ < 6, (c_.state, c_.error)
+assert QQ.stitched_as(js[2].folder) == 'quick'
+d_ = q.stitch(js[2].folder, 'quality'); q.wait(); assert d_.state == 'done' and QQ.stitched_as(js[2].folder) == 'quality', d_.error
+# 4) окно: S ставит съёмку в очередь и окно живёт; стрелки во время съёмки не двигают столик; конец — дождаться
+m._test_async, m._sel = True, 2
+msgs = []
+M.run(m, fullscreen=False, _keys=[-1, ord('s'), -1, 2424832, -1, ('call', lambda: msgs.append(m._last_msg)), -1, -1, ('qwait',), -1])
+assert msgs and 'busy' in msgs[0], msgs
+assert q.jobs[-1].kind == 'scan' and q.jobs[-1].state == 'done' and q.jobs[-1].uid == uids[2]
+M.run(m, fullscreen=False, _keys=[-1, ord('s'), -1, 2424832, -1, -1])   # выход ждёт очередь
+assert not q.active() and q.jobs[-1].state == 'done'
+m.close()
+print("Queue: scans one after another at the instrument, quick stitches in the background on other cores; any job "
+      "stops (a scan after its frame, a waiting one is removed, a stitch process at once); the window lives: OK")

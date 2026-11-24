@@ -85,8 +85,9 @@ def ask(title, label, value=''):
     return out.get('r')
 
 
-def checklist(title, rows, checked, header=None, button="Export"):
-    """Список с галочками -> [True / False] по строкам или None (отмена)."""
+def checklist(title, rows, checked, header=None, button="Export", kids=None):
+    """Список с галочками -> [True / False] по строкам или None (отмена). kids — {строка: [строки внутри неё]}:
+    галочка строки ставит / снимает и все вложенные (потом их можно поменять по одной)."""
     import tkinter as tk
     root = _root()
     w = _win(root, title)
@@ -97,9 +98,14 @@ def checklist(title, rows, checked, header=None, button="Export"):
     fr = tk.Frame(w)
     fr.pack(fill='both', expand=True, padx=10, pady=6)
     vs = []
-    for r, c in zip(rows, checked):
+
+    def toggled(i):
+        for j in (kids or {}).get(i, ()):
+            vs[j].set(vs[i].get())
+    for i, (r, c) in enumerate(zip(rows, checked)):
         v = tk.BooleanVar(value=bool(c))
-        tk.Checkbutton(fr, text=r, variable=v, font=('Consolas', 10), anchor='w').pack(fill='x')
+        tk.Checkbutton(fr, text=r, variable=v, font=('Consolas', 10), anchor='w',
+                       command=lambda i=i: toggled(i)).pack(fill='x')
         vs.append(v)
 
     def ok(*_):

@@ -1834,8 +1834,8 @@ class Microscope:
             if not regs and all(rg.get('kind') in ('group', 'draft') for rg in regs_all
                                 if _obj(self, rg) == self.objective):
                 if any(rg.get('kind') == 'draft' for rg in regs_all):
-                    raise SafetyError('E706', "Only drafts here: a draft is a sketch and is not scanned. Click its "
-                                              "'draft' chip (or merge it with a selection) to make it an area for "
+                    raise SafetyError('E706', "Only selections without an objective (draft) here: they are not "
+                                              "scanned. Click the 'draft' chip on a card to give it "
                                               f"{self.objective}x, then scan.")
             if not regs:
                 objs = sorted({_obj(self, rg) for rg in regs_all if rg.get('kind') not in ('group', 'draft')})

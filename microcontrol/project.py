@@ -196,7 +196,13 @@ class Selection:
 
     @property
     def latest(self):
+        """Основная съёмка: выбранная (Scans -> Make main), иначе последняя."""
         s = self.scans
+        mn = self.data.get('main')
+        if mn:
+            for x in s:
+                if os.path.basename(x.folder) == mn:
+                    return x
         return s[-1] if s else None
 
     def view(self):
@@ -433,12 +439,19 @@ def latest_scans(sample_folder):
             keep = {os.path.abspath(sel_folder(sample_folder, r)) for r in regs if 'num' in r}
         except (OSError, ValueError):
             keep = None
+    main = {}
+    try:
+        main = {os.path.abspath(sel_folder(sample_folder, r)): r['main'] for r in regs if r.get('main')}
+    except Exception:
+        pass
     for sd in sorted(glob.glob(os.path.join(sample_folder, 'selections', 'S*'))):
         if keep is not None and os.path.abspath(sd) not in keep:
             continue
         v = [s for s in sorted(glob.glob(os.path.join(sd, 'scans', '*'))) if is_scan(s)]
+        mn = main.get(os.path.abspath(sd))                 # основная (выбрана руками) — вместо последней
+        pick = [s for s in v if os.path.basename(s) == mn] if mn else []
         if v:
-            out.append(v[-1])
+            out.append(pick[0] if pick else v[-1])
     return out
 
 

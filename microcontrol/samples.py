@@ -309,7 +309,7 @@ def reorder(m, src, dst, after=False, save=True):
 def title(m, k):
     """«Selection 3» или «Group 4» (или имя, если дали)."""
     rg = m._regions[k] if k < len(m._regions) else m._pending
-    kind_ = {'group': 'Group', 'draft': 'Draft'}.get(rg.get('kind'), 'Selection')
+    kind_ = 'Group' if rg.get('kind') == 'group' else 'Selection'      # черновик — выделение без объектива
     return rg.get('name') or f"{kind_} {num(m, k)}"
 
 

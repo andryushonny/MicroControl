@@ -64,7 +64,8 @@ HELP = ["Shift+Esc: Exit (or close the window)", "P: Hide / show the left panel"
         " AutoCAD: DWG + DXF), Settings",
         "Selections are layers: Ctrl+click cards to mark them, then Merge / Minus / Overlap / Group / Ungroup above the list",
         "The eye on a card hides the selection on the maps (and shows it again); Show all above the list",
-        "Squares selected in the view (M) become Drafts, one per figure   Shift+drag over a selection: move it",
+        "Squares selected in the view (M) become selections without an objective (draft), one per figure;"
+        " the objective chip on a card goes 4x ... 100x, draft   Shift+drag over a selection: move it",
         "T: Turn the camera picture by 180 degrees (remembered)   \\: Turn the map by 90 degrees anticlockwise (remembered)",
         "[ / ]: Arrows left-right / up-down the other way; the mini map always follows the arrows (remembered)",
         "O: check with the camera which way the picture moves",
@@ -925,12 +926,17 @@ def _run(m, fullscreen=False, _keys=None):
         rg_ = m._regions[k]
         if rg_.get('kind') == 'group':
             return "A group has no objective"
-        if rg_.get('kind') == 'draft':                      # черновик — в выделение (обратно нельзя)
+        if rg_.get('kind') == 'draft':                      # без объектива -> объектив, что стоит (или следующий)
             return draft_to_selection(k)
         if Selection(m.sample, rg_).latest:
             return f"{SM.title(m, k)} is already scanned with {SM.obj(m, rg_)}x: mark a new selection for another objective"
-        from .layers import next_objective_of
-        ok_, msg_ = next_objective_of(m, k, sorted(OBJECTIVES))
+        from .layers import next_objective_of, to_draft
+        objs_ = sorted(OBJECTIVES)
+        if SM.obj(m, rg_) == objs_[-1]:                     # после самого крупного — draft (без объектива)
+            msg_ = to_draft(m, k)
+            SM.persist(m)
+            return msg_
+        ok_, msg_ = next_objective_of(m, k, objs_)
         if ok_:
             SM.persist(m)
         return msg_
@@ -1073,7 +1079,7 @@ def _run(m, fullscreen=False, _keys=None):
                 cv2.circle(mp, (int(cx_), int(cy_)), 2, SM.col(m, k_), -1, cv2.LINE_AA)
                 b_ = (cx_ - 6, cy_ - 6, cx_ + 6, cy_ + 6)
             mine_ = anc_(k_) | {k_}
-            lab_.append((f"Draft {SM.num(m, k_)}" if m._regions[k_].get('kind') == 'draft' else
+            lab_.append((f"{SM.num(m, k_)} draft" if m._regions[k_].get('kind') == 'draft' else
                          f"{SM.num(m, k_)}  {SM.obj(m, m._regions[k_])}x", b_, SM.col(m, k_),
                          [q_ for k2, q_ in boxes_.items() if k2 not in mine_]))
         nav.labels(mp, lab_, [(inset[0] - mr[0], inset[1] - mr[1], inset[2] - mr[0], inset[3] - mr[1])] if nv['big'] else [])
@@ -1146,8 +1152,8 @@ def _run(m, fullscreen=False, _keys=None):
                 hd_ = SM.hidden(m, k)
                 items.append(dict(title=SM.title(m, k), obj="draft", color=SM.col(m, k), chosen=k in car['multi'],
                                   confirm=car['confirm'] == k, depth=depth, hidden=bool(reg.get('hidden')),
-                                  muted=hd_, lines=[mm_ + ", from the view (M)" + (f", grid 1/{reg['sub']}" if reg.get('sub') else ""),
-                                                    f"click 'draft': make it a Selection ({m.objective}x)" if not hd_
+                                  muted=hd_, lines=[mm_ + (", from the view (M)" if reg.get('src') else "") + (f", grid 1/{reg['sub']}" if reg.get('sub') else ""),
+                                                    f"no objective: click 'draft' to scan it with {m.objective}x" if not hd_
                                                     else "hidden on the maps"]))
                 order.append(k)
                 continue
@@ -1269,22 +1275,38 @@ def _run(m, fullscreen=False, _keys=None):
                 cv2.line(img, tuple(np.int32(np.round(p_[0]))), tuple(np.int32(np.round(p_[1]))), (60, 60, 255), 1, cv2.LINE_8)
         if px_per_cell >= 5 and (hi_ - lo_).max() <= 400:
             lines(ov_, 1, lo_[0], hi_[0], lo_[1], hi_[1])
-        if rsel is not None and rsel.get('kind') != 'group':
-            fac_ = list(rsel.get('factors') or [])
-            M_ = int(np.prod(fac_ + [rsel['sub']])) if rsel.get('sub') else (LT.level(rsel) if fac_ else 1)
-            if M_ > 1 and px_per_cell / M_ >= 4:
-                fine_ = np.zeros_like(mp)
-                g_ = _gm(m, rsel)
-                b_ = np.array(g_.bounds).reshape(2, 2)
-                uvr_ = LT.to_uv(L_, np.array([b_[0], (b_[1][0], b_[0][1]), b_[1], (b_[0][0], b_[1][1])]))
-                a0, b0 = np.floor(uvr_.min(0) * M_).astype(int)
-                a1, b1 = np.ceil(uvr_.max(0) * M_).astype(int)
-                if max(a1 - a0, b1 - b0) <= 600:
-                    lines(fine_, M_, a0, a1, b0, b1)
-                    mk_ = np.zeros(mp.shape[:2], np.uint8)    # только внутри выделения
-                    for ext_, hs_ in UI.geom_shapes(g_, nav.to_px):
-                        cv2.fillPoly(mk_, [np.int32(np.round(ext_))], 255, cv2.LINE_8)
-                    cv2.copyTo(fine_, mk_, ov_)
+        own_ = np.zeros_like(mp)                                     # сетка каждого выделения из клеток — его цветом
+        for k_r, r_ in enumerate(m._regions):
+            if r_.get('kind') == 'group' or not r_.get('cells') or SM.hidden(m, k_r):
+                continue
+            fac_ = list(r_.get('factors') or [])
+            N_ = LT.level(r_)
+            M_ = N_ * int(r_.get('sub') or 1)
+            if px_per_cell / M_ < 4:
+                continue
+            g_ = _gm(m, r_)
+            b_ = np.array(g_.bounds).reshape(2, 2)
+            pb_ = nav.to_px(np.array([b_[0], b_[1]]))
+            if pb_[:, 0].max() < 0 or pb_[:, 1].max() < 0 or pb_[:, 0].min() > w_ or pb_[:, 1].min() > h_:
+                continue
+            uvr_ = LT.to_uv(L_, np.array([b_[0], (b_[1][0], b_[0][1]), b_[1], (b_[0][0], b_[1][1])]))
+            a0, b0 = np.floor(uvr_.min(0) * M_).astype(int)
+            a1, b1 = np.ceil(uvr_.max(0) * M_).astype(int)
+            if max(a1 - a0, b1 - b0) > 600:
+                continue
+            fine_ = np.zeros_like(mp)
+            lines(fine_, M_, a0, a1, b0, b1)
+            fine_[fine_.any(2)] = SM.col(m, k_r)
+            mk_ = np.zeros(mp.shape[:2], np.uint8)                   # только внутри выделения
+            for ext_, hs_ in UI.geom_shapes(g_, nav.to_px):
+                cv2.fillPoly(mk_, [np.int32(np.round(ext_))], 255, cv2.LINE_8)
+                for h2_ in hs_:
+                    cv2.fillPoly(mk_, [np.int32(np.round(h2_))], 0, cv2.LINE_8)
+            cv2.copyTo(fine_, mk_, own_)
+            cv2.copyTo(np.zeros_like(mp), mk_, ov_)                  # внутри — своя сетка, не общая
+        ow_ = own_.any(2)
+        if ow_.any():
+            mp[ow_] = cv2.addWeighted(mp, 0.35, own_, 0.65, 0)[ow_]
         on_ = ov_.any(2)
         if on_.any():
             mp[on_] = cv2.addWeighted(mp, 0.6, ov_, 0.4, 0)[on_]
@@ -1377,7 +1399,7 @@ def _run(m, fullscreen=False, _keys=None):
         bx0, by0 = np.floor((x0_ - mg_) / ms_) * ms_, np.floor((y0_ - mg_) / ms_) * ms_
         bx1, by1 = np.ceil((x1_ + mg_) / ms_) * ms_, np.ceil((y1_ + mg_) / ms_) * ms_
         fw_, fh_ = m.frame_size
-        r_ = dict(uid=__import__('uuid').uuid4().hex, num=new_num(m), kind='draft', free=True, fw=fw_, fh=fh_,
+        r_ = dict(uid=__import__('uuid').uuid4().hex, num=new_num(m), obj=m.objective, free=True, fw=fw_, fh=fh_,
                   pts=[], thumbs=[], margin_um=round(mg_, 2))
         set_geom(m, r_, _box(bx0, by0, bx1, by1))
         try:
@@ -1390,7 +1412,7 @@ def _run(m, fullscreen=False, _keys=None):
         SM.persist(m)
         inside_ = (f" Inside {SM.title(m, gp_)}: choose it and Scan area to shoot all boxes in it with {m.objective}x."
                    if gp_ is not None else "")
-        return (f"Draft {r_['num']} (free box): {size_txt(x1_ - x0_, y1_ - y0_)} drawn, "
+        return (f"Selection {r_['num']} (free box, {m.objective}x): {size_txt(x1_ - x0_, y1_ - y0_)} drawn, "
                 f"{size_txt(bx1 - bx0, by1 - by0)} with {mg_:.1f} um each side for the {src_}; edges on motor steps."
                 f" Scan area shoots it with {m.objective}x.{inside_}")
 
@@ -1463,6 +1485,15 @@ def _run(m, fullscreen=False, _keys=None):
         SM.drive_to(m, float(S[0]), float(S[1]), z_)
         return f"At X {S[0] - m._off['x']:.0f}, Y {S[1] - m._off['y']:.0f} um"
 
+    def _chain(k_):
+        """Выделение и его родители (от верхнего к нему): индексы."""
+        out_, seen_ = [k_], {k_}
+        while True:
+            p_ = SM.parent(m, out_[0])
+            if p_ is None or p_ in seen_:
+                return out_
+            out_.insert(0, p_); seen_.add(p_)
+
     def export_drawing():
         """Export: окно с галочками — какие снятые участки идут в чертёж (выбор запоминается), затем один
         чертёж образца для AutoCAD (DXF / DWG): картинки на своих местах, контуры, кресты, номера."""
@@ -1488,11 +1519,17 @@ def _run(m, fullscreen=False, _keys=None):
             q_ = sc_ is not None and Q.is_quality(sc_.folder)
             return f"{SM.title(m, k_):<14} {SM.obj(m, r_):>4}x   " + \
                 (f"quality {shot_of(k_)}" if q_ else f"quick {shot_of(k_)}: outline only (Stitch: quality)")
-        rows = [row_(k_) for k_ in cand]                    # отмечено: что выбрано в прошлый раз, иначе — снятое
+        cand = sorted(cand, key=lambda k_: [m._regions[j_]['num'] for j_ in _chain(k_)])   # вложенное — под своим
+        rows = [("   " * (len(_chain(k_)) - 1)) + row_(k_) for k_ in cand]   # отмечено: что в прошлый раз, иначе — снятое
+        kids_ = {}                                          # галочка выделения — и всё, что внутри него
+        for i_, k_ in enumerate(cand):
+            for j_, k2_ in enumerate(cand):
+                if k2_ != k_ and k_ in _chain(k2_):
+                    kids_.setdefault(i_, []).append(j_)
         dflt = [m._regions[k_].get('export', bool(m._regions[k_].get('kind') != 'draft' and shot_of(k_))) for k_ in cand]
         try:
-            got = D.checklist("Export: which areas go into the drawing", rows, dflt,
-                              header="Area            Obj.  Scan")
+            got = D.checklist("Export: which areas go into the drawing (a tick takes what is inside too)", rows, dflt,
+                              header="Area            Obj.  Scan", kids=kids_)
         except (RuntimeError, ImportError):                # нет tkinter (тест): как отмечено
             got = dflt
         if got is None:
@@ -1808,6 +1845,22 @@ def _run(m, fullscreen=False, _keys=None):
                 if r_:
                     sm_.project.description, sm_.description = r_
                     msg = "Descriptions saved"
+            elif item == "Scans" and m._sel is not None and m._sel < len(m._regions) and \
+                    m._regions[m._sel].get('kind') not in ('group',) and scan_history(m._sel):
+                k_ = m._sel
+                rows, sc_ = scan_history(k_)
+                cur_ = next((i_ for i_, x_ in enumerate(sc_) if x_ == P_.Selection(m.sample, m._regions[k_]).latest.folder), len(sc_) - 1)
+                r_ = D.choose(f"Scans of {SM.title(m, k_)} (oldest first)", rows, cur_, ("View", "Make main"),
+                              header="Date              Stitch    Frames  Seams, um  Picture, um         ",
+                              extra="The main scan goes to the maps, the view and the export (by default - the newest)")
+                if r_ and r_[0] == "View":
+                    m._last_view, m._view_pick = sc_[r_[1]], True
+                    open_view()
+                elif r_ and r_[0] == "Make main":
+                    m._regions[k_]['main'] = os.path.basename(sc_[r_[1]])
+                    SM.persist(m)
+                    car['shot_t'] = -9
+                    msg = f"{SM.title(m, k_)}: main scan {os.path.basename(sc_[r_[1]])} (maps, view, export)"
             elif item == "Scans":
                 lst = m.list()
                 if not lst:
@@ -1827,6 +1880,30 @@ def _run(m, fullscreen=False, _keys=None):
         finally:
             if live is not None:
                 live.paused = False
+
+    def scan_history(k_):
+        """Съёмки выделения k (старые -> новые): (строки для списка, папки) или None."""
+        from .project import Selection as _Sel
+        from . import quality as Q
+        scs_ = _Sel(m.sample, m._regions[k_]).scans
+        if not scs_:
+            return None
+        main_ = m._regions[k_].get('main')
+        rows_, fs_ = [], []
+        for x_ in scs_:
+            b_ = os.path.basename(x_.folder)
+            md_ = Q.stitched_as(x_.folder) or "-"
+            q_ = Q.info(x_.folder) if md_ == 'quality' else None
+            try:
+                nf_ = json.load(open(os.path.join(x_.folder, 'meta.json'), encoding='utf-8')).get('frames', '')
+            except (OSError, ValueError):
+                nf_ = ''
+            sm_ = f"{q_['seam_um'][1]:.3f}" if q_ and q_.get('seam_um') else "-"
+            pic_ = f"{q_['size_um'][0]:.1f} x {q_['size_um'][1]:.1f}" if q_ and q_.get('size_um') else "-"
+            mk_ = "  <- main" if (main_ == b_ or (not main_ and x_ is scs_[-1])) else ""
+            rows_.append(f"{b_[:17]:<17} {md_:<9} {str(nf_):>6}  {sm_:>9}  {pic_:<18}{mk_}")
+            fs_.append(x_.folder)
+        return rows_, fs_
 
     def inner_of(rs_):
         """Области текущего объектива внутри выделения rs_ (на любой глубине; вложенные друг в друга — верхние)."""
@@ -1898,7 +1975,7 @@ def _run(m, fullscreen=False, _keys=None):
         ks = [k_ for k_, rg in enumerate(m._regions) if SM.obj(m, rg) == m.objective
               and rg.get('kind') not in ('group', 'draft') and (not only_ or rg['uid'] in only_)]
         if not ks:
-            msg = (f"Only drafts for {m.objective}x: click a draft's 'draft' chip to make it an area, then Scan area"
+            msg = (f"Only selections without an objective here: click the 'draft' chip on a card to give it {m.objective}x, then Scan area"
                    if any(r_.get('kind') == 'draft' for r_ in m._regions) else
                    f"No area for {m.objective}x: drag a rectangle on the map (or switch the objective, M)")
             return

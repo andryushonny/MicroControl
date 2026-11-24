@@ -117,14 +117,14 @@ class _Scene:
 
 HELP_V2 = "Arrows / drag: move  Wheel: zoom  0: whole  , / .: selection  H: all keys  Shift+Esc: exit"
 HELP_MODE = {
-    'look': "S: stitch (preview)  C: crosses  F: frames onto the crosses  N: numbers  T: level  M: select cells (Drafts)  2-5: finer grid of a selection  R: ruler  E: export",
+    'look': "S: stitch (preview)  C: crosses  F: frames onto the crosses  N: numbers  T: level  M: select cells (selections, draft)  2-9, 10: finer grid of a selection  R: ruler  E: export",
     'cross': "Click: cross exactly there (2 in a row = tilt)  Shift+click: snap to centre  Drag a mark: move  Right click: remove  Shift+C: again  F: frames onto the crosses  C / Esc: done",
     'select': "Click: square  Drag: box  Shift: unselect  Right click: remove a square (Shift: the whole area)  A: all  X: none  Esc: done",
     'stitch': "Click a seam dot: seam off/on  Click a frame: its row  Shift+click: its column  Arrows: 1 px  Shift+arrows: 10 px  Backspace: automatic  J: save",
     'paint': "Drag a rectangle: select all squares in it  Shift+drag: unselect  Click: one square  Right click: remove one (Shift: whole area)  A: all  X: none  Esc: done",
     'label': "Click a square, type its number X Y  Enter: set  Esc: done",
-    'ruler': "Click two points: the distance (a third click starts again)  Drag: move  R or Esc: off",
-    'refine': "Over a selection: 2-5 its finer grid (1: none), then M selects its cells: they become Drafts inside it",
+    'ruler': "R: point-point / line-line / point-line / off. Click the points: the distance (and the angle)  Drag: move  Esc: off",
+    'refine': "Over a selection: 2-9 its finer grid (1, 0 quickly: 1/10; 1: none), then M selects its cells: they become selections (draft) inside it",
 }
 HELP_V = ("S: stitch (preview)   C: crosses (2 in a row = tilt; right click = remove, Shift+C = again)   F: frames onto the crosses   M: select "
           "(click, box; Shift = unselect; right click = remove a square, Shift + right click = the whole area)   N: number squares (X Y)   "
@@ -431,7 +431,7 @@ def _view_one(folder, fullscreen, keys, car):
                     st['msg'] = delete_draft(mp_[k][1], mp_[k][2])
                     st['car_dirty'] = True
                 else:
-                    st['msg'] = "Draft: its squares are selected here (M); x on its card deletes it"
+                    st['msg'] = "Selection without an objective (draft): its squares are selected here (M); x on its card deletes it"
                 st['dirty'] = True
                 return
             k = mp_[k][1]
@@ -465,7 +465,7 @@ def _view_one(folder, fullscreen, keys, car):
         if r_ is None:
             return "This draft is gone already"
         cells_ = {tuple(c) for c in r_.get('cells') or []}
-        name_ = "The new draft" if r_.get('pending') else f"Draft {r_.get('num', '')}"
+        name_ = "The new selection" if r_.get('pending') else f"Selection {r_.get('num', '')}"
         f_ = subs[k_sub] if 0 <= k_sub < len(subs) else folder
         gone_ = 0
         if r_.get('factors'):                               # клетки подсетки выделения-родителя
@@ -569,7 +569,7 @@ def _view_one(folder, fullscreen, keys, car):
     def zoom(f, x=None, y=None):
         v = np.array([st['Wv'] / 2 if x is None else x, st['Hv'] / 2 if y is None else y], float)
         Mc = from_view(v)
-        st['s'] = min(8.0, max(1e-4, st['s'] * f))
+        st['s'] = min(32.0, max(1e-4, st['s'] * f))           # до 32 точек экрана на пиксель: клетки 1/10 видно
         c = Mc - R().T @ ((v - mid()) / st['s'])
         st['cx'], st['cy'] = c
 
@@ -725,15 +725,48 @@ def _view_one(folder, fullscreen, keys, car):
                           ("F: frames onto the crosses (exact)" if g.ready() else "C: mark 2-3 crosses, then F: frames onto the crosses (exact)"))
         st['switch'] = folder
 
-    def ruler_text(a=None, b=None):
-        """Подпись линейки: расстояние, мкм, и его проекции по осям картинки."""
-        if a is None:
-            if len(st['ruler']) < 2:
-                return ""
-            a, b = st['ruler']
+    RK_N = {'pp': 2, 'll': 4, 'pl': 3}                     # линейка: сколько точек у вида измерения
+    RK_NAME = {'pp': "point - point", 'll': "line - line", 'pl': "point - line"}
+
+    def ruler_geom(P):
+        """Измерение по точкам P (px мозаики) для вида st['rk'] -> dict(text, segs: отрезки для рисования) или None."""
+        rk = st.get('rk', 'pp')
         pc_ = sc.st.meta.get('pixel_size_cal')                # пиксель, откалиброванный по крестам (F)
-        d = (np.asarray(b, float) - np.asarray(a, float)) * (pc_ or px_um)
-        return f"{np.hypot(*d):.2f} um   (dx {d[0]:+.2f}, dy {d[1]:+.2f})" + ("" if pc_ else "  (pixel not calibrated: F)")
+        k_ = pc_ or px_um
+        tail_ = "" if pc_ else "  (pixel not calibrated: F)"
+        P = [np.asarray(p_, float) for p_ in P]
+        if rk == 'pp' and len(P) >= 2:
+            d = (P[1] - P[0]) * k_
+            return dict(text=f"{np.hypot(*d):.3f} um   (dx {d[0]:+.3f}, dy {d[1]:+.3f})" + tail_, segs=[(P[0], P[1])])
+
+        def foot(p, a, b):                                    # основание перпендикуляра из p на прямую ab
+            u = (b - a) / max(1e-9, np.hypot(*(b - a)))
+            return a + u * float((p - a) @ u), u
+        if rk == 'pl' and len(P) >= 3:
+            f_, u_ = foot(P[2], P[0], P[1])
+            d = np.hypot(*(P[2] - f_)) * k_
+            along = float((f_ - P[0]) @ u_) * k_
+            return dict(text=f"{d:.3f} um from the line   (foot {along:+.3f} um from its first point)" + tail_,
+                        segs=[(P[0], P[1]), (P[2], f_)], lines=[(P[0], P[1])])
+        if rk == 'll' and len(P) >= 4:
+            a1, b1, a2, b2 = P[:4]
+            u1 = (b1 - a1) / max(1e-9, np.hypot(*(b1 - a1)))
+            u2 = (b2 - a2) / max(1e-9, np.hypot(*(b2 - a2)))
+            ang = float(np.degrees(np.arccos(np.clip(abs(u1 @ u2), 0, 1))))
+            m2, m1 = (a2 + b2) / 2, (a1 + b1) / 2
+            f2, _ = foot(m2, a1, b1)                          # середина второго отрезка -> первая прямая
+            f1, _ = foot(m1, a2, b2)
+            d2, d1 = np.hypot(*(m2 - f2)) * k_, np.hypot(*(m1 - f1)) * k_
+            return dict(text=f"{(d1 + d2) / 2:.3f} um between the lines (at the middles: {d2:.3f} / {d1:.3f}), "
+                             f"angle {ang:.2f} deg" + tail_,
+                        segs=[(a1, b1), (a2, b2), (m2, f2), (m1, f1)], lines=[(a1, b1), (a2, b2)])
+        return None
+
+    def ruler_text(a=None, b=None):
+        """Подпись линейки (вид st['rk']): расстояние, мкм."""
+        P = st['ruler'] if a is None else [a, b]
+        r_ = ruler_geom(P)
+        return r_['text'] if r_ else ""
 
     def unseed():
         """Сетку поставили по решётке образца, а человек сам правит кресты или номера: номера, подставленные
@@ -1017,8 +1050,14 @@ def _view_one(folder, fullscreen, keys, car):
                     st['msg'] = f"Square {c} {'selected' if c in g.selected else 'unselected'}, total {len(g.selected)}"
                 elif st['mode'] == 'ruler':                 # линейка: точка ровно там, где щёлкнули
                     q_ = from_view((x + 0.5, y + 0.5))
-                    st['ruler'] = [q_] if len(st['ruler']) != 1 else st['ruler'] + [q_]
-                    st['msg'] = ruler_text() if len(st['ruler']) == 2 else "Ruler: click the second point"
+                    n_ = RK_N[st.get('rk', 'pp')]
+                    st['ruler'] = [q_] if len(st['ruler']) >= n_ else st['ruler'] + [q_]
+                    left_ = n_ - len(st['ruler'])
+                    st['msg'] = ruler_text() if not left_ else \
+                        (f"{RK_NAME[st.get('rk', 'pp')].capitalize()}: " +
+                         {('ll', 3): "the first line - its second point", ('ll', 2): "the second line - its first point",
+                          ('ll', 1): "the second line - its second point", ('pl', 2): "the line - its second point",
+                          ('pl', 1): "the point"}.get((st.get('rk', 'pp'), left_), "the next point"))
                 elif st['mode'] == 'label' and g.ready():
                     c = g.cell_at(from_view((x, y)))
                     X, Y = g.labels.get(c, g.name(*c))
@@ -1228,7 +1267,7 @@ def _view_one(folder, fullscreen, keys, car):
         return None
 
     def prof_res():
-        """Что показывать: закреплённые линии; мышь в окошке — последние; иначе — у места под мышью."""
+        """Что показывать: линии по 4 точкам (закреплены)."""
         if st.get('prof_pin') is not None:
             return st['prof_pin']
         hx, hy = st['hov']
@@ -1248,6 +1287,21 @@ def _view_one(folder, fullscreen, keys, car):
         if not (0 <= hx < Wv and 0 <= hy < Hv) and st.get('prof_pin') is None:
             return img
         img = img.copy()
+        if st.get('prof_pin') is None:                     # сначала 4 точки — потом графики
+            pts_ = list(st.get('prof_pts') or [])
+            if st.get('mouse') is not None and len(pts_) < 4:
+                pts_v = [to_view(q) for q in pts_] + [tuple(st['mouse'])]
+            else:
+                pts_v = [to_view(q) for q in pts_]
+            for i_, q_ in enumerate(pts_v):
+                UI.plus(img, q_[0], q_[1], PL_COL[0 if i_ < 2 else 1])
+            for k_, (i0_, i1_) in enumerate(((0, 1), (2, 3))):
+                if len(pts_v) > i1_:
+                    cv2.line(img, tuple(np.int32(np.round(pts_v[i0_]))), tuple(np.int32(np.round(pts_v[i1_]))),
+                             PL_COL[k_], 1, cv2.LINE_AA)
+            t_ = PROF_ASK[min(3, len(st.get('prof_pts') or []))] + f"  ({len(st.get('prof_pts') or [])} of 4)"
+            UI.toast(img, t_, Wv / 2, 40, 0.5, 'info', Wv - 40)
+            return img
         try:
             res = prof_res()
         except Exception as e_:
@@ -1482,19 +1536,37 @@ def _view_one(folder, fullscreen, keys, car):
                 return True
         return False
 
+    PROF_ASK = ("Profiles: click the first end of line A", "Profiles: click the second end of line A",
+                "Profiles: click the first end of line B", "Profiles: click the second end of line B")
+
+    def pl_from_pts(pts):
+        """Две линии профиля по 4 точкам (мозаика): A — точки 1-2, B — 3-4."""
+        P = np.vstack([np.asarray(q, float) for q in pts])
+        c = (P.min(0) + P.max(0)) / 2
+        r = int(max(8, float((P.max(0) - P.min(0)).max()) / 2 + 20))
+        reg = sc.render(c[0], c[1], 1.0, 2 * r + 1, 2 * r + 1)
+        d0 = P[1] - P[0]
+        res = dict(cross=False, c=c, L=float(np.hypot(*d0)) / 2, t=4, ang=float(np.arctan2(d0[1], d0[0])),
+                   segs=[[P[0].copy(), P[1].copy()], [P[2].copy(), P[3].copy()]], w=3.0, user=[None, None],
+                   reg=reg, org=c - r)
+        pl_fill(res)
+        return res
+
     def prof_click(x, y):
-        """Щелчок по карте (не по ручке): закрепить линии у креста под мышью; ещё раз у того же — открепить."""
-        res = pl_new(from_view((x + 0.5, y + 0.5)))
-        if st.get('prof_pin') is not None and (not res['cross'] or
-                                               np.hypot(*(res['c'] - st['prof_pin']['c'])) < 2):
-            st['prof_pin'] = None
-            st['msg'] = "Profile lines unpinned: they follow the mouse"
+        """Щелчок по карте (не по ручке): точки линий профиля — сначала 4 (концы A, концы B), потом графики;
+        линии уже есть — щелчок мимо ручек начинает новые."""
+        q_ = from_view((x + 0.5, y + 0.5))
+        if st.get('prof_pin') is not None:
+            st['prof_pin'], st['prof_pts'] = None, [q_]
         else:
-            res = dict(res, segs=[[np.asarray(q, float).copy() for q in sg] for sg in res['segs']], user=[None, None])
-            pl_fill(res)
-            st['prof_pin'] = res
-            st['msg'] = ("Pinned. Drag the line ends on the map to tilt them, the yellow edges in the window; "
-                         "the same lines are on the map of the manual mode. Click again: unpin")
+            st.setdefault('prof_pts', []).append(q_)
+        pts_ = st['prof_pts']
+        if len(pts_) >= 4:
+            st['prof_pin'], st['prof_pts'] = pl_from_pts(pts_[:4]), []
+            st['msg'] = ("Profiles built. Drag the line ends to tilt them, the yellow edges in the window; the same "
+                         "lines are on the map of the manual mode. A click elsewhere: 4 new points")
+        else:
+            st['msg'] = PROF_ASK[len(pts_)] + f"  ({len(pts_)} of 4)"
         pl_save()
         st['dirty'] = True
 
@@ -1726,11 +1798,27 @@ def _view_one(folder, fullscreen, keys, car):
         if st['box']:
             bx0, by0, bx1, by1, shb = st['box']
             cv2.rectangle(img, (bx0, by0), (bx1, by1), (0, 140, 255) if shb else yellow, 1)
-        if st['mode'] == 'ruler' and st['ruler']:            # линейка
-            a_ = to_view(st['ruler'][0])
-            b_ = to_view(st['ruler'][1]) if len(st['ruler']) == 2 else st.get('mouse')
-            q2 = st['ruler'][1] if len(st['ruler']) == 2 else (from_view(b_) if b_ is not None else None)
-            UI.ruler(img, a_, b_, ruler_text(st['ruler'][0], q2) if q2 is not None else "")
+        if st['mode'] == 'ruler' and st['ruler']:            # линейка: точки, отрезки, перпендикуляры, подпись
+            P_ = list(st['ruler'])
+            n_ = RK_N[st.get('rk', 'pp')]
+            if len(P_) < n_ and st.get('mouse') is not None:
+                P_ = P_ + [from_view(st['mouse'])]
+            r_ = ruler_geom(P_) if len(P_) >= n_ else None
+            cy_ = (0, 220, 255)
+            for p_ in P_:
+                u_ = to_view(p_)
+                UI.plus(img, u_[0], u_[1], cy_)
+            if r_ is None and len(P_) >= 2:                   # недостроено: отрезок по двум первым
+                UI.ruler(img, to_view(P_[-2]), to_view(P_[-1]), "")
+            if r_ is not None:
+                Hh_, Ww_ = img.shape[:2]
+                for a0_, b0_ in r_.get('lines', []):            # прямые — тонко через всё окно
+                    av_, bv_ = np.array(to_view(a0_)), np.array(to_view(b0_))
+                    dv_ = (bv_ - av_) / max(1e-9, np.hypot(*(bv_ - av_)))
+                    L2_ = 2 * (Ww_ + Hh_)
+                    cv2.line(img, tuple(np.int32(av_ - dv_ * L2_)), tuple(np.int32(av_ + dv_ * L2_)), (0, 150, 180), 1, cv2.LINE_8)
+                for k2_, (a0_, b0_) in enumerate(r_['segs']):
+                    UI.ruler(img, to_view(a0_), to_view(b0_), r_['text'] if k2_ == len(r_['segs']) - 1 else "")
         if st['mode'] == 'stitch' and (st.get('edit') or {}).get('z') is not None:   # швы: цвет по невязке
             ed_ = st['edit']
             z_, c_ = ed_['z'], np.array([sc.W / 2, sc.H / 2])
@@ -1855,7 +1943,7 @@ def _view_one(folder, fullscreen, keys, car):
                 if r_.get('kind') == 'draft' and (top_(r_) == k_ or (r_.get('pending') and f_cur_ == k_ and top_(r_) is None)):
                     new_ = bool(r_.get('pending'))
                     nc_ = len(r_.get('cells') or [])
-                    items_.append(dict(title=("Draft (new)" if new_ else f"Draft {r_.get('num', '')}"),
+                    items_.append(dict(title=("Selection (new)" if new_ else f"Selection {r_.get('num', '')}"),
                                        color=(235, 235, 235) if new_ else SM.color(int(r_.get('num', 1)) - 1),
                                        lines=[f"{nc_} square{'s' if nc_ != 1 else ''}, from the view (M)" +
                                               ("" if not new_ else "  - saved on closing")],
@@ -1869,6 +1957,34 @@ def _view_one(folder, fullscreen, keys, car):
     # история (Ctrl+Z / Ctrl+Y): после каждого действия разметка (кресты, сетка, квадраты, номера)
     # сравнивается с прежней; изменилась — пара (было, стало) в историю
     hist = car['hist']
+
+    def brush_now():
+        """Выбранные клетки -> выделения без объектива (draft) в sample.json сразу (не дожидаясь окна микроскопа)."""
+        if smp is None:
+            return
+        try:
+            from .layers import sync_brush
+            g.save(px_um)
+
+            class _SampleOnly:                              # то, что sync_brush берёт у микроскопа
+                pass
+            sh_ = _SampleOnly()
+            from . import project as PJ_
+            sh_._sample = sh_.sample = PJ_.sample_obj(folder)     # заново с диска: что там сейчас
+            fov_ = sc.st.meta.get('fov_um') or {}
+            sh_.frame_size = (float(fov_.get('x', 100.0)), float(fov_.get('y', 100.0)))
+            sh_.objective = sc.st.meta.get('objective') or 10
+            sh_._off = {'x': 0.0, 'y': 0.0, 'z': 0.0}
+            sh_.motor_step = float(sc.st.meta.get('motor_step_um') or 5.56)
+            sh_._area_seq = int(sh_._sample.data.get('seq', 0) or 0)
+            PJ_.load_regions(sh_)
+            r_ = sync_brush(sh_)
+            if r_:
+                PJ_.save_regions(sh_)
+                st['msg'] = r_ + " (in the list on the right)"
+                st['car_dirty'] = True
+        except Exception as e:
+            L.debug('VIW-009', f"Brush -> selections skipped: {e}")
 
     def g_sig():
         return (tuple(tuple(np.round(np.asarray(q, float), 3)) for q in g.cr.marks), tuple(g.cr.ij),
@@ -2000,7 +2116,7 @@ def _view_one(folder, fullscreen, keys, car):
             N_ = LT.level(r_)
             if [int(np.floor(u_ * N_)), int(np.floor(v_ * N_))] in r_['cells'] and (best_ is None or N_ > best_['N']):
                 best_ = dict(uid=r_['uid'], n=n_, N=N_, cells={tuple(c) for c in r_['cells']}, num=r_['num'],
-                             kind='the new Draft' if r_.get('pending') else ('Draft' if r_.get('kind') == 'draft' else 'Selection'),
+                             kind='the new Selection' if r_.get('pending') else 'Selection',
                              factors=(r_.get('factors') or []) + [n_])
         return best_
 
@@ -2016,7 +2132,7 @@ def _view_one(folder, fullscreen, keys, car):
             json.dump(d_, f_, indent=1)
 
     def set_refine(n):
-        """Клавиши 2–5 над выделением: его подсетка в n раз плотнее (1 — убрать)."""
+        """Клавиши 2–9 над выделением (1, затем 0 — 10): его подсетка в n раз плотнее (1 — убрать)."""
         L_ = lat_now()
         if L_ is None or st.get('hov') is None:
             st['msg'] = "The finer grid needs the lattice of the sample: mark the crosses and number two squares (C, N)"
@@ -2029,12 +2145,12 @@ def _view_one(folder, fullscreen, keys, car):
                 [int(np.floor(u_ * LT.level(r_))), int(np.floor(v_ * LT.level(r_)))] in r_['cells']]
         if not hit_:
             st['msg'] = ("Finer grid: first select lithography squares (M, they turn green), then put the mouse over "
-                         "them and press 2-5. Scanned rectangles have no cells: select squares inside them")
+                         "them and press 2-9 (1, 0: 1/10). Scanned rectangles have no cells: select squares inside them")
             return
         r_ = max(hit_, key=LT.level)
         old_ = rf_.get(r_['uid']) or {}
         write_refine(r_['uid'], n, old_.get('cells', []) if int(old_.get('n') or 0) == n else [])
-        kind_ = 'Draft' if r_.get('kind') == 'draft' else 'Selection'
+        kind_ = 'Selection'
         if r_.get('pending'):
             kind_ = 'The new draft'
         st['msg'] = (f"{kind_} {r_['num'] or ''}: grid 1/{n} inside it (cells {LT.pitch_text(lat_now(), LT.level(r_) * n)}); "
@@ -2062,7 +2178,7 @@ def _view_one(folder, fullscreen, keys, car):
         have_ = (have_ | cs_) if on else (have_ - cs_)
         write_refine(tg_['uid'], n_, have_)
         st['msg'] = (f"Grid 1/{M_} of {tg_['kind']} {tg_['num']}: {len(have_)} cells painted "
-                     f"(they become Drafts in the microscope window)")
+                     f"(they become selections in the microscope window)")
 
     def unpaint_refine(q, whole):
         """Правый щелчок по закрашенной клетке подсетки: убрать её (whole — всю связную область). -> bool."""
@@ -2153,7 +2269,8 @@ def _view_one(folder, fullscreen, keys, car):
         return img
 
     def draw_subgrids(img):
-        """Подсетки выделений (тонкие линии внутри их клеток) и клетки кисти в них (зелёные)."""
+        """Сетка каждого выделения из клеток — его цветом, внутри его клеток: края клеток и подсетка (2-5), если есть;
+        клетки кисти в подсетке — зелёные."""
         L_ = lat_now()
         if L_ is None:
             return
@@ -2162,7 +2279,7 @@ def _view_one(folder, fullscreen, keys, car):
         Hh, Ww = img.shape[:2]
         for r_ in regs_:
             n_ = int((rf_.get(r_['uid']) or {}).get('n') or r_.get('sub') or 1)
-            if n_ < 2 or not r_.get('cells'):
+            if not r_.get('cells') or r_.get('hidden') or len(r_['cells']) > 4000:
                 continue
             N_ = LT.level(r_)
             col_ = SM.color(r_['num'] - 1)
@@ -2196,8 +2313,8 @@ def _view_one(folder, fullscreen, keys, car):
                 UI.dashed_poly(img, ext_, (235, 235, 235), 2)
                 x_l, y_l = ext_[:, 0].min(), ext_[:, 1].min()
                 if 0 <= x_l < img.shape[1] - 90 and 30 <= y_l < img.shape[0]:
-                    UI.panel(img, x_l, y_l - 20, x_l + UI.size("Draft (new)", 0.42)[0] + 10, y_l - 2, 0.8, (235, 235, 235))
-                    UI.put(img, "Draft (new)", x_l + 5, y_l - 6, 0.42, (235, 235, 235))
+                    UI.panel(img, x_l, y_l - 20, x_l + UI.size("Selection (new)", 0.42)[0] + 10, y_l - 2, 0.8, (235, 235, 235))
+                    UI.put(img, "Selection (new)", x_l + 5, y_l - 6, 0.42, (235, 235, 235))
 
     def pyramid_tint(img):
         """Пирамидка: внутри каждого выделения, в котором выбраны участки меньше (дети, клетки подсетки), всё,
@@ -2261,11 +2378,11 @@ def _view_one(folder, fullscreen, keys, car):
                     fw_, fh_ = r_.get('fw', 0), r_.get('fh', 0)
                     gm_ = _box(min(ax, bx) - fw_ / 2, min(ay, by) - fh_ / 2, max(ax, bx) + fw_ / 2, max(ay, by) + fh_ / 2)
                 ps_ = [gm_] if gm_.geom_type == 'Polygon' else list(getattr(gm_, 'geoms', []))
-                kind_ = {'draft': 'Draft'}.get(r_.get('kind'), 'Sel.')
+                kind_ = 'Sel.'
                 for p_ in ps_:
                     q_ = stage_to_mosaic(folder, np.array(p_.exterior.coords)[:-1])
                     out_.append((q_, SM.color(r_['num'] - 1), f"{kind_} {r_['num']} {r_.get('obj', '')}x"
-                                 if r_.get('kind') != 'draft' else f"Draft {r_['num']}", r_.get('kind') == 'draft', False))
+                                 if r_.get('kind') != 'draft' else f"Sel. {r_['num']} draft", r_.get('kind') == 'draft', False))
         except Exception:
             out_ = []
         st['_so_key'], st['_so'] = key_, out_
@@ -2290,8 +2407,11 @@ def _view_one(folder, fullscreen, keys, car):
             sg_ = g_sig()
             if sg_ != h_last[0]:                            # что-то сделано: в историю
                 new_ = g_snap()
+                sel_changed_ = sg_[2] != h_last[0][2]
                 hist.push(g_label(), h_last[1], new_, folder=folder, px=px_um)
                 h_last[:] = [sg_, new_]
+                if sel_changed_:                            # клетки выбраны — выделение (draft) в списке сразу
+                    brush_now()
         if _t.monotonic() - st.get('_sync_t', 0) > 0.5:  # окно микроскопа поменяло образец или кисть —
             st['_sync_t'] = _t.monotonic()                 # показать то же, что и там
             mt_ = tuple(os.path.getmtime(p_) if os.path.exists(p_) else 0 for p_ in
@@ -2454,13 +2574,18 @@ def _view_one(folder, fullscreen, keys, car):
         elif ch == 's':                                      # S: сшить прямо здесь; окно потом откроется заново
             stitch_here()
             break
-        elif ch == 'r':                                      # R: линейка, две точки -> расстояние
-            if st['mode'] == 'ruler':
-                st['mode'], st['ruler'] = 'look', []
+        elif ch == 'r':                                      # R: линейка: точка-точка -> прямая-прямая -> точка-прямая -> выкл
+            nxt_ = {'pp': 'll', 'll': 'pl', 'pl': None}
+            if st['mode'] == 'ruler' and nxt_[st.get('rk', 'pp')] is None:
+                st['mode'], st['ruler'], st['rk'] = 'look', [], 'pp'
                 st['msg'] = "Ruler off"
             else:
+                st['rk'] = nxt_[st.get('rk', 'pp')] if st['mode'] == 'ruler' else 'pp'
                 st['mode'], st['ruler'] = 'ruler', []
-                st['msg'] = "Ruler: click two points (a third click starts again). R or Esc: off"
+                st['msg'] = {'pp': "Ruler, point - point: click two points",
+                             'll': "Ruler, line - line: two points of the first line, two of the second (angle and distance)",
+                             'pl': "Ruler, point - line: two points of the line, then the point"}[st['rk']] + \
+                    "  (R: next kind, Esc: off)"
         elif ch == 'c':                                      # C: отмечать кресты (ещё раз C — выйти)
             if st['mode'] == 'cross' and not g.cr.marks:     # крестов ещё нет (только что Shift+C) — остаться
                 st['msg'] = "Click a cross, then its neighbour in the same row (C again — when done)"
@@ -2488,7 +2613,7 @@ def _view_one(folder, fullscreen, keys, car):
             st['mode'] = 'select' if g.ready() else st['mode']
             st['msg'] = (st['msg'] + "   " if 'No crosses here' in (st['msg'] or '') else "") + (
                 "Select: click = square (again = off), drag = box (Shift = unselect); right click = remove "
-                "one, Shift + right click = the whole area; they become Drafts") if g.ready() \
+                "one, Shift + right click = the whole area; they become selections (draft)") if g.ready() \
                 else "Mark at least 2 crosses first (C)"
         elif ch == 'n':
             st['mode'] = 'label' if g.ready() else st['mode']
@@ -2551,9 +2676,10 @@ def _view_one(folder, fullscreen, keys, car):
         elif ch == 'p':                                      # P: окошко профилей креста под мышью
             st['prof'] = not st.get('prof')
             st['prof_pin'] = st['prof_last'] = st['prof_rect'] = st['pl_drag'] = st['prof_drag'] = None
+            st['prof_pts'] = []
             pl_save()
-            st['msg'] = ("Profiles: two lines across the arms of the cross under the mouse. Drag their ends to tilt them; "
-                         "click: pin. Yellow: the edges. P: off" if st['prof'] else "Profiles off")
+            st['msg'] = ("Profiles: click 4 points - the two ends of line A, then of line B; then the plots. P: off"
+                         if st['prof'] else "Profiles off")
             st['dirty'] = True
         elif ch == 'h':
             st['help'] = not st.get('help')
@@ -2564,7 +2690,12 @@ def _view_one(folder, fullscreen, keys, car):
                 set_straight(not st['straight'])
                 st['msg'] = (f"Level: the picture is turned by {st['rot']:+.2f} deg, the squares stand straight (T: as shot)"
                              if st['straight'] else "Picture as shot, with its tilt (T: level)")
-        elif ch in '12345' and ch and st.get('lab') is None:   # подсетка выделения под мышью: в n раз плотнее
+        elif ch == '0' and st.get('lab') is None and _t.monotonic() - st.get('_k1', -9) < 1.0:   # «1», «0» — 1/10
+            st['_k1'] = -9
+            set_refine(10)
+        elif ch in '123456789' and ch and st.get('lab') is None:   # подсетка выделения под мышью: в n раз плотнее
+            if ch == '1':
+                st['_k1'] = _t.monotonic()
             set_refine(int(ch))
         elif ch == 'a' and st['mode'] in ('select', 'paint') and g.ready():
             W_, H_ = sc.size

@@ -2,7 +2,7 @@
 
 **Python control of the Optosky ATR8300 Raman microscope: scan a substrate, stitch one picture of it, put the lithography grid on it, choose the squares you need and export them for AutoCAD.**
 
-**Authors:** A. Lyapeikov, S. Domenko · **Version:** 0.20.0 · Русский: [docs/README_ru.md](docs/README_ru.md) · 中文: [docs/README_zh.md](docs/README_zh.md) · PDF: [EN](docs/MicroControl_en.pdf), [RU](docs/MicroControl_ru.pdf), [中文](docs/MicroControl_zh.pdf) · Full technical reference: [EN](docs/reference_en.md), [RU](docs/reference_ru.md), [中文](docs/reference_zh.md)
+**Authors:** A. Lyapeikov, S. Domenko · **Version:** 0.24.0 · Русский: [docs/README_ru.md](docs/README_ru.md) · 中文: [docs/README_zh.md](docs/README_zh.md) · PDF: [EN](docs/MicroControl_en.pdf), [RU](docs/MicroControl_ru.pdf), [中文](docs/MicroControl_zh.pdf) · Full technical reference: [EN](docs/reference_en.md), [RU](docs/reference_ru.md), [中文](docs/reference_zh.md)
 
 ![Overview: numbered lithography squares, chosen squares as drafts, the 20x and 100x areas inside, the status bar at the bottom](docs/img/view.jpg)
 
@@ -245,6 +245,7 @@ Arrows move; letters do things. As much as possible is done right in the window.
 | `E` / `Q` (`PgUp` / `PgDn`) | stage up / down by Step Z (`Shift` — ×5) |
 | `F` · `K` | autofocus · keep $Z$ here as a focus point |
 | Ctrl+click cards · Shift+drag over a selection | mark for Merge / Minus / Overlap / Group / Ungroup · move a selection |
+| menu **Scans** (a selection chosen) · objective chip `… 100x, draft` | its scans oldest first: View, **Make main** (maps, view and export use it) · a selection without an objective (draft) is not scanned |
 | Scan area · **Stitch** (buttons on top) | scan + quick stitch (fast overview, not edited, not exported) · quality stitch of the chosen selection: exact straight-edged picture for the drawing, re-shot where needed; export takes only these |
 | Ctrl+drag on the map · `Esc` during a job | a draft box on the objective in place (a crystal): with a margin for backlash, edges on motor steps; Scan area shoots it; the overview chosen + Scan area — all such boxes in it · stop the job (or Stop on its bar) |
 | `1`, `2` | corners of a selection |
@@ -276,10 +277,10 @@ Arrows move; letters do things. As much as possible is done right in the window.
 | `C` · `F` | mark crosses (`Shift+C` — start again) · frames onto the crosses (exact: frames, grid and distortion together) |
 | `N` | number a square |
 | `M` | select (click, box); `Shift` — unselect; right click — remove one, `Shift` + right click — the whole area; `A` / `X` — all / none |
-| `2`…`5` · `1` | over a selection: its own grid 2–5 times denser (`M` then selects its cells) · no finer grid |
+| `2`…`9` · `1` `0` · `1` | over a selection: its own grid 2–9 times denser (`M` then selects its cells) · `1` then `0` within a second — 10 times · no finer grid; zoom up to 32× to see it |
 | `T` | picture level / as shot |
-| `P` | profiles window: R, G, B across the arms of the cross under the mouse, arm edges (green), width in µm, contrast, overexposure. Click a cross — pin it; drag the yellow edge lines in the window — they move on the map too; wheel over the window — profile range; right click — edges found automatically. Cross search prefers the largest «+», so dust and dots do not pull it |
-| `R` | ruler: two clicks — the distance |
+| `P` | profiles window: R, G, B across the arms of the cross under the mouse, arm edges (green), width in µm, contrast, overexposure. Click a cross — pin it; drag the yellow edge lines in the window — they move on the map too; wheel over the window — profile range; right click — edges found automatically. Cross search prefers the largest «+», so dust and dots do not pull it Lines are set by **4 clicks** first (two ends of the cyan line, then of the pink one: «k of 4»), only then the plots are built and pinned; a click after that starts again, `P` — clear. |
+| `R` | ruler, `R` again — the next kind, then off: two points — the distance; two lines (4 clicks) — the distance between them at their middles and the angle; a line and a point (3 clicks) — the distance from the point to the line |
 | `E` | export: square pictures + the drawing (DWG / DXF), progress in the window |
 | `,` `.` | previous / next selection |
 | `Ctrl+Z` · `Ctrl+Y` | undo · redo any change |

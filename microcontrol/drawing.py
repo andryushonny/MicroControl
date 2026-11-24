@@ -84,7 +84,51 @@ def local_picture(folder, g, uv0, uv1, pitch, max_px=8000, nodes=None):
     return np.dstack([img, cov.astype(np.uint8) * 255]), res, rep
 
 
-def export_sample(m, ks=None, out=None, dwg=True, verbose=True):
+def _overview_png(path, pics, outlines, max_side=12000):
+    """Картинки чертежа (pics: объектив, BGR, 2x3 пиксель -> мкм чертежа, маска) — в одну PNG: мельче объектив —
+    ниже, крупнее — сверху; размер пикселя — самый мелкий из картинок (не больше max_side по стороне); контуры
+    выделений — тонко."""
+    corners = []
+    for o, img, A, a in pics:
+        h, w = img.shape[:2]
+        corners.append(np.array([[0, 0, 1], [w, 0, 1], [0, h, 1], [w, h, 1]], float) @ A.T)
+    allc = np.vstack(corners + [q for q, _ in outlines])
+    x0, y0 = allc.min(0)
+    x1, y1 = allc.max(0)
+    res = min(float(np.hypot(*A[:, 0])) for _, _, A, _ in pics)
+    res = max(res, max(x1 - x0, y1 - y0) / max_side)
+    W, H = int(np.ceil((x1 - x0) / res)) + 1, int(np.ceil((y1 - y0) / res)) + 1
+    out = np.full((H, W, 3), 255, np.uint8)
+    for o, img, A, a in sorted(pics, key=lambda t: t[0]):
+        img = img if img.ndim == 3 else cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+        Ai = np.linalg.inv(np.r_[A, [[0, 0, 1]]])                  # мкм чертежа -> пиксель картинки
+        Mo = Ai @ np.array([[res, 0, x0], [0, -res, y1], [0, 0, 1]])   # пиксель PNG -> пиксель картинки
+        wimg = cv2.warpAffine(img, Mo[:2].astype(np.float32), (W, H), flags=cv2.INTER_AREA | cv2.WARP_INVERSE_MAP,
+                              borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+        mk = np.ones(img.shape[:2], np.uint8) * 255 if a is None else a
+        wm = cv2.warpAffine(mk, Mo[:2].astype(np.float32), (W, H), flags=cv2.INTER_NEAREST | cv2.WARP_INVERSE_MAP,
+                            borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+        out[wm > 0] = wimg[wm > 0]
+    for q, n in outlines:
+        pq = np.c_[(q[:, 0] - x0) / res, (y1 - q[:, 1]) / res]
+        cv2.polylines(out, [np.int32(np.round(pq))], True, (0, 0, 255), max(1, W // 3000), cv2.LINE_AA)
+    ok, buf = cv2.imencode('.png', out, [cv2.IMWRITE_PNG_COMPRESSION, 3])
+    buf.tofile(path)
+    return path
+
+
+def best_scan(m, r):
+    """Съёмка выделения для чертежа: основная (Scans -> Make main), иначе самая свежая quality, иначе последняя."""
+    from .project import Selection
+    from . import quality as Q
+    sel = Selection(m.sample, r)
+    if r.get('main'):
+        return sel.latest
+    q = [s_ for s_ in sel.scans if Q.is_quality(s_.folder)]
+    return q[-1] if q else sel.latest
+
+
+def export_sample(m, ks=None, out=None, dwg=True, verbose=True, nested=True, png=True):
     """Один чертёж образца из участков ks (индексы m._regions; по умолчанию — снятые и не снятые с экспорта):
     у каждого свой слой S<номер>_<объектив>x (черновик — S<номер>_draft), объективы любые вместе. Снятый —
     картинка и контур, не снятый и черновик — контур (и клетки). Решётка с номерами — чертёж от креста 1,1;
@@ -100,6 +144,18 @@ def export_sample(m, ks=None, out=None, dwg=True, verbose=True):
         ks = [k for k, r in enumerate(m._regions) if r.get('kind') not in ('group', 'draft') and r.get('export', True)
               and Selection(m.sample, r).latest]
     ks = [k for k in ks if m._regions[k].get('kind') != 'group']
+    if nested:                                                   # вложенное в выбранные — само (если не снято с экспорта)
+        from .samples import parent as _par
+        for k, r in enumerate(m._regions):
+            if k in ks or r.get('kind') == 'group' or r.get('export') is False:
+                continue
+            p_ = _par(m, k)
+            for _ in range(16):
+                if p_ is None or p_ in ks:
+                    break
+                p_ = _par(m, p_)
+            if p_ is not None and p_ in ks and best_scan(m, r) is not None:
+                ks.append(k)
     if not ks:
         raise ValueError("Nothing to export: no area is chosen")
     out = out or os.path.join(m.sample.folder, 'export', time.strftime('%Y-%m-%d_%H%M%S'))
@@ -132,12 +188,13 @@ def export_sample(m, ks=None, out=None, dwg=True, verbose=True):
     order = sorted(ks, key=lambda k: obj(m, m._regions[k]) or 0)   # мелкое увеличение снизу, крупное сверху
     placed = []
     local_rep = {}
+    pics_ = []                                                  # (объектив, картинка, пиксель -> чертёж, прозрачность)
     skipped_ = []
     for i, k in enumerate(order):
         r = m._regions[k]
         lay = f"S{num(m, k):02d}_draft" if r.get('kind') == 'draft' else f"S{num(m, k):02d}_{obj(m, r)}x"
         doc.layers.add(lay, color=(i % 6) + 1)
-        sc = Selection(m.sample, r).latest if r.get('kind') != 'draft' else None
+        sc = best_scan(m, r) if r.get('kind') != 'draft' else None
         jp = os.path.join(sc.folder, 'join', 'preview_all.jpg') if sc else None
         if pr:
             pr.update(1, f"{title(m, k)}: picture and outline")
@@ -167,6 +224,8 @@ def export_sample(m, ks=None, out=None, dwg=True, verbose=True):
                 im.dxf.v_pixel = (float(Cv[0] - C0[0]), float(Cv[1] - C0[1]), 0.0)
                 im.dxf.insert = (float(C0[0]), float(C0[1]), 0.0)
                 im.dxf.flags = 1 | 2 | 8
+                p00, p10, p01 = px2(0, 0), px2(1, 0), px2(0, 1)         # пиксель (u, v) -> мкм чертежа
+                pics_.append((obj(m, r) or 0, img, np.c_[p10 - p00, p01 - p00, p00], None))
                 local_rep[lay] = dict(quality=True, pixel_um=qi['pixel_um'], pixel_source=qi['pixel_source'],
                                       seam_um=qi.get('seam_um'), size_um=qi['size_um'])
                 if qi['pixel_source'] != 'crosses':
@@ -202,6 +261,9 @@ def export_sample(m, ks=None, out=None, dwg=True, verbose=True):
                 except Exception:
                     pass
                 local_rep[lay] = rep_
+                pics_.append((obj(m, r) or 0, img4[..., :3] if img4.ndim == 3 else img4,
+                              np.array([[rs_, 0.0, x0_], [0.0, -rs_, y0_ + h_ * rs_]]),
+                              img4[..., 3] if img4.ndim == 3 and img4.shape[2] == 4 else None))
                 jp = None                                               # старый способ не нужен
         if jp and os.path.exists(jp):
             g = geometry(sc.folder)
@@ -214,6 +276,7 @@ def export_sample(m, ks=None, out=None, dwg=True, verbose=True):
             h_, w_ = img.shape[:2]
             C3 = D(mosaic_to_stage(sc.folder, np.array([[0, 0], [w_, 0], [0, h_]], float) / kk))
             ux, vy = (C3[1] - C3[0]) / w_, (C3[2] - C3[0]) / h_         # чертёж на пиксель: вправо, вниз
+            pics_.append((obj(m, r) or 0, img, np.c_[ux, vy, C3[0]], a))
             idef = doc.add_image_def(filename=png, size_in_pixel=(w_, h_))
             im = msp.add_image(idef, insert=tuple(C3[2]), size_in_units=(1, 1), dxfattribs={'layer': lay})
             im.dxf.u_pixel = (float(ux[0]), float(ux[1]), 0.0)     # точно по геометрии: поворот, масштаб
@@ -275,6 +338,12 @@ def export_sample(m, ks=None, out=None, dwg=True, verbose=True):
             msp.add_text(f"{X},{Y}", height=0.06 * P, dxfattribs={'layer': 'NUMBERS', 'insert': (cx + 0.04 * P, cy + 0.04 * P)})
     path = os.path.join(out, 'drawing.dxf')
     doc.saveas(path)
+    if png and pics_:                                            # всё выбранное — одной картинкой в масштабе чертежа
+        try:
+            _overview_png(os.path.join(out, 'overview.png'), pics_, [(D(rg), num(m, k)) for k in ks
+                                                                       for rg in rings(m, m._regions[k])])
+        except Exception as e:
+            skipped_.append(f"overview.png not made: {e}")
     json.dump(dict(frame=("stage coordinates, um, Y up" if stage_frame else
                           "lattice: cross 1,1 at (0, 0), X to cross 2,1, Y up (to cross 1,2 is -Y)"), pitch_um=P,
                    lattice=L, areas=placed, pictures=local_rep, notes=skipped_),

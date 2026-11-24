@@ -331,7 +331,18 @@ u1, v1 = view_xy(world(6, 5)); u1, v1 = u1 - 3, v1 + 2
 mc.view(f, _keys=[ord('c'), -1, ('click', u1, v1), -1, ('drag', u1, v1, u1 + 6, v1), -1, 26, -1, 26, -1, 25, -1,
                   26, -1, ord('r'), -1, ('click', 300, 300), -1, ('click', 420, 380), -1, 27, 27])
 assert len(Grid(f).cr.marks) == n0 + 1, (n0, len(Grid(f).cr.marks))              # крест, сдвиг -> Ctrl+Z x2, Ctrl+Y, Ctrl+Z
-print("Cross marks: exactly at the click, draggable, Ctrl+Z / Ctrl+Y: OK")
+rb_ = {}
+pxu_ = json.load(open(os.path.join(f, 'meta.json')))['pixel_size_um']
+mc.view(f, _keys=[ord('r'), -1, ord('r'), -1, ('click', 300, 300), -1, ('click', 500, 300), -1, ('click', 300, 350), -1,
+                  ('click', 500, 350), -1, ('call', lambda st: rb_.update(ll=st['msg'])), -1,
+                  ord('r'), -1, ('click', 300, 300), -1, ('click', 500, 300), -1, ('click', 400, 340), -1,
+                  ('call', lambda st: rb_.update(pl=st['msg'])), -1, 27, 27])     # линейка: прямая-прямая, точка-прямая
+import re as _re
+dll_ = float(_re.search(r"([0-9.]+) um between the lines", rb_['ll']).group(1))
+dpl_ = float(_re.search(r"([0-9.]+) um from the line", rb_['pl']).group(1))
+assert abs(dll_ - 50 / sv * pxu_) < 0.02 * 50 / sv * pxu_ and 'angle 0.00 deg' in rb_['ll'], (rb_, 50 / sv * pxu_)
+assert abs(dpl_ - 40 / sv * pxu_) < 0.02 * 40 / sv * pxu_, (rb_, 40 / sv * pxu_)
+print("Cross marks: exactly at the click, draggable, Ctrl+Z / Ctrl+Y; ruler line-line and point-line: OK")
 n0 = len(json.load(open(os.path.join(f, 'grid.json')))['selected'])
 mc.view(f, _keys=[ord('m'), -1, ('rclick', 640, 450), -1, 27, 27])      # правый щелчок по зелёному — убрать область
 n1 = len(json.load(open(os.path.join(f, 'grid.json')))['selected'])
@@ -892,7 +903,7 @@ print(LY.sync_brush(m)); SM.persist(m)
 L = m.sample.data['lattice']
 assert L['numbered'] and abs(L['pitch'] - 100) < 0.5, L
 kd = next(k for k, r in enumerate(m._regions) if r.get('kind') == 'draft')
-assert SM.title(m, kd).startswith('Draft') and SM.frames_of(m, kd) == (0, 0)
+assert SM.title(m, kd).startswith('Selection') and SM.frames_of(m, kd) == (0, 0)
 assert sorted(map(tuple, m._regions[kd]['cells'])) == [(5, 6), (6, 6)], m._regions[kd]['cells']   # квадраты 6,7 и 7,7
 assert LT.address(5, 6, []) == "6,7"
 assert len(m.scan(name='again') and m.last_scans) == 1            # черновик не снимается
@@ -954,6 +965,15 @@ w_, h_ = im50.dxf.image_size.x, im50.dxf.image_size.y
 uv = np.linalg.solve(np.c_[u, v], (V - ins).T).T                   # углы контура — в пикселях картинки
 tol = 0.6 * m.motor_step / np.hypot(*u)
 assert (uv[:, 0] > -tol).all() and (uv[:, 0] < w_ + tol).all() and (uv[:, 1] > -tol).all() and (uv[:, 1] < h_ + tol).all(), uv
+dx2 = mc.export_sample(m, ks=[0])                                   # только 10x: вложенное (50x) — само, и общий PNG
+d2_ = ezdxf.readfile(dx2 if dx2.endswith('.dxf') else dx2[:-4] + '.dxf')
+assert f"S{m._regions[k50]['num']:02d}_50x" in {l_.dxf.name for l_ in d2_.layers}
+ov_ = cv2.imread(os.path.join(os.path.dirname(dx2), 'overview.png'))
+assert ov_ is not None and (ov_ < 250).any(axis=2).mean() > 0.2, None if ov_ is None else ov_.shape
+uid10_ = m._regions[kd]['uid']
+q10 = g.cr.point(1 + 0.5, 0.5)
+V_.view(f, _keys=[-1, ('qmove', *q10), ord('1'), ord('0'), -1, 27])      # «1», «0» — подсетка 1/10
+assert any(int(v_.get('n') or 0) == 10 for v_ in json.load(open(os.path.join(f, 'grid.json')))['refine'].values())
 m.close(); print("Lattice from cross 1,1; drafts of cells; finer grid 2-5 in the viewer, addresses 6,7 > 1,1 > 2,2; "
                  "50x on the 1/3 grid; drawing from cross 1,1, every cell closed on its layer: OK")
 
@@ -1147,13 +1167,15 @@ V_.view(f, _keys=[-1, ord('m'), ('qclick', *q(1, 0)), ('qclick', *q(2, 0)), ('qm
                   ('qclick', *q(1, 0, 0.2, 0.2)), -1, 27])
 rf = json.load(open(os.path.join(f, 'grid.json')))['refine']
 key = next(iter(rf))
-assert key.startswith('cell:') and rf[key]['n'] == 3 and rf[key]['cells'] == [[15, 18]], rf
+smj = json.load(open(m.sample.file))['selections']                   # выделение (draft) — сразу, из просмотра
+assert any(r_['uid'] == key and r_.get('kind') == 'draft' for r_ in smj), (rf, smj)
+assert rf[key]['n'] == 3 and rf[key]['cells'] == [[15, 18]], rf
 print(LY.sync_brush(m)); SM.persist(m)
 d1 = next(r for r in m._regions if r.get('kind') == 'draft' and not r.get('factors'))
 d2 = next(r for r in m._regions if r.get('parent') == d1['uid'])
 assert d1.get('sub') == 3 and d2['factors'] == [3] and LT.address(*d2['cells'][0], [3]) == "6,7 > 1,1"
 assert list(json.load(open(os.path.join(f, 'grid.json')))['refine']) == [d1['uid']]
-m.close(); print("Finer grid right over freshly selected squares (no draft yet): 3, a cell, then the drafts: OK")
+m.close(); print("Selected squares become a selection (draft) at once; its finer grid 3, a cell: OK")
 
 
 # ------------------------------------------------------------------ 39. Ctrl+Z в окне микроскопа — для всех операций над выделениями (вместе с квадратами в просмотре)
@@ -1543,10 +1565,12 @@ def _keys47():
     yield -1; yield ord('p'); yield -1
     for k in range(8):
         yield ('move', 100 + 40 * k, 100 + 30 * k); yield -1
-    yield ('click', 200, 180); yield -1
+    yield ('click', 150, 180); yield -1; yield ('click', 260, 180); yield -1
     yield ('call', _grab); yield -1
+    assert box_['st']['prof_pin'] is None and len(box_['st']['prof_pts']) == 2      # графики — только после 4 точек
+    yield ('click', 200, 120); yield -1; yield ('click', 200, 240); yield -1
     st = box_['st']; res = st['prof_pin']
-    assert res is not None and len(res['prof']) == 2
+    assert res is not None and len(res['prof']) == 2 and not st['prof_pts']
     P1 = res['segs'][0][1]
     yield ('qdrag', float(P1[0]), float(P1[1]), float(P1[0]), float(P1[1]) + 20); yield -1      # наклонить линию A
     assert abs(res['segs'][0][1][1] - P1[1] - 20) < 1.0, res['segs'][0]
@@ -2159,7 +2183,7 @@ boxes = [(510, 120, 528, 134), (560, 400, 640, 455), (90, 480, 150, 520)]       
 for b_ in boxes:
     M.run(m, fullscreen=False, _keys=[-1, ('maprect', *box_px(*b_), True), -1, -1])                    # Ctrl+тянуть
 fr_ = [r_ for r_ in m._regions if r_.get('free')]
-assert len(fr_) == 3 and all(r_.get('kind') == 'draft' for r_ in fr_), [(r_['num'], r_.get('kind')) for r_ in fr_]
+assert len(fr_) == 3 and all(r_.get('kind') is None and r_.get('obj') == 50 for r_ in fr_), [(r_['num'], r_.get('kind')) for r_ in fr_]
 ms_ = m.motor_step
 for r_, b_ in zip(fr_, boxes):                                                                       # рамка: нарисованное внутри,
     B_ = LY.geom(m, r_).bounds                                                                       # запас не меньше шага,
@@ -2544,8 +2568,7 @@ wp57 = lambda i, j: np.array([np.cos(T57) * i * 100 - np.sin(T57) * j * 100, np.
 def box57(x0, y0, x1, y1):
     M57.run(m, fullscreen=False, _keys=[-1, -1]); n_ = m._nav
     M57.run(m, fullscreen=False, _keys=[-1, ('maprect', *n_.to_px((x0, y0)), *n_.to_px((x1, y1)), True), -1, -1])
-    k_ = max(i for i, r in enumerate(m._regions) if r.get('free') and r.get('kind') == 'draft')
-    LY57.draft_to_selection(m, k_, m.objective)
+    k_ = max(i for i, r in enumerate(m._regions) if r.get('free'))
     return m._regions[k_]
 
 
@@ -2619,6 +2642,12 @@ err_um = dmax_ * w.px_um + abs(serr_) * span_
 assert err_um < 0.15, err_um                                            # на всей рамке — точнее 0.15 мкм
 img2 = cv2.imread(os.path.join(f2, 'join', 'quality.png'))
 assert img2.shape[1] == q2['size_px'][0] and (img2.reshape(-1, 3).max(1) > 0).all()   # ровный прямоугольник без пустот
+f3 = m.scan(only=[r2['uid']])                                          # ещё съёмка (quick): последняя — она,
+from microcontrol.project import Selection as SL57
+from microcontrol.drawing import best_scan as BS57
+assert SL57(m.sample, r2).latest.folder == f3 and BS57(m, r2).folder == f2   # а в чертёж — свежая quality
+r2['main'] = os.path.basename(f2)                                       # основная — выбрана руками
+assert SL57(m.sample, r2).latest.folder == f2 and BS57(m, r2).folder == f2
 dx57 = mc.export_sample(m, ks=[LY57.idx(m, r2['uid'])])                 # в чертёж — снимок, по столику
 dj57 = json.load(open(os.path.join(os.path.dirname(dx57), 'drawing.json')))
 assert any(v_.get('quality') for v_ in dj57['pictures'].values()) and dj57['areas'][0]['placed'].startswith('quality'), dj57

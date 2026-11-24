@@ -94,7 +94,14 @@ def draft_to_selection(m, k, o):
     if bad:
         return False, bad + (": put a larger objective (M) first" if "larger objective" in bad else "")
     to_area(m, k, o)
-    return True, f"Draft {r['num']} is now Selection {r['num']} ({o}x): it will be scanned and goes into the export"
+    return True, f"Selection {r['num']}: {o}x - it will be scanned and goes into the export"
+
+
+def to_draft(m, k):
+    """Не снятое выделение k — без объектива (draft): не снимается, пока объектив не выбран. -> сообщение."""
+    r = m._regions[k]
+    r['kind'] = 'draft'
+    return f"Selection {r['num']}: draft - no objective, not scanned (click 'draft' to choose its objective)"
 
 
 def next_objective_of(m, k, objectives):
@@ -456,12 +463,12 @@ def conflict(m, reg):
     if is_group(reg):
         return None
     g = geom(m, reg)
-    name = f"{'Draft' if is_mask(reg) else 'Selection'} {reg.get('num')}"
+    name = f"Selection {reg.get('num')}"
     pk = idx(m, reg.get('parent')) if reg.get('parent') else None
     if pk is not None and not is_group(m._regions[pk]):
         par = m._regions[pk]
         if not geom(m, par).buffer(max(EPS, 0.002 * max(1.0, (g.area ** 0.5)))).contains(g):
-            return f"{name} would go beyond {'Draft' if is_mask(par) else 'Selection'} {par['num']} it lies in"
+            return f"{name} would go beyond Selection {par['num']} it lies in"
     if not is_mask(reg):
         up = m._regions[pk] if pk is not None else None
         while up is not None and (is_mask(up) or is_group(up)):
@@ -703,6 +710,20 @@ def sync_brush(m):
     from .samples import obj
     from .snap import mosaic_to_stage
     from .mask import Grid
+    if getattr(m, '_sample', None) is not None and hasattr(m, 'motor_step'):   # просмотр уже записал выделения
+        try:                                                                   # из кисти сам — взять их, без дублей
+            import json as _json
+            dk = _json.load(open(m._sample.file, encoding='utf-8'))
+            if len(dk.get('selections') or []) > len(m._regions or []) and \
+                    dk.get('selections') != m._sample.data.get('selections'):
+                from . import project as _P
+                from .samples import init_areas
+                m._sample.data.update(dk)
+                _P.load_regions(m)
+                m._area_seq = max(getattr(m, '_area_seq', 0), int(dk.get('seq', 0) or 0))
+                init_areas(m)
+        except Exception:
+            pass
     if getattr(m, '_sample', None) is None:
         return None
     changed = ["Lattice of the sample updated"] if update_lattice(m) else []
@@ -786,7 +807,7 @@ def sync_brush(m):
                          cells=[list(c) for c in fg], factors=list(fac))
                 set_geom(m, r, shape_of(fg))
                 m._regions.append(r)
-                changed.append(f"Draft {r['num']} ({LT.address(*fg[0], list(fac))}{' ...' if len(fg) > 1 else ''})")
+                changed.append(f"Selection {r['num']} ({LT.address(*fg[0], list(fac))}{' ...' if len(fg) > 1 else ''})")
         for i, r in enumerate(mine):
             if i not in used:
                 _vanish(m, r)
@@ -860,7 +881,7 @@ def _sel_dir(folder, r):
 
 
 def _t(r):
-    return f"{'Draft' if is_mask(r) else 'Selection'} {r['num']}"
+    return f"Selection {r['num']}"
 
 
 def remove_brush_cells(m, reg):

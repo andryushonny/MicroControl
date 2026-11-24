@@ -117,13 +117,14 @@ class _Scene:
 
 HELP_V2 = "Arrows / drag: move  Wheel: zoom  0: whole  , / .: selection  H: all keys  Shift+Esc: exit"
 HELP_MODE = {
-    'look': "S: stitch (preview)  C: crosses  F: frames onto the crosses  N: numbers  T: level  M: select cells (selections, draft)  2-9, 10: finer grid of a selection  R: ruler  E: export",
+    'look': "S: stitch (preview)  C: crosses  F: frames onto the crosses  N: numbers  T: level  M: select cells (selections, draft)  2-9, 10: finer grid of a selection  R: ruler  O: transparency  L: align  E: export",
     'cross': "Click: cross exactly there (2 in a row = tilt)  Shift+click: snap to centre  Drag a mark: move  Right click: remove  Shift+C: again  F: frames onto the crosses  C / Esc: done",
     'select': "Click: square  Drag: box  Shift: unselect  Right click: remove a square (Shift: the whole area)  A: all  X: none  Esc: done",
     'stitch': "Click a seam dot: seam off/on  Click a frame: its row  Shift+click: its column  Arrows: 1 px  Shift+arrows: 10 px  Backspace: automatic  J: save",
     'paint': "Drag a rectangle: select all squares in it  Shift+drag: unselect  Click: one square  Right click: remove one (Shift: whole area)  A: all  X: none  Esc: done",
     'label': "Click a square, type its number X Y  Enter: set  Esc: done",
     'ruler': "R: point-point / line-line / point-line / off. Click the points: the distance (and the angle)  Drag: move  Esc: off",
+    'align': "Drag / arrows (Shift: x10): move the higher-objective pictures onto this scan  Space: by itself  Enter: save  Backspace: no shift  Esc: cancel",
     'refine': "Over a selection: 2-9 its finer grid (1, 0 quickly: 1/10; 1: none), then M selects its cells: they become selections (draft) inside it",
 }
 HELP_V = ("S: stitch (preview)   C: crosses (2 in a row = tilt; right click = remove, Shift+C = again)   F: frames onto the crosses   M: select "
@@ -148,6 +149,8 @@ HELP_ALL = [
                "grey = off): click a dot to switch the seam off or on, the frames are placed again at once; "
                "click a frame: its row (Shift+click: its column), arrows: move it by 1 px "
                "(Shift: 10), Backspace: back to the automatic stitch, J: save.  K: straight edges (crop the steps)"),
+    ("Layers", "O over a picture of a higher objective: more transparent (100 / 75 / 50 / 25 / 0 % = outline), Shift+O: less"),
+    ("", "L: align this scan with the higher one: drag (or arrows), Space - by the picture itself, Enter - save (align.json)"),
     ("Profiles", "P: two profile lines (cyan, pink) with R, G, B along them, averaged over a band: edges, width, contrast"),
     ("", "Drag the line ends on the map: any tilt and length (Shift: 15 deg)   Click: pin   In the window: drag the edges, wheel: band"),
 ]
@@ -968,6 +971,8 @@ def _view_one(folder, fullscreen, keys, car):
         if ev in (cv2.EVENT_LBUTTONDOWN, cv2.EVENT_RBUTTONDOWN, cv2.EVENT_MBUTTONDOWN):
             st['down'] = (x, y, st['cx'], st['cy'], ev, shift, False)
             st['ctrl'] = bool(flags & cv2.EVENT_FLAG_CTRLKEY)
+            if st['mode'] == 'align':
+                st['al']['dq0'] = list(st['al']['dq'])
             st['mdrag'] = None                                 # левой по отметке креста — тащить её
             if ev == cv2.EVENT_LBUTTONDOWN and st['mode'] == 'cross' and g.cr.marks and not st.get('seeded'):
                 dists = [np.hypot(*(to_view(q) - (x + 0.5, y + 0.5))) for q in g.cr.marks]
@@ -981,6 +986,11 @@ def _view_one(folder, fullscreen, keys, car):
                     st['down'] = (x0, y0, cx, cy, ev0, sh0, True)
                     g.cr.marks[st['mdrag']] = from_view((x + 0.5, y + 0.5))
                     g.cr._fit()
+                    st['dirty'] = True
+            elif st['mode'] == 'align' and ev0 == cv2.EVENT_LBUTTONDOWN:   # L: картинки едут за мышью
+                if abs(x - x0) + abs(y - y0) > 1 or moved:
+                    st['down'] = (x0, y0, cx, cy, ev0, sh0, True)
+                    st['al']['dq'] = np.asarray(st['al']['dq0'], float) + R().T @ (np.array([x - x0, y - y0], float) / st['s'])
                     st['dirty'] = True
             elif abs(x - x0) + abs(y - y0) > 4:
                 st['down'] = (x0, y0, cx, cy, ev0, sh0, True)
@@ -1843,9 +1853,9 @@ def _view_one(folder, fullscreen, keys, car):
                 q_ = np.array([to_view(c_) for c_ in (p_, p_ + (sc.W, 0), p_ + (sc.W, sc.H), p_ + (0, sc.H))])
                 cv2.polylines(img, [np.int32(np.round(q_))], True, (255, 220, 0), 1, cv2.LINE_8)
         mode = {'look': 'Look', 'cross': 'Mark crosses', 'select': 'Select', 'stitch': 'Edit stitch',
-                'paint': 'Brush', 'label': 'Number squares', 'ruler': 'Ruler'}[st['mode']]
+                'paint': 'Brush', 'label': 'Number squares', 'ruler': 'Ruler', 'align': 'Align'}.get(st['mode'], st['mode'])
         mcol = {'look': (170, 170, 178), 'cross': (90, 90, 255), 'select': (90, 210, 90), 'stitch': (255, 220, 0),
-                'paint': (90, 210, 90), 'label': UI.ACCENT, 'ruler': (0, 220, 255)}[st['mode']]
+                'paint': (90, 210, 90), 'label': UI.ACCENT, 'ruler': (0, 220, 255), 'align': (255, 120, 255)}.get(st['mode'], UI.ACCENT)
         if st.get('lab'):
             st['msg'] = f"Square number X Y: {st['lab'][1]}_   (Enter = set, Esc = cancel)"
         um = px_um / st['s']
@@ -1866,7 +1876,7 @@ def _view_one(folder, fullscreen, keys, car):
         if st['straight']:
             w_ = UI.size("Straight", fs)[0] + 18
             UI.chip(img, "Straight", Wv - w_ - 10, bh - 11, fs, (235, 170, 60))
-        hl = [HELP_MODE[st['mode']], HELP_V2]
+        hl = [HELP_MODE.get(st['mode'], ''), HELP_V2]
         sbh = UI.size("Xg", 0.5)[1] + 16                    # строка состояния — в самом низу
         hb = len(hl) * (th_ + 12) + 12 + sbh
         UI.panel(img, 0, Hv - hb, Wv, Hv - sbh, 0.82)       # над ней: клавиши этого режима
@@ -2215,8 +2225,11 @@ def _view_one(folder, fullscreen, keys, car):
         from .layers import from_json
         my_obj = sc.st.meta.get('objective') or 0
         scans_ = [f_ for f_ in P2_.latest_scans(smp.folder) if os.path.abspath(f_) != os.path.abspath(folder)]
+        ap_ = os.path.join(folder, 'align.json')
         key_ = (os.path.getmtime(smp.file) if os.path.exists(smp.file) else 0,
-                tuple((f_, os.path.getmtime(os.path.join(f_, 'join', 'preview_all.jpg')))
+                os.path.getmtime(ap_) if os.path.exists(ap_) else 0,
+                tuple((f_, os.path.getmtime(os.path.join(f_, 'join', 'preview_all.jpg')),
+                       os.path.getmtime(os.path.join(f_, 'align.json')) if os.path.exists(os.path.join(f_, 'align.json')) else 0)
                       for f_ in scans_ if os.path.exists(os.path.join(f_, 'join', 'preview_all.jpg'))))
         if st.get('_fl_key') == key_:
             return st['_fl']
@@ -2241,20 +2254,107 @@ def _view_one(folder, fullscreen, keys, car):
                     gm_ = from_json(r_['shape'])
                     ps_ = [gm_] if gm_.geom_type == 'Polygon' else list(gm_.geoms)
                     ring_ = [stage_to_mosaic(folder, np.array(p_.exterior.coords)[:-1]) for p_ in ps_]
-                out_.append((meta_.get('objective') or 0, pic_, A_, ring_))
+                out_.append((meta_.get('objective') or 0, pic_, A_, ring_, meta_.get('sample_uid'), f_,
+                             r_['num'] if r_ is not None else meta_.get('selection')))
             except Exception:
                 continue
         out_.sort(key=lambda t_: t_[0])                     # крупнее — выше
         st['_fl_key'], st['_fl'] = key_, out_
         return out_
 
+    def alphas(new=None):
+        """Прозрачность картинок выделений в просмотре: {uid: 0..1}, файл view.json образца (общий для съёмок)."""
+        if smp is None:
+            return {}
+        p_ = os.path.join(smp.folder, 'view.json')
+        if st.get('_alpha') is None:
+            try:
+                st['_alpha'] = json.load(open(p_, encoding='utf-8')).get('alpha', {})
+            except (OSError, ValueError):
+                st['_alpha'] = {}
+        if new is not None:
+            st['_alpha'].update(new)
+            try:
+                d_ = json.load(open(p_, encoding='utf-8')) if os.path.exists(p_) else {}
+            except (OSError, ValueError):
+                d_ = {}
+            d_['alpha'] = {k_: v_ for k_, v_ in st['_alpha'].items() if v_ < 0.99}
+            with open(p_, 'w', encoding='utf-8') as fo_:
+                json.dump(d_, fo_, indent=1)
+        return st['_alpha']
+
+    def layer_at(xy):
+        """Картинка выделения крупнее этой под мышью (верхняя) -> запись finer_layers или None."""
+        q_ = from_view(xy) - (np.asarray(st['al']['dq'], float) if st.get('al') else 0)
+        for L_ in reversed(finer_layers()):
+            o_, pic_, A_, ring_ = L_[:4]
+            if ring_:
+                if any(cv2.pointPolygonTest(np.float32(r2_), (float(q_[0]), float(q_[1])), False) >= 0 for r2_ in ring_):
+                    return L_
+                continue
+            p_ = np.linalg.solve(A_[:, :2], q_ - A_[:, 2])
+            if 0 <= p_[0] < pic_.shape[1] and 0 <= p_[1] < pic_.shape[0] and pic_[int(p_[1]), int(p_[0])].max() > 6:
+                return L_
+        return None
+
+    def auto_align(L_):
+        """Совместить эту съёмку с картинкой L_ (точнее) по содержимому: фазовая корреляция там, где они
+        перекрываются, с поправкой на текущий сдвиг. -> (dq, отклик) или (None, причина)."""
+        o_, pic_, A_, ring_ = L_[:4]
+        dq0 = np.asarray(st['al']['dq'], float)
+        cs_ = np.array([[0, 0], [pic_.shape[1], 0], [0, pic_.shape[0]], [pic_.shape[1], pic_.shape[0]]], float)
+        Q_ = cs_ @ A_[:, :2].T + A_[:, 2] + dq0
+        x0_, y0_ = np.maximum(Q_.min(0), 0)
+        x1_, y1_ = np.minimum(Q_.max(0), sc.size)
+        if x1_ - x0_ < 32 or y1_ - y0_ < 32:
+            return None, "the picture is outside this scan"
+        k_ = min(1.0, 1400 / max(x1_ - x0_, y1_ - y0_))
+        Wr, Hr = int((x1_ - x0_) * k_), int((y1_ - y0_) * k_)
+        base_ = sc.render((x0_ + x1_) / 2, (y0_ + y1_) / 2, k_, Wr, Hr)
+        Mw_ = np.c_[k_ * A_[:, :2], k_ * (A_[:, 2] + dq0 - (x0_, y0_))].astype(np.float32)
+        ov_ = cv2.warpAffine(pic_, Mw_, (Wr, Hr), flags=cv2.INTER_AREA if k_ < 1 else cv2.INTER_LINEAR, borderValue=0)
+        msk_ = (cv2.cvtColor(ov_, cv2.COLOR_BGR2GRAY) > 6) & (cv2.cvtColor(base_, cv2.COLOR_BGR2GRAY) > 24)
+        if ring_:
+            cm_ = np.zeros((Hr, Wr), np.uint8)
+            cv2.fillPoly(cm_, [np.int32(np.round((r2_ + dq0 - (x0_, y0_)) * k_)) for r2_ in ring_], 1)
+            msk_ &= cm_ > 0
+        if msk_.sum() < 0.05 * Wr * Hr:
+            return None, "too little overlap"
+        w8_ = cv2.GaussianBlur(cv2.erode(msk_.astype(np.float32), np.ones((9, 9), np.uint8)), (0, 0), 6)
+
+        def hp_(im_):
+            g_ = cv2.cvtColor(im_, cv2.COLOR_BGR2GRAY).astype(np.float32)
+            g_ = g_ - cv2.GaussianBlur(g_, (0, 0), 8)
+            g_ = g_ / (np.sqrt((g_ ** 2 * w8_).sum() / max(1.0, w8_.sum())) + 1e-6)
+            return g_ * w8_
+        (sx_, sy_), resp_ = cv2.phaseCorrelate(hp_(base_), hp_(ov_))
+        if resp_ < 0.03:
+            return None, f"no clear match (response {resp_:.3f}): drag it by hand"
+        return dq0 - np.array([sx_, sy_]) / k_, resp_
+
+    def align_save():
+        """Записать сдвиг этой съёмки (align.json): картинки и контуры совпали с выбранной точной съёмкой."""
+        from .snap import geometry, align as _align
+        G_ = geometry(folder)
+        d0_ = np.asarray(G_.get('d_um', (0.0, 0.0)), float)
+        d_ = d0_ - G_['ms'] * np.linalg.solve(G_['Mo'], np.asarray(st['al']['dq'], float))
+        _align(folder, d_ if np.hypot(*d_) > 1e-4 else (0, 0), to=st['al'].get('to'))
+        st['_fl_key'] = None
+        st.pop('_lat', None)
+        return d_
+
     def draw_finer(img):
         Hh, Ww = img.shape[:2]
         Rm = R() * st['s']                                  # мозаика этой -> окно: mid + s R (M - c)
         T_ = np.c_[Rm, mid() - Rm @ np.array([st['cx'], st['cy']])]
-        for o_, pic_, A_, ring_ in finer_layers():
+        dq_ = np.asarray(st['al']['dq'], float) if st.get('al') else np.zeros(2)   # совмещение: сдвиг на просмотр
+        al_ = alphas()
+        for o_, pic_, A_, ring_, uid_, f_, n_ in finer_layers():
+            a_ = al_.get(uid_, 1.0)
+            if a_ <= 0.01:                                    # прозрачность 0: только контур
+                continue
             M_ = T_[:, :2] @ A_[:, :2]
-            t_ = T_[:, :2] @ A_[:, 2] + T_[:, 2]
+            t_ = T_[:, :2] @ (A_[:, 2] + dq_) + T_[:, 2]
             corners_ = np.array([[0, 0], [pic_.shape[1], 0], [0, pic_.shape[0]], [pic_.shape[1], pic_.shape[0]]], float)
             cv_ = corners_ @ M_.T + t_
             if cv_[:, 0].max() < 0 or cv_[:, 1].max() < 0 or cv_[:, 0].min() > Ww or cv_[:, 1].min() > Hh:
@@ -2265,8 +2365,10 @@ def _view_one(folder, fullscreen, keys, car):
             mask_ = cv2.inRange(w_, (7, 7, 7), (255, 255, 255))  # вне кадров (чёрное) — не кладём
             if ring_:
                 cm_ = np.zeros_like(mask_)
-                cv2.fillPoly(cm_, [np.int32(np.round(to_view_arr(r2_))) for r2_ in ring_], 255, cv2.LINE_8)
+                cv2.fillPoly(cm_, [np.int32(np.round(to_view_arr(r2_ + dq_))) for r2_ in ring_], 255, cv2.LINE_8)
                 mask_ = cv2.bitwise_and(mask_, cm_)
+            if a_ < 0.99:                                     # полупрозрачная: видно, что под ней
+                w_ = cv2.addWeighted(w_, a_, img, 1 - a_, 0)
             img = cv2.copyTo(w_, mask_, img)
         return img
 
@@ -2558,6 +2660,40 @@ def _view_one(folder, fullscreen, keys, car):
             st['regrid'] = (np.array(g.cr.O, float), np.array(v1_, float), np.array(v2_, float))
         step = 0.25 * min(st['Wv'], st['Hv']) / st['s']    # стрелки — четверть окна
         ch = ch.lower()
+        if st['mode'] == 'align':                           # L: совместить эту съёмку с более точной
+            a_ = _arrow(key)
+            u_ = lambda: (f"{st['al']['name']}: " if st['al'].get('name') else "")
+            if a_ is not None:                              # стрелки: 1 точка экрана (Shift: 10)
+                k_ = 10 if shift_held(key) else 1
+                st['al']['dq'] = list(np.asarray(st['al']['dq'], float) + R().T @ (np.array(a_, float) * k_ / st['s']))
+            elif key in (13, 10) or ch == 'l':
+                d_ = align_save()
+                st['mode'], st['al'] = 'look', None
+                st['msg'] = (f"This scan is shifted on the stage by {d_[0]:+.2f}, {d_[1]:+.2f} um (align.json): the grid, "
+                             "the selections, the map and the export go with it. L again: change it")
+            elif key == 8:                                  # Backspace: как по столику (сдвиг 0)
+                from .snap import geometry
+                G_ = geometry(folder)
+                st['al']['dq'] = list(G_['Mo'] @ (np.asarray(G_.get('d_um', (0, 0)), float) / G_['ms']))
+                st['msg'] = "Back to the stage coordinates (no shift): Enter saves"
+            elif key == 32:                                 # пробел: само, по содержимому
+                L_ = layer_at(st['hov']) if st.get('hov') else None
+                L_ = L_ or (st['al'].get('L') if st['al'].get('L') else (finer_layers() or [None])[-1])
+                if L_ is None:
+                    st['msg'] = "No picture of a higher objective here to align with"
+                else:
+                    dq_, r_ = auto_align(L_)
+                    if dq_ is None:
+                        st['msg'] = f"Not aligned: {r_}"
+                    else:
+                        st['al']['dq'], st['al']['to'] = list(dq_), L_[5]
+                        st['msg'] = (f"Aligned with Selection {L_[6]} ({L_[0]}x) by the picture (match {r_:.2f}): "
+                                     "check it, Enter saves, Esc cancels")
+            elif key == 27:
+                st['mode'], st['al'] = 'look', None
+                st['msg'] = "Alignment cancelled"
+            st['dirty'] = True
+            continue
         if key == 27:
             if st.get('help'):
                 st['help'] = False
@@ -2588,6 +2724,30 @@ def _view_one(folder, fullscreen, keys, car):
                              'll': "Ruler, line - line: two points of the first line, two of the second (angle and distance)",
                              'pl': "Ruler, point - line: two points of the line, then the point"}[st['rk']] + \
                     "  (R: next kind, Esc: off)"
+        elif ch == 'l':                                      # L: совместить эту съёмку с более точной (крупнее)
+            fl_ = finer_layers()
+            if not fl_:
+                st['msg'] = ("No scan of a higher objective lies over this one: nothing to align with "
+                             "(open the scan of the lower objective, the higher ones are drawn over it)")
+            else:
+                L_ = layer_at(st['hov']) if st.get('hov') else None
+                st['mode'] = 'align'
+                st['al'] = dict(dq=[0.0, 0.0], dq0=[0.0, 0.0], L=L_, to=L_[5] if L_ else None)
+                st['msg'] = ("Align: drag the pictures of the higher objective (or arrows, Shift: x10) until they sit on "
+                             "this scan; Space: by itself, by the picture under the mouse; Enter: save (this scan "
+                             "moves on the stage), Backspace: no shift, Esc: cancel")
+        elif ch == 'o':                                      # O / Shift+O: прозрачность картинки выделения под мышью
+            L_ = layer_at(st['hov']) if st.get('hov') else None
+            if L_ is None:
+                st['msg'] = "O: point at a picture of a higher objective (a selection drawn over this scan)"
+            else:
+                lv_ = [1.0, 0.75, 0.5, 0.25, 0.0]
+                a0_ = alphas().get(L_[4], 1.0)
+                i_ = min(range(len(lv_)), key=lambda i2_: abs(lv_[i2_] - a0_))
+                a1_ = lv_[(i_ + (-1 if raw == 'O' else 1)) % len(lv_)]
+                alphas({L_[4]: a1_})
+                st['msg'] = (f"Selection {L_[6]} ({L_[0]}x): picture {100 * a1_:.0f} %" +
+                             (" (outline only)" if a1_ == 0 else "") + "   O: more transparent, Shift+O: less")
         elif ch == 'c':                                      # C: отмечать кресты (ещё раз C — выйти)
             if st['mode'] == 'cross' and not g.cr.marks:     # крестов ещё нет (только что Shift+C) — остаться
                 st['msg'] = "Click a cross, then its neighbour in the same row (C again — when done)"

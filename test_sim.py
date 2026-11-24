@@ -2704,3 +2704,31 @@ assert not q.active() and q.jobs[-1].state == 'done'
 m.close()
 print("Queue: scans one after another at the instrument, quick stitches in the background on other cores; any job "
       "stops (a scan after its frame, a waiting one is removed, a stitch process at once); the window lives: OK")
+
+
+# ------------------------------------------------------------------ 59. Слои в просмотре: прозрачность картинки выделения (O) и совмещение менее точной съёмки с более точной (L: тянуть / само)
+from microcontrol.snap import align, stage_to_mosaic
+cv2.getWindowImageRect = lambda w: (0, 0, 1400, 900)
+m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp()); m.focus(); fw, fh = m.frame_size
+m.area = mc.Area(0, 0, 3 * fw, 3 * fh); f10 = m.scan()
+m.objective = 50; m.focus(); f5w, f5h = m.frame_size
+m.area = mc.Area(fw, fh, fw + 3 * f5w, fh + 3 * f5h); f50 = m.scan()
+d_true = (8.0, -5.0)
+align(f50, d_true)                                                   # 50x «уехал» (своя ось у объектива)
+c50 = stage_to_mosaic(f10, [(fw + 1.5 * f5w, fh + 1.5 * f5h)])[0]
+res = {}
+mc.view(f10, _keys=[-1, ('qmove', *c50), -1, ord('o'), ord('o'), -1, ord('O'), -1, ('call', lambda st: res.update(a=st['msg'])),
+                    ord('l'), -1, ('qdrag', *c50, *(c50 + (30, 0))), -1, ('call', lambda st: res.update(dq=list(st['al']['dq']))),
+                    27, -1, ('call', lambda st: res.update(mode=st['mode'])), ord('l'), -1, 32, -1,
+                    ('call', lambda st: res.update(auto=st['msg'])), 13, -1, 27, 27])
+uid50 = json.load(open(os.path.join(f50, 'meta.json')))['sample_uid']
+assert json.load(open(os.path.join(m.sample.folder, 'view.json')))['alpha'] == {uid50: 0.75} and '75 %' in res['a'], res
+assert abs(res['dq'][0] - 30) < 0.5 and abs(res['dq'][1]) < 0.5 and res['mode'] == 'look', res   # тянуть: едут за мышью; Esc — отмена
+assert align(f10) != (0.0, 0.0) and 'by the picture' in res['auto'], res
+d10 = align(f10)
+assert np.hypot(d10[0] - d_true[0], d10[1] - d_true[1]) < 0.5, (d10, d_true)                       # само: с точностью < 0.5 мкм
+q_ = stage_to_mosaic(f10, [(100.0, 100.0)])[0]; align(f10, (0, 0))
+assert np.allclose(q_, stage_to_mosaic(f10, [(100 - d10[0], 100 - d10[1])])[0], atol=1e-6)   # сдвиг — во всех пересчётах
+m.close()
+print(f"Layers: picture transparency O (75 % kept per selection); L: drag moves the higher pictures, Esc cancels; "
+      f"Space aligns by the picture: 10x shifted by {d10[0]:+.2f}, {d10[1]:+.2f} um (true {d_true}): OK")

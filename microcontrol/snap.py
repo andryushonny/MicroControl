@@ -44,7 +44,8 @@ def geometry(folder):
     from .storage import ScanData
     from .stitch import load_positions
     jp = os.path.join(folder, 'join', 'positions_all.csv')
-    key = os.path.getmtime(jp) if os.path.exists(jp) else 0
+    ap = os.path.join(folder, 'align.json')
+    key = (os.path.getmtime(jp) if os.path.exists(jp) else 0, os.path.getmtime(ap) if os.path.exists(ap) else 0)
     if folder in _GEO and _GEO[folder][0] == key:
         return _GEO[folder][1]
     st = ScanData(folder)
@@ -98,11 +99,38 @@ def geometry(folder):
     c = c + (sref @ B.T) @ Mo.T
     T = p + (sg - sref) @ B.T
     resid = pos - (T @ Mo.T + c)
-    g = dict(pos=pos, p=p, sg=sg, sref=sref, Mo=Mo, B=B, T=T, c=c, W=W, H=H, ms=ms,
+    d_um = np.asarray(align(folder), float)             # совмещение с точной съёмкой: картинка на столике сдвинута
+    if d_um.any():
+        T = T + d_um / ms
+        c = c - (d_um / ms) @ Mo.T
+    g = dict(pos=pos, p=p, sg=sg, sref=sref, Mo=Mo, B=B, T=T, c=c, W=W, H=H, ms=ms, d_um=d_um,
              resid=float(np.median(np.hypot(*resid.T))) if len(p) else 0.0,
              backlash_um=(2 * np.abs(np.diag(B)) * ms).round(2).tolist())
     _GEO[folder] = (key, g)
     return g
+
+
+def align(folder, d_um=None, to=None):
+    """Сдвиг съёмки на столике, мкм (dx, dy): менее точную совмещают с более точной (у объективов свой сдвиг
+    оптической оси, у столика — люфт). Хранится в align.json съёмки; все пересчёты мозаика <-> столик (сетка,
+    выделения, карта, экспорт) идут с ним. d_um=None — прочитать; (0, 0) — убрать. -> (dx, dy)."""
+    import json
+    p = os.path.join(folder, 'align.json')
+    if d_um is None:
+        try:
+            return tuple(json.load(open(p, encoding='utf-8')).get('d_um') or (0.0, 0.0))
+        except (OSError, ValueError):
+            return (0.0, 0.0)
+    d_um = (round(float(d_um[0]), 4), round(float(d_um[1]), 4))
+    if not any(d_um):
+        if os.path.exists(p):
+            os.remove(p)
+        _GEO.pop(folder, None)
+        return d_um
+    with open(p, 'w', encoding='utf-8') as f:
+        json.dump(dict(d_um=list(d_um), to=to), f, indent=1)
+    _GEO.pop(folder, None)
+    return d_um
 
 
 def mosaic_to_stage(folder, q):

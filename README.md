@@ -157,7 +157,7 @@ The same microscope can be driven in six ways; they can be mixed in one session.
 
 Settings are ordinary properties with checked ranges: `m.settings` lists all of them, `m.photo_pause = 0.5` changes one, a value out of range is refused with the allowed range. `mc.help()` prints a short guide.
 
-**Emergency stop:** `python -m microcontrol stop` in any console (or the file `~/.microcontrol/STOP`): a running program sends "light 0" and "laser 0", closes the port and stops.
+**Emergency stop:** `python -m microcontrol stop` in any console (or the file `~/.microcontrol/STOP`): a running program sends "light 0" and "laser 0", closes the port and stops. If the program crashes or is killed without closing the instrument, a separate guard process switches the laser, motors, light and cooling off by itself.
 
 ---
 
@@ -242,7 +242,7 @@ Arrows move; letters do things. As much as possible is done right in the window.
 | `E` / `Q` (`PgUp` / `PgDn`) | stage up / down by Step Z (`Shift` — ×5) |
 | `F` · `K` | autofocus · keep $Z$ here as a focus point |
 | Ctrl+click cards · Shift+drag over a selection | mark for Merge / Minus / Overlap / Group / Ungroup · move a selection |
-| Ctrl+drag on the map · `Esc` during a job | a free box on the objective in place (a crystal): exactly as drawn, smaller than a frame — one frame; the overview chosen + Scan area — all such boxes in it · stop the job (or Stop on its bar) |
+| Ctrl+drag on the map · `Esc` during a job | a draft box on the objective in place (a crystal): with a margin for backlash, edges on motor steps; Scan area shoots it; the overview chosen + Scan area — all such boxes in it · stop the job (or Stop on its bar) |
 | `1`, `2` | corners of a selection |
 | `Y` | "Z follows the focus points" on / off |
 | `,` `.` · `Enter` | previous / next selection · drive to it |

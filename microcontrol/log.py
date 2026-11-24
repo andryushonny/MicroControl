@@ -25,6 +25,7 @@ EVENTS = {
     'MOV-012': "Limit code while leaving", 'MOV-013': "Resend, still moving", 'MOV-011': "Motors on",        'CON-005': "Cooling",           'CON-006': "Reconnect",
     'MOV-009': "Home set",         'MOV-010': "Go home",           'CON-004': "Position restored",
     'STP-001': "Emergency stop",   'LCK-001': "Control lock",
+    'SAF-001': "Guard: switched off after a crash",
     'HW-TX':   "Bytes sent",       'HW-RX':   "Bytes received",
 }
 
@@ -44,13 +45,13 @@ class _Fmt(logging.Formatter):
         return f"{t}  {r.levelname:<5}  {getattr(r, 'code', '-'):<7}  {_ascii(r.getMessage())}"
 
 
-def start(folder="logs", level="DEBUG"):
+def start(folder="logs", level="DEBUG", suffix=""):
     """Открыть новый файл журнала. Возвращает путь."""
     global _file
     os.makedirs(folder, exist_ok=True)
     for h in list(logger.handlers):
         logger.removeHandler(h); h.close()
-    _file = os.path.abspath(os.path.join(folder, datetime.now().strftime("MC_%Y%m%d_%H%M%S.log")))
+    _file = os.path.abspath(os.path.join(folder, datetime.now().strftime("MC_%Y%m%d_%H%M%S") + suffix + ".log"))
     h = logging.FileHandler(_file, encoding="utf-8")
     h.setFormatter(_Fmt())
     h.setLevel(level)

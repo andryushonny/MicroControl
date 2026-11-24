@@ -343,7 +343,7 @@ def _seed(folder, g, LAT, smp0, sc, px_um, need_crosses=False):
                         f"(moved by {np.hypot(*dfx_) * px_um:.2f} um); F: frames onto the crosses")
         except Exception:
             nfx_ = 0
-        if need_crosses and not getattr(g, 'sure_crosses', 0):   # крестов здесь не видно — сетку не рисовать
+        if need_crosses and not g.crosses_seen():               # крестов здесь не видно — сетку не рисовать
             if old_ is None:
                 os.remove(gp0_)
             else:
@@ -537,7 +537,8 @@ def _view_one(folder, fullscreen, keys, car):
                 return f"{name_}: its squares are unselected, but the sample file could not be written: {e_}"
         return f"{name_} deleted ({gone_} square{'s' if gone_ != 1 else ''} unselected; Ctrl+Z: select them again)"
 
-    st['_t'] = dict(delete_draft=lambda *a_: delete_draft(*a_), regions=lambda: regions_now()[0])   # для тестов
+    st['_t'] = dict(delete_draft=lambda *a_: delete_draft(*a_), regions=lambda: regions_now()[0],
+                    seam_pt=lambda k_: seam_pt(k_))   # для тестов
 
     def R():
         t = np.radians(st['rot'])
@@ -1540,16 +1541,24 @@ def _view_one(folder, fullscreen, keys, car):
         sh_ = np.median(sc.P - pz_, 0)                          # от координат сшивки — к картинке
         ed_.update(z=z_, ovr=ovr_, res=res_, w=w_, sh=sh_, man=sc.P - (pz_ + sh_))   # man: руками и по крестам
 
+    def seam_pt(k_):
+        """Точка шва k на мозаике (px): середина; у диагонального шва — на 35 % от первого кадра, иначе у двух
+        диагоналей крест-накрест (змейка) точки совпали бы и щелчок попадал бы не в тот шов."""
+        z_ = st['edit']['z']
+        a_, b_ = sc.P[z_['I'][k_]], sc.P[z_['J'][k_]]
+        d_ = np.abs(b_ - a_)
+        t_ = 0.35 if d_[0] > 0.25 * sc.W and d_[1] > 0.25 * sc.H else 0.5
+        return a_ + t_ * (b_ - a_) + (sc.W / 2, sc.H / 2)
+
     def seam_at(xy):
-        """Шов, чья точка (середина) под мышью (в пикселях окна), или None."""
+        """Шов, чья точка под мышью (в пикселях окна), или None."""
         ed_ = st.get('edit') or {}
         z_ = ed_.get('z')
         if z_ is None:
             return None
-        c_ = np.array([sc.W / 2, sc.H / 2])
         best_ = None
         for k_ in range(len(z_['I'])):
-            m_ = to_view((sc.P[z_['I'][k_]] + sc.P[z_['J'][k_]]) / 2 + c_)
+            m_ = to_view(seam_pt(k_))
             d_ = np.hypot(m_[0] - xy[0], m_[1] - xy[1])
             if d_ <= 7 and (best_ is None or d_ < best_[0]):
                 best_ = (d_, k_)
@@ -1728,7 +1737,7 @@ def _view_one(folder, fullscreen, keys, car):
             for k_ in range(len(z_['I'])):
                 a_ = to_view(sc.P[z_['I'][k_]] + c_)
                 b_ = to_view(sc.P[z_['J'][k_]] + c_)
-                m_ = ((a_[0] + b_[0]) / 2, (a_[1] + b_[1]) / 2)
+                m_ = to_view(seam_pt(k_))
                 if not (-20 < m_[0] < img.shape[1] + 20 and -20 < m_[1] < img.shape[0] + 20):
                     continue
                 r_ = ed_['res'][k_]

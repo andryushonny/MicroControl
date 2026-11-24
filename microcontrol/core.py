@@ -190,6 +190,30 @@ class _Info(Result):
     __str__ = __repr__
 
 
+
+def _exit_on_signal(sg, frame):
+    raise SystemExit(128 + int(sg))
+
+
+def _safety_hooks(logdir):
+    """Завершение по сигналу (kill, закрытие терминала, Ctrl+Break) идёт через обычный выход — m.close() выключит
+    лазер и свет; падение интерпретатора (OpenCV, драйвер) пишет стек в logs/MC_crash.log. Остальное — сторож."""
+    import faulthandler, signal, threading
+    if threading.current_thread() is threading.main_thread():
+        for name in ('SIGTERM', 'SIGBREAK', 'SIGHUP'):
+            sg = getattr(signal, name, None)
+            if sg is not None and signal.getsignal(sg) in (signal.SIG_DFL, None):
+                try:
+                    signal.signal(sg, _exit_on_signal)
+                except (ValueError, OSError):
+                    pass
+    if not faulthandler.is_enabled():
+        try:
+            os.makedirs(logdir, exist_ok=True)
+            faulthandler.enable(open(os.path.join(logdir, 'MC_crash.log'), 'a'))
+        except Exception:
+            pass
+
 class Microscope:
     """Микроскоп Optosky ATR8300.
 
@@ -263,6 +287,7 @@ class Microscope:
                  folder='.', sdk_folder=None, force=False, project=None, sample=None, **settings):
         object.__setattr__(self, '_cfg', {})
         self._lock = None
+        self._guard = None                     # сторож: выключит прибор, если программа вылетит (guard.py)
         self.port = port
         self.folder = os.path.abspath(folder)
         self.dirs = {d: os.path.join(self.folder, d) for d in ('logs', 'photos', 'scans', 'references')}
@@ -302,6 +327,12 @@ class Microscope:
                          one_side=False, overshoot=10,
                          log_bytes=True)
         self._open_port(port, force)
+        if not sim and os.environ.get('MC_GUARD', '1') != '0':
+            from . import guard as _G
+            self._guard = _G.start(self.port, cooling, self.dirs['logs'])
+            if self._guard is None:
+                warnings.warn("The crash guard did not start: if the program crashes, switch the laser off by hand "
+                              "(python -m microcontrol stop).")
         try:
             self._handshake()
             _step_msg(f"  Controller   {self.device['Model']}, serial {self.device['Serial']}, type {self.device['Type']}")
@@ -357,6 +388,7 @@ class Microscope:
             self.close()
             raise
         atexit.register(self.close)
+        _safety_hooks(self.dirs['logs'])
         if isinstance(sample, P_.Sample):
             sm = sample
         else:
@@ -643,6 +675,9 @@ class Microscope:
             self.cam.close()
             self.cam = None
         self._ser = None
+        if self._guard is not None:                            # штатно: сторож уходит, ничего не трогая
+            self._guard.done()
+            self._guard = None
         if self._lock:
             self._lock.release()
             self._lock = None

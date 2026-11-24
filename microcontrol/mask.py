@@ -144,7 +144,8 @@ class Grid:
         настоящие кресты этой мозаики. Каждый крест, куда попадает решётка, ищется по симметрии (до 16 узлов — быстро); сдвиг — медиана.
         Точно по всем крестам — F (refine) или сшивка по крестам. -> (найдено крестов, сдвиг px или None);
         self.sure_crosses — сколько из них точно кресты (отклик ≥ 0.8 и тот же сдвиг, ±2 мкм): пыль и края
-        чешуек дают слабый отклик и случайный сдвиг."""
+        чешуек дают слабый отклик и случайный сдвиг; self.nodes_tried — сколько узлов решётки проверено.
+        self.crosses_seen() — кресты здесь правда есть."""
         if not self.ready():
             return 0, None
         # окно ±30 мкм: сетка, перенесённая с другого объектива, может промахнуться на 10-15 мкм;
@@ -159,7 +160,7 @@ class Grid:
             nodes.sort(key=lambda q: np.hypot(*(q - c_)))
             nodes = [nodes[int(t)] for t in np.linspace(0, len(nodes) - 1, 16)]
         ds, arms, rs = [], [], []
-        self.sure_crosses = 0
+        self.sure_crosses, self.nodes_tried = 0, len(nodes)
         arm = None if k < 1 else self.arm
         for q in nodes:
             reg = render_s(q[0], q[1], k, 4 * r + 1, 4 * r + 1) if render_s is not None else \
@@ -191,6 +192,13 @@ class Grid:
         self.cr._fit()
         self.refined = None
         return len(ds), d
+
+    def crosses_seen(self):
+        """После snap_to_crosses: кресты в мозаике правда есть. Один уверенный крест — только когда проверено меньше
+        4 узлов (маленький участок); иначе нужны два с одним сдвигом: случайный узор подложки или край кристалла
+        изредка даёт сильный отклик в одном узле, но не два одинаково."""
+        n_ = getattr(self, 'sure_crosses', 0) or 0
+        return n_ >= (2 if (getattr(self, 'nodes_tried', 0) or 0) >= 4 else 1)
 
     def refine(self, render, size, px_um, min_resp=0.1, render_s=None, progress=None):
         """Уточнить решётку по ВСЕМ крестам мозаики: в каждом узле, куда попадает решётка, центр креста

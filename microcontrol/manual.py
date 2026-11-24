@@ -55,8 +55,9 @@ HELP = ["Shift+Esc: Exit (or close the window)", "P: Hide / show the left panel"
         "R: Ruler: click two points (distance, um)   0: Zero here   Shift+0: Real coordinates",
         "Wheel: zoom   Drag (middle button too): move the zoomed picture   Z: whole frame",
         "Map (top right): click - the stage goes there, drag - a new area on this objective, wheel - zoom, right drag - move",
-        "Ctrl+drag on the map: a free box (e.g. around a crystal) on this objective, exactly as drawn, not snapped to the squares;"
-        " choose the overview in the list and Scan area: all boxes of this objective inside it are shot",
+        "Ctrl+drag on the map: a draft box (e.g. around a crystal), not snapped to the squares: edges on motor steps, with a"
+        " margin for the backlash and the stage error; Scan area shoots it with the objective in place; the overview chosen"
+        " + Scan area: all boxes inside it",
         "Tab: big map / big camera   Double-click a shot area on the map: open it (crosses, brush, export)",
         "Buttons on top: Prepare (as A), Scan area (scan + stitch), New area, Export (drawing for AutoCAD: DWG + DXF), Settings",
         "Selections are layers: Ctrl+click cards to mark them, then Merge / Minus / Overlap / Group / Ungroup above the list",
@@ -1309,6 +1310,8 @@ def _run(m, fullscreen=False, _keys=None):
         x0_, x1_ = sorted((S0[0], S1[0]))
         y0_, y1_ = sorted((S0[1], S1[1]))
         fw_, fh_ = m.frame_size
+        if free:
+            return new_free_box(x0_, y0_, x1_, y1_)
         r_ = dict(uid=__import__('uuid').uuid4().hex, num=new_num(m), obj=m.objective, fw=fw_, fh=fh_, pts=[],
                   thumbs=[])
         set_geom(m, r_, _box(x0_, y0_, max(x1_, x0_ + 1), max(y1_, y0_ + 1)))
@@ -1342,6 +1345,52 @@ def _run(m, fullscreen=False, _keys=None):
         return (f"{SM.title(m, m._sel)} ({m.objective}x{', free box' if free else ''}): {size_txt(x1_ - x0_, y1_ - y0_)}, "
                 f"{nx_ * ny_} frame{'s' if nx_ * ny_ != 1 else ''}" + (f", cut to the edge of {SM.title(m, gp_)}" if cut_ else "")
                 + inside_)
+
+    def reach_margin():
+        """Запас рамки на каждую сторону (мкм): шаг мотора (столик встаёт только на шаги) + половина люфта
+        (по последней сшитой съёмке образца: модель столика) + разброс шага столика. -> (мкм, откуда)."""
+        ms_ = float(m.motor_step)
+        half_bl, src_ = 0.0, "motor step"
+        try:
+            from .project import latest_scans as _ls
+            from .snap import geometry
+            fs_ = sorted(_ls(m.sample.folder), key=lambda f_: os.path.getmtime(os.path.join(f_, 'join', 'positions_all.csv'))
+                         if os.path.exists(os.path.join(f_, 'join', 'positions_all.csv')) else 0)
+            if fs_:
+                g_ = geometry(fs_[-1])
+                half_bl = 0.5 * max(g_.get('backlash_um') or [0.0])
+                half_bl += g_.get('resid', 0.0) * g_['ms'] / max(1e-9, float(np.abs(g_['Mo']).max()))
+                src_ = "motor step, half the backlash and the stage scatter of the last scan"
+        except Exception:
+            pass
+        return ms_ + half_bl, src_
+
+    def new_free_box(x0_, y0_, x1_, y1_):
+        """Ctrl+тянуть: черновик-рамка (кристалл), ровно где нарисовали, с запасом на люфт и погрешность столика;
+        края — на целых шагах мотора (столик туда доедет точно). Снимается объективом, что стоит, при Scan area
+        (сам или все рамки внутри выбранного обзора)."""
+        from .layers import new_num, set_geom, box as _box, clip_to_parent
+        ms_ = float(m.motor_step)
+        mg_, src_ = reach_margin()
+        bx0, by0 = np.floor((x0_ - mg_) / ms_) * ms_, np.floor((y0_ - mg_) / ms_) * ms_
+        bx1, by1 = np.ceil((x1_ + mg_) / ms_) * ms_, np.ceil((y1_ + mg_) / ms_) * ms_
+        fw_, fh_ = m.frame_size
+        r_ = dict(uid=__import__('uuid').uuid4().hex, num=new_num(m), kind='draft', free=True, fw=fw_, fh=fh_,
+                  pts=[], thumbs=[], margin_um=round(mg_, 2))
+        set_geom(m, r_, _box(bx0, by0, bx1, by1))
+        try:
+            gp_, cut_ = clip_to_parent(m, r_)
+        except ValueError as e:
+            return str(e)
+        m._regions.append(r_)
+        r_['parent'] = m._regions[gp_]['uid'] if gp_ is not None else None
+        m._sel = len(m._regions) - 1
+        SM.persist(m)
+        inside_ = (f" Inside {SM.title(m, gp_)}: choose it and Scan area to shoot all boxes in it with {m.objective}x."
+                   if gp_ is not None else "")
+        return (f"Draft {r_['num']} (free box): {size_txt(x1_ - x0_, y1_ - y0_)} drawn, "
+                f"{size_txt(bx1 - bx0, by1 - by0)} with {mg_:.1f} um each side for the {src_}; edges on motor steps."
+                f" Scan area shoots it with {m.objective}x.{inside_}")
 
     def new_area_cells(L_, S0, S1):
         from . import lattice as LT
@@ -1775,6 +1824,11 @@ def _run(m, fullscreen=False, _keys=None):
         out_, todo_ = [], list(kids_.get(rs_['uid'], []))
         while todo_:
             rg = todo_.pop(0)
+            if rg.get('kind') == 'draft' and rg.get('free'):   # рамка-черновик: выделением этого объектива
+                k_ = m._regions.index(rg)
+                draft_to_selection(k_)
+                if rg.get('kind') == 'draft':                # не вышло (пирамидка): пропустить
+                    continue
             if rg.get('kind') not in ('group', 'draft') and SM.obj(m, rg) == m.objective:
                 out_.append(rg['uid'])                       # её собственные дети этого объектива — в её же скане
             else:

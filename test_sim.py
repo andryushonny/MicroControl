@@ -2106,7 +2106,7 @@ def _keys50(save):
     yield -1; yield ord('j'); yield -1
     yield ('call', lambda st: box_.update(st=st)); yield -1
     ed_ = box_['st']['edit']; assert ed_.get('z') is not None
-    c_ = (ed_['orig'][z_['I'][k_]] + ed_['orig'][z_['J'][k_]]) / 2 + (W_ / 2, H_ / 2)
+    c_ = box_['st']['_t']['seam_pt'](k_)                                 # точка шва (у диагонали — не середина)
     P0_ = ed_['orig'].copy()
     yield ('qclick', float(c_[0]), float(c_[1])); yield -1
     key_ = (int(z_['I'][k_]), int(z_['J'][k_]))
@@ -2159,17 +2159,14 @@ boxes = [(510, 120, 528, 134), (560, 400, 640, 455), (90, 480, 150, 520)]       
 for b_ in boxes:
     M.run(m, fullscreen=False, _keys=[-1, ('maprect', *box_px(*b_), True), -1, -1])                    # Ctrl+тянуть
 fr_ = [r_ for r_ in m._regions if r_.get('free')]
-assert len(fr_) == 3, [(r_['num'], r_.get('free')) for r_ in m._regions]
-for r_, b_ in zip(fr_, boxes):                                                                       # контур — ровно рамка
-    B_ = LY.geom(m, r_).bounds
-    want_ = (*n_.to_um(n_.to_px(b_[:2])), *n_.to_um(n_.to_px(b_[2:])))
-    assert np.allclose(B_, want_, atol=0.5), (B_, want_)
-    assert r_.get('parent') == u10 and SM.obj(m, r_) == 50, r_
-nf_ = [int(np.prod(SM.frames_of(m, LY.idx(m, r_['uid'])))) for r_ in fr_]
-assert nf_[0] == 1 and nf_[1] > 1, nf_                                                               # меньше кадра — один кадр
-n0_ = len(m._regions)
-M.run(m, fullscreen=False, _keys=[-1, ('maprect', *box_px(600, 430, 700, 500), True), -1, -1])        # частично на рамке 2
-assert len(m._regions) == n0_, "a box partly over another 50x box must be refused"
+assert len(fr_) == 3 and all(r_.get('kind') == 'draft' for r_ in fr_), [(r_['num'], r_.get('kind')) for r_ in fr_]
+ms_ = m.motor_step
+for r_, b_ in zip(fr_, boxes):                                                                       # рамка: нарисованное внутри,
+    B_ = LY.geom(m, r_).bounds                                                                       # запас не меньше шага,
+    want_ = (*n_.to_um(n_.to_px(b_[:2])), *n_.to_um(n_.to_px(b_[2:])))                               # края на шагах мотора
+    assert all(B_[i_] <= want_[i_] - ms_ + 1e-6 for i_ in (0, 1)) and all(B_[i_] >= want_[i_] + ms_ - 1e-6 for i_ in (2, 3)), (B_, want_)
+    assert all(abs(v_ - round(v_ / ms_) * ms_) < 0.01 for v_ in B_), (B_, ms_)
+    assert r_.get('parent') == u10, r_
 m._sel = LY.idx(m, u10)                                                                              # выбран обзор 10x
 m.last_scans = []
 M.run(m, fullscreen=False, _keys=[-1, ord('s'), -1, -1])
@@ -2177,17 +2174,20 @@ names_ = sorted(os.path.basename(os.path.dirname(os.path.dirname(f_))) for f_ in
 want_n = sorted(f"S{r_['num']:02d}_50x" for r_ in m._regions if SM.obj(m, r_) == 50)
 assert names_ == want_n, (names_, want_n)                                                            # все 50x в обзоре, и только они
 from microcontrol.storage import ScanData
-for r_, nf in zip(fr_, nf_):
+assert all(r_.get('kind') != 'draft' and SM.obj(m, r_) == 50 for r_ in fr_), [(r_['num'], r_.get('kind')) for r_ in fr_]
+nf_ = []
+for r_ in fr_:                                                                                      # рамки стали 50x и сняты
     f_ = next(f_ for f_ in m.last_scans if f"S{r_['num']:02d}_50x" in f_)
     st_ = ScanData(f_); n_fr = len(st_); st_.close()
-    assert n_fr == nf, (r_['num'], n_fr, nf)
+    nf_.append(n_fr)
+    assert n_fr == int(np.prod(SM.frames_of(m, LY.idx(m, r_['uid'])))), (r_['num'], n_fr)
 m.objective = 10
 m._sel = LY.idx(m, u10)
 M.run(m, fullscreen=False, _keys=[-1, ord('s'), -1, -1])                                              # 10x: сам обзор
 assert any('S%02d_10x' % m._regions[LY.idx(m, u10)]['num'] in f_ for f_ in m.last_scans), m.last_scans
 m.close()
-print(f"Crystal boxes: Ctrl+drag gives boxes exactly as drawn ({nf_} frames), plain drag still snaps to squares, "
-      "a box over another refused; the 10x overview chosen -> Scan shoots all its 50x boxes: OK")
+print(f"Crystal boxes: Ctrl+drag gives draft boxes (drawn box inside, margin for backlash, edges on motor steps), plain "
+      f"drag still snaps to squares; the 10x overview chosen -> Scan turns them into 50x and shoots them ({nf_} frames): OK")
 
 # ------------------------------------------------------------------ 52. Любое долгое дело с полосой останавливается (Esc / Stop); полоса идёт долями (по этапам, по времени), а не 0 -> 100 %
 import threading
@@ -2343,3 +2343,76 @@ mc.view(fA, _keys=keys54())
 assert not Grid(fA).selected and 'deleted' in box_['msg'], box_['msg']
 m.close()
 print(f"Grid by itself only where crosses are seen (none by the stage coordinates); draft x in the view: {box_['msg']}: OK")
+
+
+# ------------------------------------------------------------------ 55. Сторож: программа вылетела (os._exit, SIGKILL, необработанная ошибка) — лазер, моторы, свет, охлаждение выключены; штатное закрытие — сторож молчит
+import pty, select, signal
+from microcontrol import protocol as P
+d55 = tempfile.mkdtemp()
+root_ = os.path.dirname(os.path.abspath(mc.__file__ if hasattr(mc, '__file__') else 'microcontrol'))
+root_ = os.path.dirname(root_)
+
+
+def heard(master, s_):
+    """Байты, пришедшие в «прибор» за s_ секунд -> список (команда, данные)."""
+    buf, t_ = b"", time.time() + s_
+    while time.time() < t_:
+        r_, _, _ = select.select([master], [], [], 0.1)
+        if r_:
+            try:
+                buf += os.read(master, 1024)
+            except OSError:
+                break
+    out = []
+    while P.HEAD in buf:
+        i_ = buf.index(P.HEAD); n_ = int.from_bytes(buf[i_ + 2:i_ + 4], 'big')
+        fr = buf[i_ + 2:i_ + 2 + n_ - 1]
+        out.append((fr[2], bytes(fr[3:])))
+        buf = buf[i_ + 2 + n_ - 1:]
+    return out
+
+
+want = [(P.LASER, b"\x00\x00"), (P.TURN_MOTOR, b"\x00"), (P.LIGHT, b"\x00\x00"), (P.SET_TEC, P.tec_data(P.WARM_C))]
+for how in ('exit', 'kill', 'error', 'close'):
+    master, slave = pty.openpty()
+    port_ = os.ttyname(slave)
+    prog = f"""
+import os, sys, signal, time
+sys.path.insert(0, {root_!r})
+from microcontrol import guard
+g = guard.start({port_!r}, cooling=True, logdir={d55!r})
+print(g.proc.pid, flush=True)
+time.sleep(0.5)
+if {how!r} == 'exit': os._exit(3)                       # падение без atexit (как segfault)
+if {how!r} == 'kill': os.kill(os.getpid(), signal.SIGKILL)
+if {how!r} == 'error': raise RuntimeError('boom')       # необработанная ошибка, close() не вызван
+g.done()                                                 # штатное m.close()
+"""
+    pr = subprocess.run([sys.executable, '-c', prog], capture_output=True, text=True, timeout=30)
+    gpid = int(pr.stdout.split()[0])
+    got = heard(master, 6)
+    t_ = time.time()
+    while time.time() - t_ < 10:                              # сторож вышел сам
+        try:
+            os.kill(gpid, 0); time.sleep(0.1)
+        except ProcessLookupError:
+            break
+    else:
+        raise AssertionError(f"guard {gpid} still alive after {how}")
+    if how == 'close':
+        assert got == [], got
+    else:
+        assert got == want, (how, got)
+    os.close(master); os.close(slave)
+logs_ = [f_ for f_ in os.listdir(d55) if f_.endswith('_guard.log')]
+txt_ = "".join(open(os.path.join(d55, f_), encoding='utf-8').read() for f_ in logs_)
+assert len(logs_) >= 3 and txt_.count('ended without closing') == 3 and 'Laser: off sent' in txt_, (logs_, txt_[:500])
+# сторож лёгкий: без OpenCV и numpy
+pr = subprocess.run([sys.executable, '-c', f"import sys, runpy; sys.argv=['g', '/nonexistent', '0', {d55!r}]; "
+                     f"sys.stdin = open(os.devnull) if False else sys.stdin; "
+                     f"import importlib.util as u; s=u.spec_from_file_location('g', {os.path.join(root_, 'microcontrol', 'guard.py')!r});"
+                     f"m=u.module_from_spec(s); s.loader.exec_module(m); m._mod('protocol'); m._mod('log'); m._mod('control');"
+                     f"print('cv2' in sys.modules, 'numpy' in sys.modules)"], capture_output=True, text=True, timeout=30)
+assert pr.stdout.split() == ['False', 'False'], (pr.stdout, pr.stderr[-500:])
+print(f"Crash guard: after os._exit, SIGKILL and an unhandled error the laser, motors, light and cooling are switched "
+      f"off ({len(want)} commands), a normal close leaves the guard silent; the guard loads no OpenCV/numpy: OK")

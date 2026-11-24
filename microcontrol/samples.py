@@ -121,12 +121,15 @@ def init_areas(m):
             rg['num'] = seq
         seq = max(seq, rg['num'])
     m._area_seq = seq
-    from .layers import refresh_groups
-    refresh_groups(m)
-    for k_, rg in enumerate(m._regions):                   # родитель — явно (дальше не пересчитывается)
-        if 'parent' not in rg:
-            gp_ = _geo_parent(m, k_)
-            rg['parent'] = m._regions[gp_]['uid'] if gp_ is not None else None
+    m._regions[:] = [rg for rg in m._regions if rg.get('kind') != 'group']   # список плоский: без групп
+    for rg in m._regions:                                  # и без вложенности: все на одном уровне
+        rg.pop('parent', None)
+    rks_ = [rg['rank'] for rg in m._regions if rg.get('rank') is not None]
+    top_ = min(rks_) if rks_ else 0
+    for rg in m._regions:                                  # новое — наверх списка (верхний слой)
+        if rg.get('rank') is None:
+            top_ -= 1
+            rg['rank'] = top_
     if getattr(m, '_sel', None) is None or m._sel >= len(m._regions):
         m._sel = len(m._regions) - 1 if m._regions else None
 
@@ -181,14 +184,8 @@ def obj(m, reg):
 
 
 def parent(m, k):
-    """Индекс выделения, в котором лежит выделение k (reg['parent'] — uid), или None. Новое (угол 1) — по месту."""
-    from .layers import idx
-    rg = m._regions[k] if k < len(m._regions) else m._pending
-    if rg is None:
-        return None
-    if 'parent' in rg:
-        return idx(m, rg['parent']) if rg['parent'] else None
-    return _geo_parent(m, k)
+    """Вложенности нет: все выделения — на одном уровне (порядок списка = слои). Всегда None."""
+    return None
 
 
 def _geo_parent(m, k):
@@ -257,34 +254,32 @@ def frames_of(m, k):
 _FCACHE = {}
 
 
-def tree(m):
-    """Выделения деревом (слои): [(индекс, глубина)] — сначала карта, под ней её участки, и так далее."""
-    ks = list(range(len(m._regions)))
-    par = {k: parent(m, k) for k in ks}
-    out = []
+def to_top(m, r):
+    """Выделение — наверх списка (верхний слой)."""
+    rks_ = [x.get('rank') for x in m._regions if x is not r and x.get('rank') is not None]
+    r['rank'] = (min(rks_) if rks_ else 0) - 1
 
-    def walk(k, d):
-        out.append((k, d))
-        for c in siblings(m, k, par):
-            walk(c, d + 1)
-    for k in siblings(m, None, par):
-        walk(k, 0)
-    return out
+
+def tree(m):
+    """Выделения по порядку списка (сверху — верхний слой): [(индекс, 0)]."""
+    return [(k, 0) for k in order(m)]
+
+
+def order(m):
+    """Индексы выделений по порядку списка: сверху — верхний слой (рисуется поверх остальных)."""
+    rk = lambda r: r.get('rank') if r.get('rank') is not None else -1e9
+    return sorted(range(len(m._regions)), key=lambda c: (rk(m._regions[c]), -m._regions[c].get('num', 0)))
 
 
 def siblings(m, p, par=None):
     """Выделения, лежащие прямо в выделении p (None — верхний слой), в порядке карусели: сначала по 'rank'
     (порядок, заданный перетаскиванием), новые — в конце, по объективу и номеру."""
-    par = par if par is not None else {k: parent(m, k) for k in range(len(m._regions))}
-    par = {k: (v if v != k else None) for k, v in par.items()}
-    rk = lambda r: r.get('rank') if r.get('rank') is not None else 1e9
-    key = lambda c: (rk(m._regions[c]), obj(m, m._regions[c]), m._regions[c]['num'])
-    return sorted((c for c in range(len(m._regions)) if par[c] == p), key=key)
+    return order(m) if p is None else []
 
 
 def reorder_ok(m, src, dst):
-    """Можно ли поставить src рядом с dst (один слой)."""
-    return max(src, dst) < len(m._regions) and parent(m, src) == parent(m, dst)
+    """Можно ли поставить src рядом с dst: всегда (список плоский)."""
+    return max(src, dst) < len(m._regions)
 
 
 def reorder(m, src, dst, after=False, save=True):
@@ -293,9 +288,8 @@ def reorder(m, src, dst, after=False, save=True):
     Возвращает сообщение; порядок хранится в sample.json ('rank')."""
     if src == dst:
         return None
-    if isinstance(src, int) and isinstance(dst, int) and max(src, dst) < len(m._regions) \
-            and parent(m, src) == parent(m, dst):
-        sib = siblings(m, parent(m, src))
+    if isinstance(src, int) and isinstance(dst, int) and max(src, dst) < len(m._regions):
+        sib = order(m)
         sib.remove(src)
         sib.insert(sib.index(dst) + (1 if after else 0), src)
         for i, c in enumerate(sib):
@@ -303,7 +297,7 @@ def reorder(m, src, dst, after=False, save=True):
         if save:
             persist(m)
         return f"Selection {num(m, src)} moved {'after' if after else 'before'} Selection {num(m, dst)}"
-    return "Drop it next to a card of the same layer (inside the same selection or group)"
+    return "Drop it on another card"
 
 
 def title(m, k):
@@ -316,8 +310,7 @@ def title(m, k):
 def layer_name(m, k):
     """«10x» или «50x inside Selection 1»."""
     rg = m._regions[k]
-    p_ = parent(m, k)
-    return f"{obj(m, rg)}x" + (f", inside {title(m, p_)}" if p_ is not None else "")
+    return "draft" if rg.get('kind') == 'draft' else f"{obj(m, rg)}x"
 
 
 def _area(m, reg):
@@ -405,32 +398,14 @@ def corner(m, which, img=None):
                pts=[m._pending['pts'][0], fpt] + m._pending['pts'][1:],
                thumbs=m._pending['thumbs'][:1] + th, num=m._pending['num'], uid=m._pending['uid'],
                obj=m.objective, fw=m._pending.get('fw', m.frame_size[0]), fh=m._pending.get('fh', m.frame_size[1]))
-    from .layers import geom, clip_to_parent
-    try:
-        pk_, cut_ = clip_to_parent(m, new)                  # пирамидка: обрезать по краю большего
-    except ValueError as e:
-        raise MicroControlError('E704', str(e)) from None
-    gn = geom(m, new)
-    from .layers import nested as _nested
-    bad = [rg['num'] for rg in m._regions if rg.get('kind') not in ('group', 'draft') and obj(m, rg) == m.objective
-           and gn.intersection(geom(m, rg)).area > 1e-3 and not _nested(gn, geom(m, rg))]
-    if bad:
-        raise MicroControlError('E704', f"This selection partly overlaps Selection {', '.join(map(str, bad))} of the "
-                                        f"same objective ({m.objective}x): put it fully inside or fully outside")
-    from .layers import conflict as _cf
-    bad2_ = _cf(m, new)
-    if bad2_:
-        raise MicroControlError('E704', bad2_)
-    m._regions.append(new)
-    gp_ = pk_ if pk_ is not None else _geo_parent(m, len(m._regions) - 1)   # лежит в том, где отметили
-    new['parent'] = m._regions[gp_]['uid'] if gp_ is not None else None
+    m._regions.append(new)                                 # перекрытия — любые (список плоский, порядок = слои)
+    rks_ = [rg.get('rank') for rg in m._regions if rg.get('rank') is not None]
+    new['rank'] = (min(rks_) if rks_ else 0) - 1           # новое — наверх списка
     m._area_seq = max(getattr(m, '_area_seq', 0), new['num'])         # номер больше не выдаётся
     m._pending, m._sel = None, len(m._regions) - 1
     persist(m)
     nx_, ny_ = _area(m, new).size(m._frame_step(1 - scan_overlap(m.objective)))
-    p_ = parent(m, len(m._regions) - 1)
-    inn = f", inside Selection {m._regions[p_]['num']} ({obj(m, m._regions[p_])}x)" if p_ is not None else ""
-    return (f"Selection {new['num']} fixed ({m.objective}x{inn}): {nx_} x {ny_} = {nx_ * ny_} frames. "
+    return (f"Selection {new['num']} fixed ({m.objective}x): {nx_} x {ny_} = {nx_ * ny_} frames. "
             "Key 1: the next selection")
 
 
@@ -589,8 +564,8 @@ def session_of(folder):
     if pf:
         subs = P_.latest_scans(pf)
         if is_sample(folder):                              # открыли конкретную (может быть старую) версию
-            sel = os.path.dirname(os.path.dirname(folder))
-            subs = [folder if os.path.dirname(os.path.dirname(x)) == sel else x for x in subs]
+            u_ = P_.scan_uid(folder)
+            subs = [folder if (u_ and P_.scan_uid(x) == u_) else x for x in subs]
             if folder not in subs:
                 subs.append(folder)
         return pf, subs
@@ -768,6 +743,15 @@ def carousel(H, items, sel, scroll=0, title="Selections", go=True, hover=None, t
             ex0 = ex1 - 24
             right = ex0 - 6
         tx = ix + 12
+        if it.get('check') is not None:                                   # галочка: идёт ли в экспорт
+            cx0, cy0 = tx, y0 + 10
+            cv2.rectangle(img, (cx0, cy0), (cx0 + 15, cy0 + 15), (200, 200, 205) if over(cx0 - 3, cy0 - 3, cx0 + 18, cy0 + 18)
+                          else (150, 150, 156), 1)
+            if it['check']:
+                cv2.line(img, (cx0 + 3, cy0 + 8), (cx0 + 6, cy0 + 12), (110, 215, 110), 2, cv2.LINE_AA)
+                cv2.line(img, (cx0 + 6, cy0 + 12), (cx0 + 12, cy0 + 3), (110, 215, 110), 2, cv2.LINE_AA)
+            hits.append((cx0 - 3, cy0 - 3, cx0 + 18, cy0 + 18, 'chk', k))
+            tx += 22
         ob = it.get('obj')
         if ob:                                                             # плашка объектива
             (ow, oh), _ = cv2.getTextSize(ob, _FONT, 0.42, 1)
@@ -842,11 +826,12 @@ def carousel(H, items, sel, scroll=0, title="Selections", go=True, hover=None, t
         cv2.putText(img, "none yet", (14, 66), _FONT, 0.45, (150, 150, 150), 1, cv2.LINE_AA)
         cv2.putText(img, "keys 1 and 2: corners", (14, 88), _FONT, 0.4, (120, 120, 125), 1, cv2.LINE_AA) \
             if go else None
-    if content > H:                                                       # полоса прокрутки
-        hgt = max(20, int(H * H / content))
-        top_ = int((H - hgt) * scroll / max(1, content - H))
-        cv2.rectangle(img, (W - 6, top + 1), (W - 1, H - 1), (44, 44, 50), -1)
-        cv2.rectangle(img, (W - 6, max(top + 1, top_)), (W - 1, top_ + hgt), (130, 130, 136), -1)
+    if content > H:                                                       # полоса прокрутки: тянуть мышью
+        hgt = max(24, int((H - top) * (H - top) / max(1, content - top)))
+        top_ = top + int((H - top - hgt) * scroll / max(1, content - H))
+        cv2.rectangle(img, (W - 9, top + 1), (W - 1, H - 1), (44, 44, 50), -1)
+        cv2.rectangle(img, (W - 9, max(top + 1, top_)), (W - 1, top_ + hgt), (150, 150, 156), -1)
+        hits.insert(0, (W - 11, top + 1, W, H - 1, 'scroll', 0))
     cv2.line(img, (0, 0), (0, H), (70, 70, 78), 1)
     return img, hits, content
 

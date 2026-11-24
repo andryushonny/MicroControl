@@ -84,10 +84,11 @@ def local_picture(folder, g, uv0, uv1, pitch, max_px=8000, nodes=None):
     return np.dstack([img, cov.astype(np.uint8) * 255]), res, rep
 
 
-def _overview_png(path, pics, outlines, max_side=12000):
-    """Картинки чертежа (pics: объектив, BGR, 2x3 пиксель -> мкм чертежа, маска) — в одну PNG: мельче объектив —
-    ниже, крупнее — сверху; размер пикселя — самый мелкий из картинок (не больше max_side по стороне); контуры
-    выделений — тонко."""
+def _overview_png(path, pics, outlines, max_side=12000, res=None, max_px=200e6):
+    """Картинки (pics: объектив, BGR, 2x3 пиксель -> мкм чертежа, маска) — в одну PNG по порядку pics (первая —
+    снизу, последняя — сверху: как слои списка); res — мкм на пиксель (None — как у самой точной картинки); не
+    больше max_px пикселей и max_side по стороне (тогда крупнее, и это пишется в отчёт); контуры — тонко.
+    -> (путь, мкм на пиксель, уменьшено ли)."""
     corners = []
     for o, img, A, a in pics:
         h, w = img.shape[:2]
@@ -95,11 +96,11 @@ def _overview_png(path, pics, outlines, max_side=12000):
     allc = np.vstack(corners + [q for q, _ in outlines])
     x0, y0 = allc.min(0)
     x1, y1 = allc.max(0)
-    res = min(float(np.hypot(*A[:, 0])) for _, _, A, _ in pics)
-    res = max(res, max(x1 - x0, y1 - y0) / max_side)
+    want = float(res) if res else min(float(np.hypot(*A[:, 0])) for _, _, A, _ in pics)
+    res = max(want, max(x1 - x0, y1 - y0) / max_side, ((x1 - x0) * (y1 - y0) / max_px) ** 0.5)
     W, H = int(np.ceil((x1 - x0) / res)) + 1, int(np.ceil((y1 - y0) / res)) + 1
     out = np.full((H, W, 3), 255, np.uint8)
-    for o, img, A, a in sorted(pics, key=lambda t: t[0]):
+    for o, img, A, a in pics:
         img = img if img.ndim == 3 else cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
         Ai = np.linalg.inv(np.r_[A, [[0, 0, 1]]])                  # мкм чертежа -> пиксель картинки
         Mo = Ai @ np.array([[res, 0, x0], [0, -res, y1], [0, 0, 1]])   # пиксель PNG -> пиксель картинки
@@ -114,7 +115,22 @@ def _overview_png(path, pics, outlines, max_side=12000):
         cv2.polylines(out, [np.int32(np.round(pq))], True, (0, 0, 255), max(1, W // 3000), cv2.LINE_AA)
     ok, buf = cv2.imencode('.png', out, [cv2.IMWRITE_PNG_COMPRESSION, 3])
     buf.tofile(path)
-    return path
+    return path, res, res > want * 1.001
+
+
+def _preview_pic(folder, D):
+    """Обзор съёмки (preview_all.jpg) для mixed.png: (картинка, 2x3 пиксель -> мкм чертежа, маска) или None."""
+    from .snap import mosaic_to_stage, geometry
+    jp = os.path.join(folder, 'join', 'preview_all.jpg')
+    img = cv2.imread(jp) if os.path.exists(jp) else None
+    if img is None:
+        return None
+    g = geometry(folder)
+    size = g['pos'].max(0) + (g['W'], g['H'])
+    kk = min(1.0, 4000 / size.max())
+    h_, w_ = img.shape[:2]
+    C3 = D(mosaic_to_stage(folder, np.array([[0, 0], [w_, 0], [0, h_]], float) / kk))
+    return img, np.c_[(C3[1] - C3[0]) / w_, (C3[2] - C3[0]) / h_, C3[0]], (img.max(2) > 6).astype(np.uint8) * 255
 
 
 def best_scan(m, r):
@@ -128,11 +144,13 @@ def best_scan(m, r):
     return q[-1] if q else sel.latest
 
 
-def export_sample(m, ks=None, out=None, dwg=True, verbose=True, nested=True, png=True):
-    """Один чертёж образца из участков ks (индексы m._regions; по умолчанию — снятые и не снятые с экспорта):
-    у каждого свой слой S<номер>_<объектив>x (черновик — S<номер>_draft), объективы любые вместе. Снятый —
-    картинка и контур, не снятый и черновик — контур (и клетки). Решётка с номерами — чертёж от креста 1,1;
-    без неё — в координатах столика (мкм, Y вверх). Возвращает путь к DXF (и DWG рядом, если есть ODA)."""
+def export_sample(m, ks=None, out=None, dwg=True, verbose=True, nested=False, png=True, mixed_um=None):
+    """Экспорт образца в одну папку <образец>/export/ (прежнее там заменяется): drawing.dxf (и .dwg), снимки
+    выделений S03_50x.png, mixed.png — все снимки одной картинкой с наложением в порядке слоёв списка (верх списка —
+    сверху), drawing.json — отчёт. ks — индексы m._regions (по умолчанию — все с галочкой «в экспорт»): снятое —
+    картинка (в чертёж — только quality) и контур, не снятое и draft — контур (и клетки). mixed_um — мкм на
+    пиксель mixed.png (None — как у самого точного снимка). Решётка с номерами — чертёж от креста 1,1; без неё —
+    в координатах столика (мкм, Y вверх). Возвращает путь к DXF (DWG рядом, если есть ODA)."""
     import ezdxf
     from .project import Selection
     from .samples import obj, num, title
@@ -140,26 +158,21 @@ def export_sample(m, ks=None, out=None, dwg=True, verbose=True, nested=True, png
     from .snap import mosaic_to_stage, geometry
     from .util import Progress
     from .mask import dxf_to_dwg
+    from .samples import order as _order
     if ks is None:
-        ks = [k for k, r in enumerate(m._regions) if r.get('kind') not in ('group', 'draft') and r.get('export', True)
-              and Selection(m.sample, r).latest]
+        ks = [k for k, r in enumerate(m._regions) if r.get('kind') != 'group' and r.get('export', True)]
     ks = [k for k in ks if m._regions[k].get('kind') != 'group']
-    if nested:                                                   # вложенное в выбранные — само (если не снято с экспорта)
-        from .samples import parent as _par
-        for k, r in enumerate(m._regions):
-            if k in ks or r.get('kind') == 'group' or r.get('export') is False:
-                continue
-            p_ = _par(m, k)
-            for _ in range(16):
-                if p_ is None or p_ in ks:
-                    break
-                p_ = _par(m, p_)
-            if p_ is not None and p_ in ks and best_scan(m, r) is not None:
-                ks.append(k)
     if not ks:
-        raise ValueError("Nothing to export: no area is chosen")
-    out = out or os.path.join(m.sample.folder, 'export', time.strftime('%Y-%m-%d_%H%M%S'))
-    os.makedirs(os.path.join(out, 'images'), exist_ok=True)
+        raise ValueError("Nothing to export: tick the selections to export (the box on their cards)")
+    out = out or os.path.join(m.sample.folder, 'export')
+    os.makedirs(out, exist_ok=True)
+    for f_ in os.listdir(out):                                   # одна папка: прежний экспорт заменяется
+        p_ = os.path.join(out, f_)
+        if os.path.isfile(p_) and f_.lower().endswith(('.png', '.dxf', '.dwg', '.json', '.bak')):
+            try:
+                os.remove(p_)
+            except OSError:
+                pass
     from . import lattice as LT
     from .layers import lattice_of
     L = lattice_of(m)
@@ -185,10 +198,16 @@ def export_sample(m, ks=None, out=None, dwg=True, verbose=True, nested=True, png
         doc.layers.add(name, color=color)
     msp = doc.modelspace()
     pr = Progress(len(ks) + 2, "Export: drawing", unit='steps') if verbose else None
-    order = sorted(ks, key=lambda k: obj(m, m._regions[k]) or 0)   # мелкое увеличение снизу, крупное сверху
+    rank_ = {k: i for i, k in enumerate(_order(m))}
+    order = sorted(ks, key=lambda k: -rank_.get(k, 0))           # низ списка — первым (снизу), верх — последним
     placed = []
     local_rep = {}
     pics_ = []                                                  # (объектив, картинка, пиксель -> чертёж, прозрачность)
+    mix_ = []                                                   # для mixed.png: всё снятое, по порядку слоёв
+
+    def _addp(t_):
+        pics_.append(t_)
+        mix_.append(t_)
     skipped_ = []
     for i, k in enumerate(order):
         r = m._regions[k]
@@ -202,6 +221,9 @@ def export_sample(m, ks=None, out=None, dwg=True, verbose=True, nested=True, png
         qi = Q.info(sc.folder) if sc else None
         qscan_ = sc.folder if (sc and Q.is_quality(sc.folder)) else None
         if sc and not Q.is_quality(sc.folder):                  # quick (обзор) — не для чертежа: только контур
+            mi_ = _preview_pic(sc.folder, D)                    # но в mixed.png — да
+            if mi_ is not None:
+                mix_.append((obj(m, r) or 0,) + mi_)
             jp = None
             skipped_.append(f"{title(m, k)}: {Q.stitched_as(sc.folder) or 'not stitched'} - outline only (the picture "
                             "goes to the drawing after the quality stitch: Stitch)")
@@ -216,7 +238,7 @@ def export_sample(m, ks=None, out=None, dwg=True, verbose=True, nested=True, png
                 aff = np.array(qi['pixel_to_stage_um'], float)
                 px2 = lambda u, v: D((aff @ np.array([u, v, 1.0]))[None])[0]
                 C0, Cu, Cv = px2(0, h_), px2(1, h_), px2(0, h_ - 1)      # левый нижний угол; вправо; вверх
-                png = os.path.join('images', f"{lay}.png")
+                png = f"{lay}.png"
                 cv2.imwrite(os.path.join(out, png), img)
                 idef = doc.add_image_def(filename=png, size_in_pixel=(w_, h_))
                 im = msp.add_image(idef, insert=tuple(C0), size_in_units=(1, 1), dxfattribs={'layer': lay})
@@ -225,7 +247,7 @@ def export_sample(m, ks=None, out=None, dwg=True, verbose=True, nested=True, png
                 im.dxf.insert = (float(C0[0]), float(C0[1]), 0.0)
                 im.dxf.flags = 1 | 2 | 8
                 p00, p10, p01 = px2(0, 0), px2(1, 0), px2(0, 1)         # пиксель (u, v) -> мкм чертежа
-                pics_.append((obj(m, r) or 0, img, np.c_[p10 - p00, p01 - p00, p00], None))
+                _addp((obj(m, r) or 0, img, np.c_[p10 - p00, p01 - p00, p00], None))
                 local_rep[lay] = dict(quality=True, pixel_um=qi['pixel_um'], pixel_source=qi['pixel_source'],
                                       seam_um=qi.get('seam_um'), size_um=qi['size_um'])
                 if qi['pixel_source'] != 'crosses':
@@ -246,7 +268,7 @@ def export_sample(m, ks=None, out=None, dwg=True, verbose=True, nested=True, png
             res_ = local_picture(sc.folder, gs_, uv0, uv1, P)
             if res_ is not None:
                 img4, rs_, rep_ = res_
-                png = os.path.join('images', f"{lay}.png")
+                png = f"{lay}.png"
                 cv2.imwrite(os.path.join(out, png), img4)
                 h_, w_ = img4.shape[:2]
                 idef = doc.add_image_def(filename=png, size_in_pixel=(w_, h_))
@@ -261,7 +283,7 @@ def export_sample(m, ks=None, out=None, dwg=True, verbose=True, nested=True, png
                 except Exception:
                     pass
                 local_rep[lay] = rep_
-                pics_.append((obj(m, r) or 0, img4[..., :3] if img4.ndim == 3 else img4,
+                _addp((obj(m, r) or 0, img4[..., :3] if img4.ndim == 3 else img4,
                               np.array([[rs_, 0.0, x0_], [0.0, -rs_, y0_ + h_ * rs_]]),
                               img4[..., 3] if img4.ndim == 3 and img4.shape[2] == 4 else None))
                 jp = None                                               # старый способ не нужен
@@ -271,12 +293,12 @@ def export_sample(m, ks=None, out=None, dwg=True, verbose=True, nested=True, png
             size = g['pos'].max(0) + (g['W'], g['H'])
             kk = min(1.0, 4000 / size.max())                       # масштаб превью (как в stitch.make_preview)
             a = (img.max(2) > 6).astype(np.uint8) * 255            # вне кадров — прозрачно
-            png = os.path.join('images', f"{lay}.png")
+            png = f"{lay}.png"
             cv2.imwrite(os.path.join(out, png), np.dstack([img, a]))
             h_, w_ = img.shape[:2]
             C3 = D(mosaic_to_stage(sc.folder, np.array([[0, 0], [w_, 0], [0, h_]], float) / kk))
             ux, vy = (C3[1] - C3[0]) / w_, (C3[2] - C3[0]) / h_         # чертёж на пиксель: вправо, вниз
-            pics_.append((obj(m, r) or 0, img, np.c_[ux, vy, C3[0]], a))
+            _addp((obj(m, r) or 0, img, np.c_[ux, vy, C3[0]], a))
             idef = doc.add_image_def(filename=png, size_in_pixel=(w_, h_))
             im = msp.add_image(idef, insert=tuple(C3[2]), size_in_units=(1, 1), dxfattribs={'layer': lay})
             im.dxf.u_pixel = (float(ux[0]), float(ux[1]), 0.0)     # точно по геометрии: поворот, масштаб
@@ -338,15 +360,20 @@ def export_sample(m, ks=None, out=None, dwg=True, verbose=True, nested=True, png
             msp.add_text(f"{X},{Y}", height=0.06 * P, dxfattribs={'layer': 'NUMBERS', 'insert': (cx + 0.04 * P, cy + 0.04 * P)})
     path = os.path.join(out, 'drawing.dxf')
     doc.saveas(path)
-    if png and pics_:                                            # всё выбранное — одной картинкой в масштабе чертежа
+    mixed_ = None
+    if png and mix_:                                             # mixed.png: все снимки с наложением по слоям
         try:
-            _overview_png(os.path.join(out, 'overview.png'), pics_, [(D(rg), num(m, k)) for k in ks
-                                                                       for rg in rings(m, m._regions[k])])
+            _p, res_, cut_ = _overview_png(os.path.join(out, 'mixed.png'), mix_,
+                                           [(D(rg), num(m, k)) for k in ks for rg in rings(m, m._regions[k])],
+                                           max_side=60000, res=mixed_um)
+            mixed_ = dict(file='mixed.png', um_per_px=round(float(res_), 5), coarser_than_asked=bool(cut_))
+            if cut_:
+                skipped_.append(f"mixed.png: {res_:.3f} um/px (finer would be over 200 Mpx)")
         except Exception as e:
-            skipped_.append(f"overview.png not made: {e}")
+            skipped_.append(f"mixed.png not made: {e}")
     json.dump(dict(frame=("stage coordinates, um, Y up" if stage_frame else
                           "lattice: cross 1,1 at (0, 0), X to cross 2,1, Y up (to cross 1,2 is -Y)"), pitch_um=P,
-                   lattice=L, areas=placed, pictures=local_rep, notes=skipped_),
+                   lattice=L, areas=placed, pictures=local_rep, mixed=mixed_, notes=skipped_),
               open(os.path.join(out, 'drawing.json'), 'w'), indent=1, default=float)
     if verbose:
         for s_ in skipped_:

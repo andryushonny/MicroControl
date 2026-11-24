@@ -2,12 +2,14 @@
 
     Проект (Project)        работа: несколько образцов, описание
       Образец (Sample)      одна подложка на столике: свои выделения и координаты, описание
-        Выделение (Selection)   область скана на одном объективе; слои: карта 10x > участки 50x > 100x
-          Съёмка (Scan)     каждая съёмка выделения — новая версия (кадры, сшивка, сетка, чертёж)
+        Выделение (Selection)   область скана с объективом (или draft); список плоский: порядок = слои
+          Съёмка (Scan)     каждая съёмка выделения — новая версия (кадры, сшивка, сетка)
 
     <папка>/projects/<Проект>/project.json
-    <папка>/projects/<Проект>/samples/<Образец>/sample.json          выделения образца, описание
-    <папка>/projects/<Проект>/samples/<Образец>/selections/S01_10x/scans/<дата>/   съёмки
+    <папка>/projects/<Проект>/samples/<Образец>/sample.json          выделения образца (по порядку слоёв)
+    <папка>/projects/<Проект>/samples/<Образец>/scans/<дата>_S03_50x/   съёмки (все — плоско)
+    <папка>/projects/<Проект>/samples/<Образец>/export/              экспорт (чертёж, снимки, mixed.png)
+    <папка>/projects/<Проект>/samples/<Образец>/thumbs/<uid>/        картинки углов выделений
     <папка>/projects/<Проект>/samples/<Образец>/photos/              отдельные снимки (Пробел)
 
     p = mc.Project("Graphene", "flakes on SiO2")    # открыть или создать; p.uid — короткий id ("k3f9x")
@@ -191,8 +193,7 @@ class Selection:
     @property
     def scans(self):
         """Все съёмки выделения (старые -> новые)."""
-        d = os.path.join(self.folder, 'scans')
-        return [Scan(f) for f in sorted(glob.glob(os.path.join(d, '*'))) if is_scan(f)]
+        return [Scan(f) for f in scans_of(self.sample.folder, self.uid)]
 
     @property
     def latest(self):
@@ -343,7 +344,42 @@ def remember(sample):
 
 # ------------------------------------------------------------------ выделения микроскопа <-> sample.json
 def sel_folder(sample_folder, reg):
-    return os.path.join(sample_folder, 'selections', f"S{reg['num']:02d}_{reg.get('obj', 0)}x")
+    """Папка мелочей выделения (картинки углов): thumbs/<uid>. Съёмки — в scans/ образца, плоско."""
+    return os.path.join(sample_folder, 'thumbs', str(reg.get('uid') or f"S{reg.get('num', 0):02d}"))
+
+
+def scan_uid(folder):
+    """Выделение, которому принадлежит съёмка (uid из meta.json) или None."""
+    try:
+        return json.load(open(os.path.join(folder, 'meta.json'), encoding='utf-8')).get('sample_uid')
+    except (OSError, ValueError):
+        return None
+
+
+def scan_label(folder):
+    """«S03_50x» по имени папки съёмки (<дата>_S03_50x[_имя])."""
+    m_ = re.search(r'_(S\d+_\d+x)', os.path.basename(folder))
+    return m_.group(1) if m_ else os.path.basename(folder)
+
+
+_UIDS = {}
+
+
+def scans_of(sample_folder, uid):
+    """Папки съёмок выделения uid (старые -> новые)."""
+    return [f for f in all_scans(sample_folder) if _uid_cached(f) == uid]
+
+
+def _uid_cached(f):
+    mp = os.path.join(f, 'meta.json')
+    try:
+        mt = os.path.getmtime(mp)
+    except OSError:
+        return None
+    c = _UIDS.get(f)
+    if c is None or c[0] != mt:
+        c = _UIDS[f] = (mt, scan_uid(f))
+    return c[1]
 
 
 _KEYS = ('num', 'uid', 'obj', 'fw', 'fh', 'A', 'B', 'pts', 'rank', 'shape', 'parent', 'kind', 'src', 'cells', 'factors', 'sub',
@@ -420,49 +456,42 @@ def sample_obj(folder):
 
 
 def all_scans(sample_folder):
-    """Все съёмки образца: по выделениям, внутри — по времени."""
-    out = []
-    for sd in sorted(glob.glob(os.path.join(sample_folder, 'selections', 'S*'))):
-        out += [s for s in sorted(glob.glob(os.path.join(sd, 'scans', '*'))) if is_scan(s)]
-    return out
+    """Все съёмки образца (scans/<дата>_Sxx_NNx), по времени."""
+    return [s for s in sorted(glob.glob(os.path.join(sample_folder, 'scans', '*'))) if is_scan(s)]
 
 
 def latest_scans(sample_folder):
-    """Последняя съёмка каждого выделения образца — только тех, что есть в sample.json (удалённое в окне
-    микроскопа не показывается и в просмотре; папки остаются: Ctrl+Z там вернёт выделение)."""
-    out = []
-    keep = None
+    """Основная (Make main) или последняя съёмка каждого выделения из sample.json — в порядке списка (сверху вниз:
+    верхний слой первым). Удалённые выделения не показываются (папки остаются: Ctrl+Z вернёт)."""
     sj = os.path.join(sample_folder, 'sample.json')
-    if os.path.exists(sj):
-        try:
-            regs = json.load(open(sj, encoding='utf-8')).get('selections') or []
-            keep = {os.path.abspath(sel_folder(sample_folder, r)) for r in regs if 'num' in r}
-        except (OSError, ValueError):
-            keep = None
-    main = {}
     try:
-        main = {os.path.abspath(sel_folder(sample_folder, r)): r['main'] for r in regs if r.get('main')}
-    except Exception:
-        pass
-    for sd in sorted(glob.glob(os.path.join(sample_folder, 'selections', 'S*'))):
-        if keep is not None and os.path.abspath(sd) not in keep:
+        regs = json.load(open(sj, encoding='utf-8')).get('selections') or []
+    except (OSError, ValueError):
+        regs = []
+    by = {}
+    for f in all_scans(sample_folder):
+        by.setdefault(_uid_cached(f), []).append(f)
+    out = []
+    rk = lambda r: r.get('rank') if r.get('rank') is not None else -1e9
+    for r in sorted(regs, key=lambda r: (rk(r), -r.get('num', 0))):
+        v = by.get(r.get('uid')) or []
+        if not v:
             continue
-        v = [s for s in sorted(glob.glob(os.path.join(sd, 'scans', '*'))) if is_scan(s)]
-        mn = main.get(os.path.abspath(sd))                 # основная (выбрана руками) — вместо последней
-        pick = [s for s in v if os.path.basename(s) == mn] if mn else []
-        if v:
-            out.append(pick[0] if pick else v[-1])
+        mn = r.get('main')
+        pick = [f for f in v if os.path.basename(f) == mn] if mn else []
+        out.append(pick[0] if pick else v[-1])
     return out
 
 
 def scan_folder(sample_folder, reg, name=''):
-    """Новая папка съёмки выделения: selections/Sxx_NNx/scans/<дата>_<время>[_имя]."""
+    """Новая папка съёмки выделения: scans/<дата>_<время>_S03_50x[_имя] (все съёмки образца — в одной папке)."""
     t = datetime.now().strftime("%Y-%m-%d_%H%M%S")
     nm = re.sub(r'[^\w\-]+', '_', name or '').strip('_')
-    base = os.path.join(sel_folder(sample_folder, reg), 'scans')
-    f = os.path.join(base, t + (f"_{nm}" if nm else ""))
+    base = os.path.join(sample_folder, 'scans')
+    tag = f"S{reg['num']:02d}_{reg.get('obj', 0)}x"
+    f = os.path.join(base, f"{t}_{tag}" + (f"_{nm}" if nm else ""))
     k = 1
     while os.path.exists(f):
         k += 1
-        f = os.path.join(base, t + f"_{k}")
+        f = os.path.join(base, f"{t}_{tag}_{k}")
     return f

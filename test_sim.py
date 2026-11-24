@@ -299,8 +299,9 @@ keys = [ord('c')] + clk((2, 2)) + clk((3, 2)) + [ord('t'), -1] + clk((9, 2)) + c
 keys += [ord('t'), -1, ord('t'), -1, ord('m'), -1, ('drag', 560, 380, 720, 520), -1]
 keys += [ord('n'), -1, ('click', *view_xy(world(2.5, 2.5))), -1] + typed('12 7') + \
         [('click', *view_xy(world(4.5, 3.5))), -1] + typed('14 6')      # номера литографии: X вдоль i, Y — против j
-keys += [ord('e'), -1, 27, 27]
+keys += [-1, 27, 27]
 mc.view(f, _keys=keys)
+mc.export(f)                                                       # квадраты этой съёмки (E в просмотре — экспорт образца)
 grid = json.load(open(os.path.join(f, 'grid.json')))
 assert abs(grid['pitch_um'][0] - 100) < 1 and abs(grid['pitch_um'][1] - 100) < 1, grid['pitch_um']
 assert abs(grid["turn_deg"] - 3.5) < 0.2 and grid['selected'], grid
@@ -371,15 +372,16 @@ assert not mc.samples.overlap(mc.samples.rect(regs[0], fw_, fh_), mc.samples.rec
 ses = m.scan(name='Two samples')
 m.close()
 subs = mc.samples.samples(ses)                                       # образец: последняя съёмка каждого выделения
-assert [x.split(os.sep)[-3] for x in subs] == ['S01_10x', 'S02_10x'], subs
-assert all(json.load(open(os.path.join(x, 'meta.json')))['sample_index'] == i + 1 for i, x in enumerate(subs))
+assert sorted(mc.project.scan_label(x) for x in subs) == ['S01_10x', 'S02_10x'], subs
+assert sorted(json.load(open(os.path.join(x, 'meta.json')))['sample_index'] for x in subs) == [1, 2]
 r = mc.stitch(ses, verbose=False)
 assert len(r) == 2, r
 Wsc = 1280 - mc.samples.CAR_W
 mc.view(ses, _keys=[-1, ord('.'), -1, -1, ('click', 1280 - 25, 64), -1, -1, -1, 27])
 left = mc.samples.samples(ses)
-assert [x.split(os.sep)[-3] for x in left] == ['S02_10x'] and \
-    os.path.isdir(os.path.join(os.path.dirname(subs[0]), '_removed', os.path.basename(subs[0])))   # x у 1-го
+gone_ = [x for x in subs if x not in left]                           # x у верхней карточки (новое — сверху)
+assert len(left) == 1 and len(gone_) == 1 and \
+    os.path.isdir(os.path.join(os.path.dirname(gone_[0]), '_removed', os.path.basename(gone_[0])))
 print("Samples: 2 areas, focus points 1-5, two folders, carousel switch and remove: OK")
 
 # ------------------------------------------------------------------ 16. ИИ-агент
@@ -510,8 +512,8 @@ assert [r['num'] for r in m._regions] == [2]
 M.run(m, fullscreen=False, _keys=[R_, -1, R_, -1, ord('1'), -1, R_, -1, ord('2'), -1, -1])
 assert [r['num'] for r in m._regions] == [2, 3], [r['num'] for r in m._regions]
 sf = m.scan(name='uid')
-sels = [x.split(os.sep)[-3] for x in mc.project.latest_scans(sf)]; print(sels)
-assert sels == ['S02_10x', 'S03_10x'], sels
+sels = [mc.project.scan_label(x) for x in mc.project.latest_scans(sf)]; print(sels)
+assert sorted(sels) == ['S02_10x', 'S03_10x'], sels
 u2 = SM.sample_uid(m.sample.selections[0].latest.folder); assert u2 == m._regions[0]['uid']
 # проекты и образцы: у каждого образца — свои выделения; переживают перезапуск
 p2 = mc.Project("Graphene", "flakes on SiO2", folder=d18)
@@ -599,20 +601,20 @@ m.goto(x=fw, y=fh / 2)                                                          
 SM.corner(m, 1)
 fw5, fh5 = m.frame_size
 m.move(dx=fw5); SM.corner(m, 2)                                                    # участок 50x внутри карты
-assert [SM.obj(m, r) for r in m._regions] == [10, 50] and SM.parent(m, 1) == 0, [SM.parent(m, 1)]
-assert SM.tree(m) == [(0, 0), (1, 1)]
+assert [SM.obj(m, r) for r in m._regions] == [10, 50] and SM.parent(m, 1) is None   # без вложенности
+assert SM.tree(m) == [(1, 0), (0, 0)]                                              # новое — наверху списка
 m.objective = 10
 SM.corner(m, 1); m._pending = None                                                # тот же объектив внутри — можно
 m.objective = 50
 det = m.scan(name='detail')                                                        # снимается только 50x
-assert json.load(open(os.path.join(det, 'meta.json')))['parent_uid'] == m._regions[0]['uid']
+assert 'parent_uid' not in json.load(open(os.path.join(det, 'meta.json')))
 m.objective = 20
 try:
     m.scan(); raise AssertionError("scan without selections of 20x")
 except mc.MicroControlError as e:
     assert 'E706' in str(e), e
 lst = m.list(); print(lst)
-assert len(lst) == 2 and lst[0]['objective'] == 10 and lst[1]['depth'] == 1 and lst[1]['parent'] is lst[0], lst
+assert len(lst) == 2 and sorted(x['objective'] for x in lst) == [10, 50], [(x['objective'], x['depth']) for x in lst]
 inf = m.info(); txt = repr(inf)
 assert 'Where the time goes' in txt and 'Camera: picture' in inf['Time'] and inf['Time']['Camera: picture']['calls'] > 5
 print(txt.split("\n\n")[1].splitlines()[2])
@@ -667,10 +669,9 @@ g.selected |= {(0, 0), (1, 0), (3, 1), (3, 2)}                     # две фи
 g.save(px_um)
 print(LY.sync_brush(m))
 kids = [k for k, r in enumerate(m._regions) if r.get('src')]
-assert len(kids) == 2 and all(m._regions[k]['parent'] == m._regions[0]['uid'] and m._regions[k]['kind'] == 'draft'
-                              for k in kids), m._regions
+assert len(kids) == 2 and all(m._regions[k]['kind'] == 'draft' for k in kids), m._regions
 assert abs(LY.geom(m, m._regions[kids[0]]).area - 2 * 100 * 100) < 50      # 2 квадрата 100 x 100 мкм, контур без клеток
-assert [d for k, d in SM.tree(m)] == [0, 1, 1]                      # матрёшка: карта 10x > два черновика
+assert [d for k, d in SM.tree(m)] == [0, 0, 0]                      # плоский список: все на одном уровне
 assert LY.sync_brush(m) is None                                     # ничего не изменилось
 g = Grid(f); g.selected |= {(2, 0)}; g.save(px_um)                  # кисть дорисовала квадрат — выделение растёт
 LY.sync_brush(m)
@@ -682,19 +683,14 @@ assert len([r for r in m._regions if r.get('kind') == 'draft']) == 1 and not any
 assert LY.sync_brush(m) is None                                     # кисть его не пересоздаёт
 k20 = next(k for k, r in enumerate(m._regions) if r.get('kind') == 'draft')
 a0 = LY.geom(m, m._regions[k20]).area
-m._regions.append(dict(uid='cut', num=LY.new_num(m), obj=20, fw=fw / 2, fh=fh / 2, pts=[], parent=m._regions[0]['uid']))
+m._regions.append(dict(uid='cut', num=LY.new_num(m), obj=20, fw=fw / 2, fh=fh / 2, pts=[]))
 x0_, y0_, x1_, y1_ = LY.geom(m, m._regions[k20]).bounds
 LY.set_geom(m, m._regions[-1], LY.box(x0_, y0_, x0_ + 100, y0_ + 100))
 print(LY.subtract(m, [k20, len(m._regions) - 1]))
 assert abs(LY.geom(m, m._regions[k20]).area - (a0 - 1e4)) < 80
-print(LY.group(m, [k20, len(m._regions) - 1]))
-gk = len(m._regions) - 1
-assert m._regions[gk]['kind'] == 'group' and [d for k, d in SM.tree(m)] == [0, 1, 2, 2]
-print(LY.ungroup(m, [gk]))
-assert [d for k, d in SM.tree(m)] == [0, 1, 1]
 SM.persist(m)
 assert any(r.get('shape') for r in m.sample.data['selections'])     # контуры — в sample.json
-m.close(); print("Brush -> drafts (one per figure), merge / minus / group / ungroup, outline in sample.json: OK")
+m.close(); print("Brush -> drafts (one per figure), merge / minus, flat list, outline in sample.json: OK")
 
 # ------------------------------------------------------------------ 25. Порядок карточек перетаскиванием, прокрутка карусели
 import copy as _cp
@@ -712,10 +708,10 @@ for i in range(1, 12):                                              # 12 выд�
     m._regions.append(r)
 m._area_seq = 12
 top = [m._regions[k]['num'] for k, d in SM.tree(m)]
-assert top == list(range(1, 13)), top
+assert top == list(range(12, 0, -1)), top                           # новое — наверху списка
 print(SM.reorder(m, 2, 0))                                          # Selection 3 перед Selection 1
-assert [m._regions[k]['num'] for k, d in SM.tree(m)][:3] == [3, 1, 2]
-assert m.sample.data['selections'][2]['rank'] == 0                  # порядок — в sample.json
+assert [m._regions[k]['num'] for k, d in SM.tree(m)][-3:] == [2, 3, 1]
+assert m.sample.data['selections'][2]['rank'] == 10                 # порядок — в sample.json
 X = 1280 - mc.samples.CAR_W + 60
 shots = []; _o = M.cv2.imshow
 M.cv2.imshow = lambda w, img: (shots.append(img.copy()), _o(w, img))
@@ -726,7 +722,7 @@ M.run(m, fullscreen=False, _keys=[-1, ('car', X, 70), ('cmove', X, 200), ('cmove
 M.cv2.imshow = _o
 M.cv2.imwrite('/tmp/car_drag.png', shots[3]); M.cv2.imwrite('/tmp/car_scroll.png', shots[-1])
 order = [m._regions[k]['num'] for k, d in SM.tree(m)]
-assert order[0] != 3 and 3 in order[1:5], order                     # карточка Selection 3 переехала вниз
+assert order[0] != 12 and 12 in order[1:5], order                   # верхняя карточка (12) переехала вниз
 m.close(); print("Drag and drop order of selections, carousel scroll (wheel, bar): OK", order[:5])
 
 # ------------------------------------------------------------------ 26. Shift + тянуть: сдвинуть выделение, Ctrl+Z; C — удалить выделение кисти, Ctrl+Z
@@ -866,7 +862,7 @@ g.labels = {(0, 0): (3, 2), (2, 1): (5, 3)}; g.save(px_um)                # но
 m._sel = 0
 M.run(m, fullscreen=False, _keys=[-1, ('tbar', bx("Export")), -1, -1])   # чертёж одной кнопкой
 import glob as _glob
-assert _glob.glob(os.path.join(m.sample.folder, 'export', '*', 'drawing.dxf')), "no sample drawing"
+assert os.path.exists(os.path.join(m.sample.folder, 'export', 'drawing.dxf')), "no sample drawing"
 m.close(); print("Navigator: drag on the map - new area, click - go, Tab, Scan area, Export: OK")
 
 # ------------------------------------------------------------------ 32. Проекты таблицей с датами; просмотр в своём окне
@@ -914,7 +910,7 @@ V_.view(f, _keys=[-1, ('qmove', *q1), ord('3'), ord('b'), ('qclick', *q1), -1, 2
 rf = json.load(open(os.path.join(f, 'grid.json')))['refine'][uid]
 assert rf['n'] == 3 and rf['cells'] == [[15, 18]], rf
 print(LY.sync_brush(m)); SM.persist(m)
-kc = next(k for k, r in enumerate(m._regions) if r.get('parent') == uid)
+kc = next(k for k, r in enumerate(m._regions) if str(r.get('src', '')).startswith(uid + '@'))
 rc = m._regions[kc]
 assert rc['kind'] == 'draft' and rc['factors'] == [3] and m._regions[kd]['sub'] == 3
 assert LT.address(*rc['cells'][0], rc['factors']) == "6,7 > 1,1"
@@ -922,11 +918,11 @@ assert abs(LY.geom(m, rc).area - (100 / 3) ** 2) < 5, LY.geom(m, rc).area
 rq = json.load(open(os.path.join(f, 'grid.json')))                 # ещё уровень: клетка 1/3 -> 1/2 внутри
 rq['refine'][rc['uid']] = dict(n=2, cells=[[31, 37]]); json.dump(rq, open(os.path.join(f, 'grid.json'), 'w'))
 LY.sync_brush(m)
-r3 = next(r for r in m._regions if r.get('parent') == rc['uid'])
+r3 = next(r for r in m._regions if str(r.get('src', '')).startswith(rc['uid'] + '@'))
 assert LT.address(*r3['cells'][0], r3['factors']) == "6,7 > 1,1 > 2,2" and LT.level(r3) == 6
 rq['refine'][rc['uid']] = dict(n=2, cells=[[40, 40]]); json.dump(rq, open(os.path.join(f, 'grid.json'), 'w'))
 LY.sync_brush(m)                                                     # клетка вне родителя — не берётся
-assert not any(r.get('parent') == rc['uid'] for r in m._regions)
+assert not any(str(r.get('src', '')).startswith(rc['uid'] + '@') and [40, 40] in r.get('cells', []) for r in m._regions)
 c_ = np.array(LY.geom(m, m._regions[kd]).centroid.coords[0])
 m.objective = 50; m.focus()                                          # 50x на карте: клетки подсетки 1/3 черновика
 M.run(m, fullscreen=False, _keys=[-1, -1])
@@ -934,7 +930,7 @@ nav = m._nav
 M.run(m, fullscreen=False, _keys=[-1, ('maprect', *nav.to_px(c_ - (60, 40)), *nav.to_px(c_ + (60, 40))), -1, -1])
 k50 = next(k for k, r in enumerate(m._regions) if r['obj'] == 50)
 r50 = m._regions[k50]
-assert r50['parent'] == uid and r50['factors'] == [3] and all(c[0] // 3 in (5, 6) and c[1] // 3 == 6 for c in r50['cells']), r50
+assert r50['factors'] == [3] and all(c[0] // 3 in (5, 6) and c[1] // 3 == 6 for c in r50['cells']), r50
 m.scan(); [mc.stitch(x, verbose=False) for x in m.last_scans]
 dx = mc.export_sample(m, ks=[0, kd, k50])                            # 10x и 50x и черновик: каждый на своём слое
 doc = ezdxf.readfile(dx if dx.endswith('.dxf') else dx[:-4] + '.dxf')
@@ -965,11 +961,6 @@ w_, h_ = im50.dxf.image_size.x, im50.dxf.image_size.y
 uv = np.linalg.solve(np.c_[u, v], (V - ins).T).T                   # углы контура — в пикселях картинки
 tol = 0.6 * m.motor_step / np.hypot(*u)
 assert (uv[:, 0] > -tol).all() and (uv[:, 0] < w_ + tol).all() and (uv[:, 1] > -tol).all() and (uv[:, 1] < h_ + tol).all(), uv
-dx2 = mc.export_sample(m, ks=[0])                                   # только 10x: вложенное (50x) — само, и общий PNG
-d2_ = ezdxf.readfile(dx2 if dx2.endswith('.dxf') else dx2[:-4] + '.dxf')
-assert f"S{m._regions[k50]['num']:02d}_50x" in {l_.dxf.name for l_ in d2_.layers}
-ov_ = cv2.imread(os.path.join(os.path.dirname(dx2), 'overview.png'))
-assert ov_ is not None and (ov_ < 250).any(axis=2).mean() > 0.2, None if ov_ is None else ov_.shape
 uid10_ = m._regions[kd]['uid']
 q10 = g.cr.point(1 + 0.5, 0.5)
 V_.view(f, _keys=[-1, ('qmove', *q10), ord('1'), ord('0'), -1, 27])      # «1», «0» — подсетка 1/10
@@ -1021,7 +1012,6 @@ LY.subtract(m, [a, b]); LY._drop(m, [b]); _scan_ok('minus: hole')
 _reset(); a = _add(0, 0, 4 * fw, 2 * fh); b = _add(1.8 * fw, -fh, 2.2 * fw, 3 * fh)
 LY.subtract(m, [a, b]); LY._drop(m, [b]); _scan_ok('minus: two parts')
 _reset(); a = _add(13, 7, 3 * fw, 3 * fh); b = _add(fw, fh, 4 * fw + 9, 4 * fh); LY.intersect(m, [a, b]); LY._drop(m, [b]); _scan_ok('overlap')
-_reset(); a = _add(0, 0, 2 * fw, 2 * fh); b = _add(3 * fw, 0, 4 * fw, 2 * fh); LY.group(m, [a, b]); _scan_ok('group')
 _reset(); a = _add(0, 0, 2 * fw, 2 * fh, kind='draft'); b = _add(2 * fw, 0, 3 * fw, 2 * fh)
 LY.union(m, [a, b]); assert m._regions[0].get('kind') is None; _scan_ok('draft + selection = selection')
 _reset(); a = _add(0, 0, 2 * fw, 2 * fh, kind='draft')
@@ -1040,7 +1030,7 @@ try:
     m.scan(); raise AssertionError("scanned without selections")
 except mc.SafetyError as e:
     assert 'E701' in str(e), e
-m.close(); print("Merge / minus / overlap / group / draft / move, then scan: frames cover every outline, no stray selections: OK")
+m.close(); print("Merge / minus / overlap / draft / move, then scan: frames cover every outline, no stray selections: OK")
 
 
 # ------------------------------------------------------------------ 35. Маленькая карта в углу: колесо — приближение, щелчок — едет
@@ -1116,41 +1106,6 @@ m.close(); print("View follows the microscope window (deleted stays deleted), ri
                  " own numbers replace the seeded ones: OK")
 
 
-# ------------------------------------------------------------------ 37. Пирамидка: участок внутри большего обрезается по его краю; перетаскивание карточки — сразу видно
-import microcontrol.manual as M
-from microcontrol import samples as SM, layers as LY
-m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp()); m.focus()
-fw, fh = m.frame_size
-M.run(m, fullscreen=False, _keys=[-1, -1])
-nav = m._nav
-M.run(m, fullscreen=False, _keys=[-1, ('maprect', *nav.to_px((0, 0)), *nav.to_px((2 * fw, 2 * fh))), -1, -1])
-g10 = LY.geom(m, m._regions[0])
-m.objective = 50; m.focus()
-M.run(m, fullscreen=False, _keys=[-1, -1]); nav = m._nav
-x1_ = g10.bounds[2]
-M.run(m, fullscreen=False, _keys=[-1, ('maprect', *nav.to_px((x1_ - 40, 50)), *nav.to_px((x1_ + 60, 110))), -1, -1])
-k50 = next(k for k, r in enumerate(m._regions) if r['obj'] == 50)
-g50 = LY.geom(m, m._regions[k50])
-assert g10.buffer(0.05).contains(g50) and g50.bounds[2] <= x1_ + 0.05, (g50.bounds, x1_)   # обрезан по краю 10x
-assert m._regions[k50]['parent'] == m._regions[0]['uid']
-assert int(np.prod(SM.frames_of(m, k50))) > 0
-m.scan()                                                                   # снимается только то, что внутри
-m.objective = 100; m.focus()                                               # 100x углами 1-2, вылезая за 50x
-c50 = g50.bounds
-m.goto(x=c50[0] + 5, y=c50[1] + 5); SM.corner(m, 1)
-m.goto(x=c50[2] + 30, y=c50[3] + 30); print(SM.corner(m, 2))
-g100 = LY.geom(m, m._regions[-1])
-assert g50.buffer(0.05).contains(g100), (g100.bounds, c50)
-try:                                                                       # целиком снаружи — нельзя
-    m.goto(x=c50[2] + 300, y=c50[3] + 300); SM.corner(m, 1); m.goto(x=c50[2] + 330, y=c50[3] + 330); SM.corner(m, 2)
-except mc.MicroControlError:
-    pass
-m.objective = 10
-M.run(m, fullscreen=False, _keys=[-1, ('car', 1000, 140), ('cmove', 1000, 200), ('cmove', 1000, 260), -1,
-                                  ('cdrop', 1000, 260), -1])                # тянем карточку: не падает
-m.close(); print("Pyramid: a smaller area is cut to the edge of the larger one (map and corners); card drag preview: OK")
-
-
 # ------------------------------------------------------------------ 38. Подсетка сразу по выбранным квадратам (черновика ещё нет): 3 над ними, клетка, потом окно микроскопа
 import microcontrol.viewer as V_
 from microcontrol import samples as SM, layers as LY, lattice as LT
@@ -1163,19 +1118,18 @@ g = Grid(f); p0 = np.array([66.0, 52.8]) / px_um; a_ = 100 / px_um   # 66, 53 м
 g.cr.add(p0); g.cr.add(p0 + (a_, 0)); g.cr.add(p0 + (0, a_)); g.labels = {(0, 0): (5, 7), (2, 1): (7, 8)}; g.save(px_um)
 LY.sync_brush(m); SM.persist(m)                                       # решётка образца есть, черновиков нет
 q = lambda i, j, a=0.5, b=0.5: g.cr.point(i + a, j + b)
+res38 = {}
 V_.view(f, _keys=[-1, ord('m'), ('qclick', *q(1, 0)), ('qclick', *q(2, 0)), ('qmove', *q(1, 0)), ord('3'),
-                  ('qclick', *q(1, 0, 0.2, 0.2)), -1, 27])
-rf = json.load(open(os.path.join(f, 'grid.json')))['refine']
-key = next(iter(rf))
-smj = json.load(open(m.sample.file))['selections']                   # выделение (draft) — сразу, из просмотра
-assert any(r_['uid'] == key and r_.get('kind') == 'draft' for r_ in smj), (rf, smj)
-assert rf[key]['n'] == 3 and rf[key]['cells'] == [[15, 18]], rf
-print(LY.sync_brush(m)); SM.persist(m)
-d1 = next(r for r in m._regions if r.get('kind') == 'draft' and not r.get('factors'))
-d2 = next(r for r in m._regions if r.get('parent') == d1['uid'])
-assert d1.get('sub') == 3 and d2['factors'] == [3] and LT.address(*d2['cells'][0], [3]) == "6,7 > 1,1"
-assert list(json.load(open(os.path.join(f, 'grid.json')))['refine']) == [d1['uid']]
-m.close(); print("Selected squares become a selection (draft) at once; its finer grid 3, a cell: OK")
+                  ('qclick', *q(1, 0, 0.2, 0.2)), -1, ('call', lambda: res38.update(pend=json.load(open(m.sample.file))['selections'])),
+                  13, -1, ('call', lambda st: res38.update(msg=st['msg'], foc=st.get('_t') and None)), 27, 27])
+smj = json.load(open(m.sample.file))['selections']                   # Enter: выделения — из клеток, сразу
+assert len(res38['pend']) == 1, res38['pend']                        # до Enter — только кисть (новое не сделано)
+d1 = next(r for r in smj if r.get('kind') == 'draft' and not r.get('factors'))
+d2 = next(r for r in smj if r.get('factors') == [3])
+assert d1.get('sub') == 3 and LT.address(*d2['cells'][0], [3]) == "6,7 > 1,1", smj
+assert not d1.get('src') and not d2.get('src') and json.load(open(m.sample.file)).get('focus') in (d1['uid'], d2['uid'])
+assert 'made' in res38['msg'], res38
+m.close(); print("Selected cells and the finer-grid cell become selections on Enter (not before), chosen: OK")
 
 
 # ------------------------------------------------------------------ 39. Ctrl+Z в окне микроскопа — для всех операций над выделениями (вместе с квадратами в просмотре)
@@ -1190,7 +1144,8 @@ g = Grid(f); p0 = np.array([66.0, 52.8]) / px_um; a_ = 100 / px_um   # 66, 53 м
 g.cr.add(p0); g.cr.add(p0 + (a_, 0)); g.cr.add(p0 + (0, a_)); g.labels = {(0, 0): (5, 7), (2, 1): (7, 8)}
 g.selected |= {(0, 0), (2, 0)}; g.save(px_um)                              # выбрали в просмотре: два квадрата
 drafts = lambda: sorted(r['num'] for r in m._regions if r.get('kind') == 'draft')
-M.run(m, fullscreen=False, _keys=[-1, -1])                                 # окно сделало два черновика
+LY.sync_brush(m); SM.persist(m)                                          # Enter в просмотре: два выделения (draft)
+M.run(m, fullscreen=False, _keys=[-1, -1])
 assert len(drafts()) == 2, m._regions
 M.run(m, fullscreen=False, _keys=[-1, 26, -1, -1])                         # черновики из просмотра — не шаг Ctrl+Z
 assert len(drafts()) == 2
@@ -1240,14 +1195,10 @@ def check(tag):
     assert set().union(*got) == acc if got else not acc, (tag, sorted(acc), got)          # каждый принятый квадрат — в черновике
     assert sum(len(x) for x in got) == len(acc), (tag, "a square in two drafts")
     assert sorted(map(sorted, got)) == sorted(map(sorted, LT.figures(acc))), (tag, "one draft per figure")
-    for r in m._regions:                                                                   # пирамидка: внутри родителя
-        if r.get('parent') and r.get('kind') != 'group':
-            pr = m._regions[LY.idx(m, r['parent'])]
-            assert LY.geom(m, pr).buffer(0.05).contains(LY.geom(m, r)), (tag, r['num'])
     rf = json.load(open(os.path.join(f, 'grid.json'))).get('refine') or {}
     for r in d1:                                                                            # клетки подсеток <-> черновики
         rq = rf.get(r['uid'])
-        kids = [k for k in m._regions if k.get('parent') == r['uid'] and k.get('kind') == 'draft']
+        kids = [k for k in m._regions if str(k.get('src', '')).startswith(r['uid'] + '@') and k.get('kind') == 'draft']
         gr_ = LY.geom(m, r).buffer(0.01)
         want = {tuple(c) for c in (rq or {}).get('cells', []) if (c[0] // rq['n'], c[1] // rq['n']) in
                 {tuple(x) for x in r['cells']} and gr_.contains(_Pt(*LT.to_stage(
@@ -1291,98 +1242,13 @@ g.cr.add(p0); g.cr.add(p0 + (a_, 0)); g.cr.add(p0 + (0, a_)); g.labels = {(0, 0)
 g.selected |= {(-1, -1)}; g.save(px_um)                                   # квадрат на краю: середина внутри съёмки
 print(LY.sync_brush(m)); SM.persist(m)
 d = [r for r in m._regions if r.get('kind') == 'draft']
-assert len(d) == 1 and LY.geom(m, m._regions[0]).buffer(0.05).contains(LY.geom(m, d[0])), d
-assert LY.geom(m, d[0]).area < 1e4 - 1                                    # обрезан по краю снятого
+assert len(d) == 1 and abs(LY.geom(m, d[0]).area - 1e4) < 50, d           # квадрат целиком (без обрезки)
 f2 = m.scan(); mc.stitch(f2, verbose=False)                               # вторая версия той же съёмки
-assert os.path.dirname(f2) == os.path.dirname(f)
+assert os.path.dirname(f2) == os.path.dirname(f) and mc.project.scan_label(f2) == mc.project.scan_label(f)
 g = Grid(f); g.selected |= {(1, 0)}; g.save(px_um)                        # выбрали в СТАРОЙ версии
 print(LY.sync_brush(m)); SM.persist(m)
 assert len([r for r in m._regions if r.get('kind') == 'draft']) == 2, m._regions
-m.close(); print("A square at the edge makes a draft (cut to the edge); squares chosen in an older version count: OK")
-
-
-# ------------------------------------------------------------------ 42. Конфликты draft / selection разных уровней: все ограничители и сообщения
-from shapely.geometry import box as _box
-from microcontrol import samples as SM, layers as LY
-from microcontrol.config import OBJECTIVES as _OB
-from microcontrol.mask import Grid
-m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp()); m.focus()
-fw, fh = m.frame_size
-m.area = mc.Area(0, 0, 3 * fw, 2 * fh); f = m.scan(); mc.stitch(f, verbose=False)
-px_um = json.load(open(os.path.join(f, 'meta.json')))['pixel_size_um']
-g = Grid(f); p0 = np.array([66.0, 52.8]) / px_um; a_ = 100 / px_um   # 66, 53 мкм от угла мозаики
-g.cr.add(p0); g.cr.add(p0 + (a_, 0)); g.cr.add(p0 + (0, a_)); g.labels = {(0, 0): (5, 7), (2, 1): (7, 8)}
-g.selected |= {(1, 0), (2, 0)}; g.save(px_um)
-LY.sync_brush(m); SM.persist(m)
-S1 = m._regions[0]
-kd = next(k for k, r in enumerate(m._regions) if r.get('kind') == 'draft')
-snap_ = lambda: json.dumps([{k: v for k, v in r.items() if k != 'thumbs'} for r in m._regions], sort_keys=True, default=str)
-
-def sel(x0, y0, x1, y1, o, parent=None):
-    r = dict(uid=os.urandom(8).hex(), num=LY.new_num(m), obj=o, fw=fw * 10 / o, fh=fh * 10 / o, pts=[], thumbs=[],
-             parent=parent)
-    LY.set_geom(m, r, _box(x0, y0, x1, y1)); m._regions.append(r); return len(m._regions) - 1
-
-import copy
-_r0 = copy.deepcopy(m._regions)
-ok, msg = LY.draft_to_selection(m, kd, 10)                                 # a) 10x в съёмке 10x — теперь можно
-assert ok, msg                                                             # a) тот же объектив внутри — можно
-m._regions = copy.deepcopy(_r0); SM.persist(m)
-gd = LY.geom(m, m._regions[kd]); bx = gd.bounds
-k50 = sel(bx[0] + 5, bx[1] + 5, bx[0] + 40, bx[1] + 30, 50, S1['uid'])    # 50x внутри черновика (снаружи — съёмка 10x)
-_r1 = copy.deepcopy(m._regions)
-ok, msg = LY.draft_to_selection(m, kd, 50)                                 # b) 50x внутри черновика — вложено, можно
-assert ok, msg
-m._regions = copy.deepcopy(_r1); SM.persist(m)
-LY._drop(m, [k50])
-ok, msg = LY.draft_to_selection(m, kd, 50)                                 # c) теперь можно
-assert ok and m._regions[kd].get('kind') is None and m._regions[kd]['obj'] == 50, msg
-s0 = snap_()
-gb = LY.geom(m, S1).bounds
-try:                                                                       # d) за край родителя — нельзя, ничего не тронуто
-    LY.move(m, kd, gb[2], 0); raise AssertionError("moved beyond the parent")
-except ValueError as e:
-    assert 'beyond' in str(e), e
-assert snap_() == s0
-k2 = sel(gb[2] - 60, gb[1] + 10, gb[2] - 20, gb[1] + 40, 50, S1['uid'])   # другой 50x рядом
-gk = LY.geom(m, m._regions[k2]).bounds; gk0 = LY.geom(m, m._regions[kd]).bounds
-try:                                                                       # e) наехать частью на такой же — нельзя
-    LY.move(m, k2, gk0[2] - gk[0] - 20, gk0[1] - gk[1] + 5); raise AssertionError("overlap")
-except ValueError as e:
-    assert 'E704' in str(e), e
-c0 = np.array(LY.geom(m, m._regions[kd]).centroid.coords[0])               # f) родитель едет — дети с ним
-LY.move(m, 0, 7, 3)
-assert np.allclose(np.array(LY.geom(m, m._regions[kd]).centroid.coords[0]) - c0, (7, 3), atol=0.05)
-LY.move(m, 0, -7, -3)
-try:                                                                       # g) 10x + 50x не сливаются
-    LY.union(m, [0, k2]); raise AssertionError("merged across objectives")
-except ValueError as e:
-    assert 'one objective' in str(e), e
-n_ = len(m._regions)                                                       # h) 50x + 50x сливаются
-print(LY.union(m, [kd, k2])); assert len(m._regions) == n_ - 1
-kd = next(k for k, r in enumerate(m._regions) if r.get('obj') == 50 and r.get('kind') is None)
-gk = LY.geom(m, m._regions[kd]).bounds                                     # i) объектив по кругу: пирамидка цела
-k100 = sel(gk[0] + 1, gk[1] + 1, gk[0] + 10, gk[1] + 8, 100, m._regions[kd]['uid'])
-ok, msg = LY.next_objective_of(m, kd, sorted(_OB))
-assert ok and m._regions[kd]['obj'] != 50, (msg, m._regions[kd]['obj'])
-m.objective = 50; m.focus()                                                # j) углы 1-2 на такой же объектив — E704
-m._regions[kd].update(obj=50, fw=fw / 5, fh=fh / 5)
-c_ = LY.geom(m, m._regions[kd]).centroid.coords[0]
-m.goto(x=c_[0], y=c_[1])
-SM.corner(m, 1); m._pending = None                                         # j) угол внутри того же объектива — можно
-m.close(); print("Conflicts: draft->selection checks objective and partial overlap (nesting of one objective is fine), "
-                 "moves keep the pyramid (children along), no merge across objectives, objective cycling: OK")
-m = mc.Microscope('sim', objective=50, folder=tempfile.mkdtemp()); m.focus()   # k) 10x внутри 50x — нельзя
-import microcontrol.manual as M
-fw, fh = m.frame_size
-M.run(m, fullscreen=False, _keys=[-1, -1]); nav = m._nav
-M.run(m, fullscreen=False, _keys=[-1, ('maprect', *nav.to_px((0, 0)), *nav.to_px((600, 400))), -1, -1])
-assert len(m._regions) == 1 and m._regions[0]['obj'] == 50
-m.objective = 10; m.focus(); fw, fh = m.frame_size
-M.run(m, fullscreen=False, _keys=[-1, -1]); nav = m._nav
-M.run(m, fullscreen=False, _keys=[-1, ('maprect', *nav.to_px((150, 120)), *nav.to_px((300, 220))), -1, -1])
-assert len(m._regions) == 1, m._regions                                    # маленький 10x внутри 50x не создан
-m.close(); print("A coarser area inside a finer one is refused: OK")
+m.close(); print("A square at the edge makes a draft (whole, not cut); squares chosen in an older version count: OK")
 
 
 # ------------------------------------------------------------------ 43. Люфт: сверка кадра с мозаикой (дополненная реальность совпадает с крестами), подъезд с одной стороны
@@ -1435,22 +1301,22 @@ d = json.load(open(os.path.join(f, 'grid.json'))); c0 = d2['cells'][0]
 d['refine'] = {d2['uid']: dict(n=2, cells=[[2 * c0[0], 2 * c0[1]], [2 * c0[0] + 1, 2 * c0[1] + 1]])}
 json.dump(d, open(os.path.join(f, 'grid.json'), 'w'))
 LY.sync_brush(m); SM.persist(m)
-kids = [r['uid'] for r in m._regions if r.get('parent') == d2['uid']]
+kids = [r['uid'] for r in m._regions if str(r.get('src', '')).startswith(d2['uid'] + '@')]
 assert len(kids) == 2
 print(SM.delete_area(m, LY.idx(m, d2['uid'])))                             # удалить Draft 2
 for _ in range(2):
     LY.sync_brush(m); SM.persist(m)
     left = [r for r in m._regions if r['uid'] in kids]
-    assert len(left) == 2 and all(r['parent'] == S1 and not r.get('src') for r in left), left
+    assert len(left) == 2 and all(not r.get('parent') for r in left), left
 assert d2['uid'] not in (json.load(open(os.path.join(f, 'grid.json'))).get('refine') or {})
 g = Grid(f); g.selected |= {(2, 0)}; g.save(px_um); LY.sync_brush(m)       # новый черновик со вложенным, потом
 d3 = next(r for r in m._regions if r.get('kind') == 'draft' and r.get('src') and not r.get('factors'))
 d = json.load(open(os.path.join(f, 'grid.json'))); c0 = d3['cells'][0]
 d['refine'] = {d3['uid']: dict(n=2, cells=[[2 * c0[0], 2 * c0[1]]])}; json.dump(d, open(os.path.join(f, 'grid.json'), 'w'))
 LY.sync_brush(m)
-k3 = [r['uid'] for r in m._regions if r.get('parent') == d3['uid']]
+k3 = [r['uid'] for r in m._regions if str(r.get('src', '')).startswith(d3['uid'] + '@')]
 g = Grid(f); g.selected.discard((2, 0)); g.save(px_um); LY.sync_brush(m)  # его квадрат сняли в просмотре
-assert LY.idx(m, d3['uid']) is None and all(LY.idx(m, u) is not None and m._regions[LY.idx(m, u)]['parent'] == S1 for u in k3)
+assert LY.idx(m, d3['uid']) is None and all(LY.idx(m, u) is not None and not m._regions[LY.idx(m, u)].get('parent') for u in k3)
 m.close(); print("Deleting a draft keeps the drafts inside it (released to its parent), also when its squares are unselected: OK")
 
 # ------------------------------------------------------------------ 45. Точность для литографии: крест по краям плеч с наклоном, калибровка дисторсии, подготовка, кадры без потерь, кадры на кресты, картинка чертежа по крестам клеток
@@ -1603,436 +1469,6 @@ assert _draw
 print(f"Profiles across the arms: width {wid[0]:.2f} / {wid[1]:.2f} px (true 6), dust does not pull the snap; "
       "P window: two lines tilted by their ends, edges by hand, band by the wheel, saved for the manual map: OK")
 
-# ------------------------------------------------------------------ 48. Уровни 10x -> 50x -> 100x: создать, отменить, вернуть, удалить, создать иначе; кресты стереть и отметить другие; сетка — выбранного в меню
-
-import sys, os, tempfile, json, time, traceback, numpy as np, cv2
-import microcontrol as mc
-import microcontrol.manual as M
-import microcontrol.viewer as V
-from microcontrol import samples as SM, layers as LY, lattice as LT, project as P_
-from microcontrol.mask import Grid
-from microcontrol.snap import stage_to_mosaic, mosaic_to_stage
-
-OUT = tempfile.mkdtemp()
-os.makedirs(OUT, exist_ok=True)
-for f_ in os.listdir(OUT):
-    os.remove(os.path.join(OUT, f_))
-cv2.getWindowImageRect = lambda w: (0, 0, 1400, 900)
-shots = []
-_o = cv2.imshow
-cv2.imshow = lambda w, img: (shots.append(img), _o(w, img))
-LOG, ISSUES = [], []
-step_n = [0]
-
-
-def log(s):
-    LOG.append(s)
-
-
-def issue(s):
-    log("  !! " + s)
-    ISSUES.append(f"[{step_n[0]}] {s}")
-
-
-def shot(name):
-    if shots:
-        cv2.imwrite(os.path.join(OUT, f"{step_n[0]:02d}_{name}.png"), shots[-1])
-
-
-m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp())
-m.focus()
-w = m._world
-T, PT = np.radians(w.turn_deg), w.pitch
-
-
-def cross_stage(i, j):
-    return np.array([np.cos(T) * PT * i - np.sin(T) * PT * j, np.sin(T) * PT * i + np.cos(T) * PT * j])
-
-
-def crosses_seen(f_):
-    """Сколько настоящих крестов (сим-мира) целиком в мозаике съёмки (не ближе 10 мкм к краю)."""
-    from microcontrol.storage import ScanData as _SD
-    import microcontrol.viewer as _V
-    sc_ = _V._Scene(f_)
-    S_ = mosaic_to_stage(f_, [[0, 0], [sc_.size[0], 0], [sc_.size[0], sc_.size[1]], [0, sc_.size[1]]])
-    sc_.st.close()
-    x0, y0 = S_.min(0) + 10
-    x1, y1 = S_.max(0) - 10
-    n_ = 0
-    for i in range(-5, 60):
-        for j in range(-5, 60):
-            c_ = cross_stage(i, j)
-            n_ += int(x0 <= c_[0] <= x1 and y0 <= c_[1] <= y1)
-    return n_
-
-
-def manual(keys, name=None):
-    try:
-        M.run(m, fullscreen=False, _keys=[-1] + keys + [-1, -1])
-    except Exception as e:
-        issue(f"manual crashed: {type(e).__name__}: {e}")
-        traceback.print_exc()
-    if name:
-        shot(name)
-
-
-def view(folder, keys, name=None):
-    try:
-        V.view(folder, _keys=[-1] + keys + [-1, 27, 27])
-    except SystemExit:
-        pass
-    except Exception as e:
-        issue(f"view crashed: {type(e).__name__}: {e}")
-        traceback.print_exc()
-    if name:
-        shot(name)
-    LY.sync_brush(m)
-    SM.persist(m)
-
-
-def nav():
-    return m._nav
-
-
-def sel_k(num):
-    return next((k for k, r in enumerate(m._regions) if r['num'] == num), None)
-
-
-def latest(r):
-    try:
-        sc = P_.Selection(m.sample, r).latest
-        return sc.folder if sc else None
-    except Exception:
-        return None
-
-
-def check(tag):
-    """Целостность после шага."""
-    regs = m._regions
-    uids = [r['uid'] for r in regs]
-    nums = [r['num'] for r in regs]
-    if len(set(uids)) != len(uids):
-        issue(f"{tag}: duplicate uid")
-    if len(set(nums)) != len(nums):
-        issue(f"{tag}: duplicate numbers {sorted(nums)}")
-    for r in regs:
-        if r.get('parent'):
-            k = LY.idx(m, r['parent'])
-            if k is None:
-                issue(f"{tag}: {r['num']} has a missing parent")
-                continue
-            p = regs[k]
-            if p.get('kind') == 'group':
-                continue
-            if r.get('kind') != 'draft' and SM.obj(m, r) <= SM.obj(m, p):
-                issue(f"{tag}: {r['num']} ({SM.obj(m, r)}x) inside {p['num']} ({SM.obj(m, p)}x)")
-            if not LY.geom(m, p).buffer(0.5).contains(LY.geom(m, r)):
-                issue(f"{tag}: {r['num']} sticks out of its parent {p['num']}")
-    # сетки: кресты каждой последней съёмки ложатся на решётку выбранного (своя / родителя / образца)
-    for r in regs:
-        if r.get('kind') in ('draft', 'group'):
-            continue
-        f = latest(r)
-        if not f or not os.path.exists(os.path.join(f, 'grid.json')):
-            continue
-        try:
-            g = Grid(f)
-        except Exception as e:
-            issue(f"{tag}: grid of {r['num']} unreadable: {e}")
-            continue
-        if not g.ready():
-            continue
-        L = LY.lattice_for(m, r, self_too=True)
-        if L is None:
-            issue(f"{tag}: {r['num']} has a grid but no lattice")
-            continue
-        q = np.array([g.cr.point(i, j) for i in range(0, 3) for j in range(0, 3)])
-        uv = LT.to_uv(L, mosaic_to_stage(f, q))
-        dev = float(np.abs(uv - np.round(uv)).max()) * L['pitch']
-        S_ = m.sample.data.get('lattice')
-        uvS = LT.to_uv(S_, mosaic_to_stage(f, q)) if S_ else uv
-        devS = float(np.abs(uvS - np.round(uvS)).max()) * S_['pitch'] if S_ else 0
-        # номера: та же клетка в решётке выбранного и образца
-        same_num = S_ is None or np.array_equal(np.floor(uv + 0.5), np.floor(uvS + 0.5))
-        seeded = json.load(open(os.path.join(f, 'grid.json'))).get('seeded')
-        log(f"    marks {r['num']}: " + ", ".join(f"{len(json.load(open(os.path.join(s_.folder, 'grid.json'))).get('marks') or [])}"
-                                                for s_ in P_.Selection(m.sample, r).scans if os.path.exists(os.path.join(s_.folder, 'grid.json'))))
-        own = L.get('own') or L.get('src')
-        log(f"    grid of S{r['num']} {SM.obj(m, r)}x ({'seeded' if seeded else 'marked'}): "
-            f"off its lattice {dev:.2f} um, off the sample lattice {devS:.2f} um, lattice from "
-            f"{os.path.basename(os.path.dirname(os.path.dirname(own))) if own else '?'}")
-        if dev > 1.0:
-            issue(f"{tag}: crosses of S{r['num']} are {dev:.2f} um off the lattice of the selection")
-        if not same_num:
-            issue(f"{tag}: S{r['num']}: numbers differ from the sample lattice")
-
-
-def step(title):
-    step_n[0] += 1
-    log(f"\n== {step_n[0]}. {title}")
-
-
-R0 = len(m._regions)
-fw, fh = m.frame_size
-# ---------------------------------------------------------------- 10x: создать, отменить, вернуть, удалить, создать иначе
-step("10x: draw an area, Ctrl+Z, Ctrl+Y")
-manual([])
-n = nav()
-manual([('maprect', *n.to_px((-60, -50)), *n.to_px((300, 200))), -1], 'map_new10')
-log(f"  areas: {[(r['num'], SM.obj(m, r)) for r in m._regions]}")
-manual([26, -1])
-log(f"  after Ctrl+Z: {len(m._regions)}")
-if len(m._regions) != 0:
-    issue("Ctrl+Z did not remove the new area")
-manual([25, -1])
-if len(m._regions) != 1:
-    issue("Ctrl+Y did not bring the area back")
-check("10x undo/redo")
-
-step("10x: delete (C) and draw a different one")
-m._sel = 0
-manual([ord('c'), -1])
-if m._regions:
-    issue("C did not delete the selected area")
-manual([('maprect', *n.to_px((-80, -60)), *n.to_px((340, 240))), -1], 'map_redraw10')
-k1 = 0
-r1 = m._regions[k1]
-log(f"  area S{r1['num']} {SM.obj(m, r1)}x, {LY.geom(m, r1).bounds}")
-check("10x redraw")
-
-step("10x: scan + stitch")
-m._sel = k1
-f1 = m.scan()
-f1 = m.last_scans[-1] if m.last_scans else f1
-mc.stitch(f1, verbose=False)
-log(f"  scan {os.path.basename(f1)}")
-check("10x scanned")
-
-step("10x view: mark crosses 0,0 1,0 0,1")
-q = lambda i, j: tuple(stage_to_mosaic(f1, cross_stage(i, j))[0])
-view(f1, [ord('c'), ('qclick', *q(0, 0)), -1, ('qclick', *q(1, 0)), -1, ('qclick', *q(0, 1)), -1], 'view_marked10')
-g1 = Grid(f1)
-log(f"  grid ready {g1.ready()}, crosses {len(g1.cr.marks)}; sample lattice {'yes' if m.sample.data.get('lattice') else 'no'}")
-check("10x marked")
-
-step("10x view: Shift+C (clear crosses)")
-view(f1, [ord('C'), -1])
-g1 = Grid(f1)
-S_ = m.sample.data.get('lattice')
-log(f"  grid ready {Grid(f1).ready()}; sample lattice still {'there' if S_ else 'gone'}")
-if not Grid(f1).ready() and S_ is not None and S_.get('src') == os.path.abspath(f1):
-    issue("crosses cleared, but the sample lattice from them stays (red grid on the map, new squares follow it)")
-manual([], 'map_after_clear10')
-check("10x cleared")
-
-step("10x view: mark other crosses 2,1 3,1 2,2")
-view(f1, [ord('c'), ('qclick', *q(2, 1)), -1, ('qclick', *q(3, 1)), -1, ('qclick', *q(2, 2)), -1])
-check("10x re-marked")
-
-step("10x view: Ctrl+Z twice, Ctrl+Y once")
-view(f1, [26, -1, 26, -1, 25, -1])
-log(f"  crosses {len(Grid(f1).cr.marks)}, ready {Grid(f1).ready()}")
-check("10x undo crosses")
-
-step("10x view: select 3 squares (M), right click one off, select another")
-g1 = Grid(f1)
-from microcontrol.storage import ScanData
-W1, H1 = json.load(open(os.path.join(f1, 'join', 'size.json'))) if os.path.exists(os.path.join(f1, 'join', 'size.json')) else (None, None)
-inside = []
-for i in range(-4, 5):
-    for j in range(-4, 5):
-        p_ = g1.cr.point(i + 0.5, j + 0.5)
-        S__ = mosaic_to_stage(f1, p_)[0]
-        if LY.geom(m, m._regions[k1]).buffer(-60).contains(__import__('shapely.geometry', fromlist=['Point']).Point(*S__)):
-            inside.append((i, j))
-log(f"  squares fully inside: {inside}")
-c_ = lambda ij: tuple(g1.cr.point(ij[0] + 0.5, ij[1] + 0.5))
-a_, b_, c3, d4 = (inside + inside)[:4]
-view(f1, [ord('m'), ('qclick', *c_(a_)), -1, ('qclick', *c_(b_)), -1, ('qclick', *c_(c3)), -1,
-          ('qrclick', *c_(b_)), -1, ('qclick', *c_(d4)), -1], 'view_squares10')
-want_sel = {a_, c3, d4}
-if Grid(f1).selected != want_sel:
-    issue(f"squares in the view {sorted(Grid(f1).selected)} != clicked {sorted(want_sel)}")
-dr = [r for r in m._regions if r.get('kind') == 'draft']
-log(f"  drafts: {[(r['num'], len(r.get('cells') or [])) for r in dr]}; selected in view {sorted(Grid(f1).selected)}")
-check("10x squares")
-
-# ---------------------------------------------------------------- 50x
-step("50x: draw inside S1, Ctrl+Z, Ctrl+Y, delete, draw elsewhere, overlap, over the edge")
-m.objective = 50
-m.focus()
-manual([])
-n = nav()
-L1 = LY.lattice_for(m, m._regions[k1], self_too=True)
-uv1 = np.floor(LT.to_uv(L1, [LY.geom(m, m._regions[k1]).centroid.coords[0]])[0]).astype(int)
-cen = lambda a, b: LT.to_stage(L1, [(uv1[0] - 1 + a, uv1[1] - 1 + b)])[0]
-manual([('maprect', *n.to_px(cen(1.2, 1.2)), *n.to_px(cen(1.8, 1.8))), -1])
-n50 = [r for r in m._regions if SM.obj(m, r) == 50 and r.get('kind') != 'draft']
-log(f"  50x areas: {[(r['num'], r.get('cells')) for r in n50]}")
-manual([26, -1])
-manual([25, -1])
-k50 = next(k for k, r in enumerate(m._regions) if SM.obj(m, r) == 50 and r.get('kind') != 'draft')
-m._sel = k50
-manual([ord('c'), -1])
-if any(SM.obj(m, r) == 50 and r.get('kind') != 'draft' for r in m._regions):
-    issue("50x area not deleted by C")
-manual([('maprect', *n.to_px(cen(2.2, 1.2)), *n.to_px(cen(2.8, 1.8))), -1])
-k50 = next(k for k, r in enumerate(m._regions) if SM.obj(m, r) == 50 and r.get('kind') != 'draft')
-cnt = len(m._regions)
-u50 = m._regions[k50]['uid']
-R50 = lambda: m._regions[LY.idx(m, u50)]
-manual([('maprect', *n.to_px(cen(2.3, 1.3)), *n.to_px(cen(2.7, 1.7))), -1])
-inner_ = [r for r in m._regions if r.get('parent') == u50 and SM.obj(m, r) == 50]
-log(f"  50x inside 50x: {[r['num'] for r in inner_]}")
-for r in inner_:                                                    # вложено можно; дальше сценарий — без него
-    m._regions.remove(r)
-SM.persist(m)
-b1 = LY.geom(m, m._regions[k1]).bounds
-manual([('maprect', *n.to_px((b1[2] - 30, b1[1] + 10)), *n.to_px((b1[2] + 60, b1[1] + 60))), -1], 'map_50x')
-log(f"  areas now: {[(r['num'], SM.obj(m, r), r.get('kind')) for r in m._regions]}; message: {getattr(m, '_last_msg', '')}")
-check("50x drawn")
-
-step("50x: scan + stitch S50, open the view (grid comes from the 10x lattice)")
-r50 = R50()
-m._sel = LY.idx(m, u50)
-m.scan()
-f50 = [x for x in m.last_scans if '_50x' in x] or m.last_scans
-f50 = f50[-1]
-mc.stitch(f50, verbose=False)
-view(f50, [], 'view_seeded50')
-d50 = json.load(open(os.path.join(f50, 'grid.json')))
-log(f"  seeded {d50.get('seeded')}, labels {len(Grid(f50).labels)}")
-if Grid(f50).ready() != (crosses_seen(f50) > 0):                # сетка — только если кресты видны
-    issue(f"new 50x scan inside a marked 10x: grid {Grid(f50).ready()}, crosses seen {crosses_seen(f50)}")
-check("50x seeded")
-
-step("50x view: mark own crosses (Shift+C, then 2 crosses)")
-q5 = lambda i, j: tuple(stage_to_mosaic(f50, cross_stage(i, j))[0])
-uvc = LT.to_uv(L1, [LY.geom(m, r50).centroid.coords[0]])[0]
-S0 = np.floor(uvc).astype(int)
-# ближайшие кресты физической решётки: по сим-миру (индексы мира, не номера образца)
-W_uv = lambda S: np.linalg.solve(np.c_[cross_stage(1, 0), cross_stage(0, 1)], S)
-wc = np.floor(W_uv(LY.geom(m, r50).centroid.coords[0])).astype(int)
-view(f50, [ord('C'), -1, ('qclick', *q5(wc[0], wc[1])), -1, ('qclick', *q5(wc[0] + 1, wc[1])), -1], 'view_marked50')
-L50 = LY.lattice_for(m, R50(), self_too=True)
-log(f"  50x lattice from {L50.get('own') and os.path.basename(L50['own'])}; sample lattice src "
-    f"{os.path.basename(m.sample.data['lattice']['src'])}")
-if not L50.get('own'):
-    issue("own 50x marking is not used for the selected 50x")
-m._sel = LY.idx(m, u50)
-manual([], 'map_sel50')
-check("50x own marks")
-
-step("50x: Shift+C again -> falls back to the 10x lattice; mark differently")
-view(f50, [ord('C'), -1])
-_d = json.load(open(os.path.join(f50, 'grid.json')))
-log(f"  after Shift+C: marks {len(_d.get('marks') or [])}, seeded {_d.get('seeded')}, keys {sorted(_d)}")
-L50b = LY.lattice_for(m, R50(), self_too=True)
-log(f"  lattice now from {L50b.get('own') or L50b.get('src')}")
-if os.path.abspath(f50) == os.path.abspath(L50b.get('own') or ''):
-    issue("cleared 50x marks are still used")
-view(f50, [ord('c'), ('qclick', *q5(wc[0], wc[1] + 1)), -1, ('qclick', *q5(wc[0] + 1, wc[1] + 1)), -1])
-check("50x re-marked")
-
-step("50x: scan again (version 2) -> grid from its own marking")
-m._sel = LY.idx(m, u50)
-m.scan()
-f50b = m.last_scans[-1]
-mc.stitch(f50b, verbose=False)
-view(f50b, [])
-if not Grid(f50b).ready() and crosses_seen(f50b):
-    issue("second version of the 50x has no grid")
-log(f"  versions: {[os.path.basename(s.folder) for s in P_.Selection(m.sample, R50()).scans]}")
-check("50x v2")
-
-# ---------------------------------------------------------------- 100x
-step("100x: draw inside the 50x, scan, view")
-m.objective = 100
-m.focus()
-manual([])
-n = nav()
-gb = LY.geom(m, R50()).bounds
-manual([('maprect', *n.to_px((gb[0] + 2, gb[1] + 2)), *n.to_px((gb[2] - 2, gb[3] - 2))), -1], 'map_100x')
-k100 = next((k for k, r in enumerate(m._regions) if SM.obj(m, r) == 100 and r.get('kind') != 'draft'), None)
-if k100 is None:
-    issue("100x area inside the 50x not created")
-else:
-    log(f"  100x S{m._regions[k100]['num']} parent {LY.idx(m, m._regions[k100].get('parent'))} (50x is {k50})")
-    m._sel = k100
-    m.scan()
-    f100 = m.last_scans[-1]
-    mc.stitch(f100, verbose=False)
-    view(f100, [], 'view_seeded100')
-    if Grid(f100).ready() != (crosses_seen(f100) > 0):
-        issue(f"new 100x scan: grid {Grid(f100).ready()}, crosses seen {crosses_seen(f100)}")
-    check("100x seeded")
-
-step("delete the 50x (middle level) and Ctrl+Z")
-u100 = m._regions[k100]['uid'] if k100 is not None else None
-m._sel = LY.idx(m, u50)
-manual([ord('c'), -1])
-if u100:
-    r100 = m._regions[LY.idx(m, u100)]
-    pk = LY.idx(m, r100.get('parent'))
-    log(f"  100x parent now: {m._regions[pk]['num'] if pk is not None else None}")
-    inS1 = LY.geom(m, m._regions[k1]).buffer(0.5).contains(LY.geom(m, r100))
-    if inS1 and (pk is None or m._regions[pk]['uid'] != m._regions[k1]['uid']):
-        issue("the 100x lost its parent although it lies inside the 10x")
-check("50x deleted")
-manual([26, -1])
-k50 = LY.idx(m, u50)
-if k50 is None:
-    issue("Ctrl+Z did not bring the 50x back")
-elif u100:
-    r100 = m._regions[LY.idx(m, u100)]
-    if r100.get('parent') != R50()['uid']:
-        issue("after Ctrl+Z the 100x is not inside the 50x again")
-check("50x restored")
-
-step("V opens the latest scan of what is selected in the menu")
-opened = []
-_v0 = V.view
-V.view = lambda f, **kw: opened.append(f)
-for k in [k1, k50, LY.idx(m, u100) if u100 else None]:
-    if k is None:
-        continue
-    m._sel = k
-    opened.clear()
-    manual([ord('v'), -1])
-    want = latest(m._regions[k])
-    ok = opened and os.path.abspath(opened[0]) == os.path.abspath(want)
-    log(f"  S{m._regions[k]['num']}: opened {os.path.basename(opened[0]) if opened else None}, latest {os.path.basename(want)}")
-    if not ok:
-        issue(f"V with S{m._regions[k]['num']} selected opened something else")
-V.view = _v0
-
-step("10x: clear crosses and mark again: 50x / 100x keep their own")
-u50 = next(r['uid'] for r in m._regions if r.get('kind') not in ('group', 'draft') and
-           os.path.abspath(f50).startswith(os.path.abspath(P_.Selection(m.sample, r).folder) + os.sep))
-L50_before = LY.lattice_for(m, R50(), self_too=True)
-for sc_ in P_.Selection(m.sample, R50()).scans:
-    _d = json.load(open(os.path.join(sc_.folder, 'grid.json'))) if os.path.exists(os.path.join(sc_.folder, 'grid.json')) else {}
-    log(f"  scan {sc_.folder[-30:]} seeded {_d.get('seeded')} marks {len(_d.get('marks') or [])} own {LY.own_lattice(m.sample, R50()) is not None}")
-view(f1, [ord('C'), -1, ord('c'), ('qclick', *q(1, 1)), -1, ('qclick', *q(2, 1)), -1, ('qclick', *q(1, 2)), -1])
-if not Grid(f1).ready():
-    issue("Shift+C, then C, then clicks: crosses not marked")
-L50_after = LY.lattice_for(m, R50(), self_too=True)
-log(f"  50x lattice before {np.round(L50_before['e1'], 2)} {L50_before.get('own')} after {np.round(L50_after['e1'], 2)} {L50_after.get('own')}")
-if not np.allclose(L50_before['e1'], L50_after['e1']):
-    issue("the 50x grid changed when the 10x was re-marked")
-for k in [k1, k50]:
-    m._sel = k
-    manual([], f'map_sel_{SM.obj(m, m._regions[k])}x_final')
-check("final")
-
-m.close()
-log("\nISSUES:\n" + ("\n".join(ISSUES) if ISSUES else "none"))
-assert not ISSUES, (ISSUES, LOG[-30:])
-cv2.imshow = _o
-print("Levels 10x -> 50x -> 100x with undo, redo, delete and redo differently: crosses cleared and marked again, "
-      "every grid follows what is selected (own marks, else the larger one around, else the sample), V opens "
-      "the selected: OK")
-
 # ------------------------------------------------------------------ 49. Scan area / S снимает то, что выбрано в меню справа: карточку, группу; новая область без угла 2 — не снимается
 import microcontrol.manual as M
 from microcontrol import samples as SM, layers as LY
@@ -2042,17 +1478,14 @@ M.run(m, fullscreen=False, _keys=[-1, -1]); n_ = m._nav
 M.run(m, fullscreen=False, _keys=[-1, ('maprect', *n_.to_px((0, 0)), *n_.to_px((150, 100))), -1,
                                   ('maprect', *n_.to_px((400, 300)), *n_.to_px((550, 400))), -1,
                                   ('maprect', *n_.to_px((800, 0)), *n_.to_px((950, 100))), -1, -1])
-sel_ = lambda: [os.path.basename(os.path.dirname(os.path.dirname(f_))) for f_ in m.last_scans]
+sel_ = lambda: [mc.project.scan_label(f_) for f_ in m.last_scans]
 M.run(m, fullscreen=False, _keys=[-1, ('mouse', cv2.EVENT_LBUTTONDOWN, 1250, 150, 0), -1,
                                   ('mouse', cv2.EVENT_LBUTTONUP, 1250, 150, 0), -1, ord('s'), -1, -1])
-assert m._regions[m._sel]['num'] == 1 and sel_() == ['S01_10x'], (m._sel, sel_())       # карточка 1 — только она
-LY.group(m, [1, 2]); SM.persist(m)                                                     # группа из 2 и 3 — выбрана
-M.run(m, fullscreen=False, _keys=[-1, ord('s'), -1, -1])
-assert sorted(sel_()) == ['S02_10x', 'S03_10x'], sel_()
+assert m._regions[m._sel]['num'] == 3 and sel_() == ['S03_10x'], (m._sel, sel_())       # верхняя карточка (3) — только она
 m.last_scans = []; m.goto(x=2000, y=1500)
 M.run(m, fullscreen=False, _keys=[-1, ord('1'), -1, ord('s'), -1, -1])                 # угол 1 новой: не снимать
 assert m.last_scans == [] and m._pending is not None, (m.last_scans, m._pending)
-m.close(); print("Scan takes what is selected on the right: one card, a whole group; a new area without corner 2 waits: OK")
+m.close(); print("Scan takes what is selected on the right; a new area without corner 2 waits: OK")
 
 # ------------------------------------------------------------------ 50. Сшивка тысяч кадров: доли пикселя, ошибка столика не тянет шов, люфт, разреженный решатель; швы в просмотре (J)
 import importlib, csv as _csv
@@ -2190,11 +1623,10 @@ for r_, b_ in zip(fr_, boxes):                                                  
     want_ = (*n_.to_um(n_.to_px(b_[:2])), *n_.to_um(n_.to_px(b_[2:])))                               # края на шагах мотора
     assert all(B_[i_] <= want_[i_] - ms_ + 1e-6 for i_ in (0, 1)) and all(B_[i_] >= want_[i_] + ms_ - 1e-6 for i_ in (2, 3)), (B_, want_)
     assert all(abs(v_ - round(v_ / ms_) * ms_) < 0.01 for v_ in B_), (B_, ms_)
-    assert r_.get('parent') == u10, r_
 m._sel = LY.idx(m, u10)                                                                              # выбран обзор 10x
 m.last_scans = []
 M.run(m, fullscreen=False, _keys=[-1, ord('s'), -1, -1])
-names_ = sorted(os.path.basename(os.path.dirname(os.path.dirname(f_))) for f_ in m.last_scans)
+names_ = sorted(mc.project.scan_label(f_) for f_ in m.last_scans)
 want_n = sorted(f"S{r_['num']:02d}_50x" for r_ in m._regions if SM.obj(m, r_) == 50)
 assert names_ == want_n, (names_, want_n)                                                            # все 50x в обзоре, и только они
 from microcontrol.storage import ScanData
@@ -2717,12 +2149,13 @@ d_true = (8.0, -5.0)
 align(f50, d_true)                                                   # 50x «уехал» (своя ось у объектива)
 c50 = stage_to_mosaic(f10, [(fw + 1.5 * f5w, fh + 1.5 * f5h)])[0]
 res = {}
-mc.view(f10, _keys=[-1, ('qmove', *c50), -1, ord('o'), ord('o'), -1, ord('O'), -1, ('call', lambda st: res.update(a=st['msg'])),
+mc.view(f10, _keys=[-1, ('qmove', *c50), -1, ('qclick', *c50, 'ctrl'), -1, ord('o'), ord('o'), -1, ord('O'), -1,
+                    ('call', lambda st: res.update(a=st['msg'])), 27, -1,
                     ord('l'), -1, ('qdrag', *c50, *(c50 + (30, 0))), -1, ('call', lambda st: res.update(dq=list(st['al']['dq']))),
                     27, -1, ('call', lambda st: res.update(mode=st['mode'])), ord('l'), -1, 32, -1,
                     ('call', lambda st: res.update(auto=st['msg'])), 13, -1, 27, 27])
 uid50 = json.load(open(os.path.join(f50, 'meta.json')))['sample_uid']
-assert json.load(open(os.path.join(m.sample.folder, 'view.json')))['alpha'] == {uid50: 0.75} and '75 %' in res['a'], res
+assert json.load(open(os.path.join(m.sample.folder, 'view.json')))['alpha'] == {uid50: 0.75} and '75 %' in res['a'], res   # отмеченному (Ctrl+щелчок)
 assert abs(res['dq'][0] - 30) < 0.5 and abs(res['dq'][1]) < 0.5 and res['mode'] == 'look', res   # тянуть: едут за мышью; Esc — отмена
 assert align(f10) != (0.0, 0.0) and 'by the picture' in res['auto'], res
 d10 = align(f10)
@@ -2750,7 +2183,7 @@ q = m.queue                                                          # очер�
 qc = lambda i, j: g.cr.point(i + 0.5, j + 0.5)
 res = {}
 V_.view(f, _keys=[-1, ord('G'), ord('G'), ord('G'), ord('G'), -1, ('call', lambda st: res.update(new=st['msg'])),   # новые: 50x
-                  ord('m'), ('qclick', *qc(0, 0)), -1, ('qclick', *qc(2, 0)), -1, 27, -1, -1,
+                  ord('m'), ('qclick', *qc(0, 0)), -1, ('qclick', *qc(2, 0)), -1, 13, -1, 27, -1, -1,
                   ('call', lambda st: res.update(made=st['msg'])),
                   ('qclick', *qc(0, 0), 'ctrl'), -1, ('qclick', *qc(2, 0), 'ctrl'), -1, ('call', lambda st: res.update(mk=st['msg'])),
                   ord('g'), -1, ('call', lambda st: res.update(g=st['msg'])),      # 50x -> 100x обеим
@@ -2763,7 +2196,7 @@ assert res['mk'].startswith('Marked 2'), res
 assert '100x' in res['g'] and 'Queued 2 scans' in res['q'] and 'wait for 100x' in res['q'], res
 assert [j_.obj for j_ in q.active()] == [100, 100] and not q.inst_busy(), [(j_.obj, j_.state) for j_ in q.jobs]   # ждут 100x
 assert 'Deleted' in res['d'], res
-left_ = [r_ for r_ in regs if r_.get('cells') and r_.get('kind') != 'group' and r_.get('parent')]
+left_ = [r_ for r_ in regs if r_.get('cells') and r_.get('kind') != 'group']
 assert len(left_) == 1 and left_[0]['obj'] == 100 and left_[0].get('kind') != 'draft', left_
 m.objective = 100; m.focus()                                         # поставили 100x и S: ждавшие — в работу
 import microcontrol.manual as M
@@ -2773,3 +2206,38 @@ assert st_[0][0] == 'done' and st_[1][0] == 'failed' and 'gone' in st_[1][1], st
 m.close()
 print("View: new selections from cells right with 50x, Ctrl+click marks two, G sets 100x to both, Q queues them "
       "(they wait for 100x), Del deletes the one under the mouse, Y shows / hides the others: OK")
+
+
+# ------------------------------------------------------------------ 61. Плоский список: перекрытия любых объективов, порядок = слои, съёмки в scans/, экспорт в одну папку export/ с mixed.png
+from microcontrol import samples as SM, layers as LY, project as PJ
+import ezdxf
+m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp()); m.focus(); fw, fh = m.frame_size
+SM.corner(m, 1); m.move(dx=2 * fw); m.move(dy=fh); SM.corner(m, 2)               # 10x: 3 x 2 кадра
+m.goto(x=fw, y=0); SM.corner(m, 1); m.move(dx=2 * fw); m.move(dy=fh); SM.corner(m, 2)   # 10x поверх первого — можно
+m.objective = 50; m.focus(); f5w, f5h = m.frame_size
+m.goto(x=2.8 * fw, y=0.5 * fh); SM.corner(m, 1); m.move(dx=2 * f5w); SM.corner(m, 2)  # 50x на краю обоих — не обрезан
+assert len(m._regions) == 3 and not any(r.get('parent') for r in m._regions), m._regions
+assert [m._regions[k]['num'] for k in SM.order(m)] == [3, 2, 1]                  # новое — наверху списка (верхний слой)
+g50 = LY.geom(m, m._regions[2])
+assert abs(g50.area - (3 * f5w) * f5h) < 0.02 * g50.area, (g50.area, 3 * f5w * f5h)   # без обрезки по 10x
+f50 = m.scan(stitch='quick'); m.objective = 10; m.focus(); m.scan()
+fs = PJ.all_scans(m.sample.folder)
+assert len(fs) == 3 and all(os.path.dirname(f_) == os.path.join(m.sample.folder, 'scans') for f_ in fs), fs
+assert sorted(PJ.scan_label(f_) for f_ in fs) == ['S01_10x', 'S02_10x', 'S03_50x'], fs
+assert [PJ.scan_label(f_) for f_ in PJ.latest_scans(m.sample.folder)] == ['S03_50x', 'S02_10x', 'S01_10x']   # по слоям
+print(SM.reorder(m, 0, 2))                                                       # Selection 1 — наверх
+assert [PJ.scan_label(f_) for f_ in PJ.latest_scans(m.sample.folder)][0] == 'S01_10x'
+m._regions[1]['export'] = False; SM.persist(m)                                   # галочка снята у Selection 2
+dx = mc.export_sample(m)
+ex = os.path.join(m.sample.folder, 'export')
+assert os.path.dirname(dx) == ex and not any(os.path.isdir(os.path.join(ex, x_)) for x_ in os.listdir(ex)), os.listdir(ex)
+dj = json.load(open(os.path.join(ex, 'drawing.json')))
+assert sorted(a_['selection'] for a_ in dj['areas']) == [1, 3] and dj['mixed']['file'] == 'mixed.png', dj['areas']
+mx = cv2.imread(os.path.join(ex, 'mixed.png')); assert mx is not None and (mx < 250).any(axis=2).mean() > 0.2
+um0 = dj['mixed']['um_per_px']
+dx = mc.export_sample(m, mixed_um=4 * um0)                                       # своё разрешение; та же папка
+dj2 = json.load(open(os.path.join(ex, 'drawing.json')))
+assert abs(dj2['mixed']['um_per_px'] - 4 * um0) < 1e-3 and cv2.imread(os.path.join(ex, 'mixed.png')).shape[1] < mx.shape[1] / 3
+m.close()
+print(f"Flat list: overlaps of any objectives, new on top, scans in scans/, export to export/ (ticked only), "
+      f"mixed.png {um0:.3f} um/px or chosen: OK")

@@ -63,7 +63,7 @@ HELP = ["Shift+Esc: Exit (or close the window)", "P: Hide / show the left panel"
         "Buttons on top: Prepare (as A), Scan area (scan + quick stitch: a fast overview), Stitch (quality stitch of the chosen"
         " selection: exact, re-shoots what is needed; only these go into the drawing), New area, Export (drawing for"
         " AutoCAD: DWG + DXF), Settings",
-        "Selections are layers: Ctrl+click cards to mark them, then Merge / Minus / Overlap / Group / Ungroup above the list",
+        "Selections are layers: Ctrl+click cards to mark them, then Merge / Minus / Overlap above the list; drag a card up / down: the layer order (top = on top), the box on a card: in the export",
         "The eye on a card hides the selection on the maps (and shows it again); Show all above the list",
         "Squares selected in the view (M) become selections without an objective (draft), one per figure;"
         " the objective chip on a card goes 4x ... 100x, draft   Shift+drag over a selection: move it",
@@ -335,7 +335,7 @@ def ar_lock(m, img):
         return None, f"no clear match (match {resp:.2f})"
     dP = d * np.linalg.solve(K, t)                          # c + K (P' - S) / d = c + K (P - S) / d + t
     m.__dict__['_ar_d'] = _ar_d(m) + dP
-    return dP, os.path.basename(os.path.dirname(os.path.dirname(f)))
+    return dP, __import__("microcontrol.project", fromlist=["x"]).scan_label(f)
 
 
 _AR_CACHE = {}
@@ -942,8 +942,6 @@ def _run(m, fullscreen=False, _keys=None):
             return "A group has no objective"
         if rg_.get('kind') == 'draft':                      # без объектива -> объектив, что стоит (или следующий)
             return draft_to_selection(k)
-        if Selection(m.sample, rg_).latest:
-            return f"{SM.title(m, k)} is already scanned with {SM.obj(m, rg_)}x: mark a new selection for another objective"
         from .layers import next_objective_of, to_draft
         objs_ = sorted(OBJECTIVES)
         if SM.obj(m, rg_) == objs_[-1]:                     # после самого крупного — draft (без объектива)
@@ -960,9 +958,9 @@ def _run(m, fullscreen=False, _keys=None):
         mk_ = [k_ for k_ in car['multi'] if k_ < len(m._regions)]
         car['multi'] = mk_
         if len(mk_) >= 2:
-            car['tools'] = ["Merge", "Minus", "Overlap", "Group"]
+            car['tools'] = ["Merge", "Minus", "Overlap"]
         elif len(mk_) == 1:
-            car['tools'] = ["Ungroup"] if m._regions[mk_[0]].get('kind') == 'group' else ["Group"]
+            car['tools'] = []
         else:
             car['tools'] = []
         if not car['tools'] and any(r_.get('hidden') for r_ in m._regions):
@@ -1165,6 +1163,7 @@ def _run(m, fullscreen=False, _keys=None):
             if reg.get('kind') == 'draft':                  # маска: черновик кисти, не снимается
                 hd_ = SM.hidden(m, k)
                 items.append(dict(title=SM.title(m, k), obj="draft", color=SM.col(m, k), chosen=k in car['multi'],
+                                  check=reg.get('export', True),
                                   confirm=car['confirm'] == k, depth=depth, hidden=bool(reg.get('hidden')),
                                   muted=hd_, lines=[mm_ + (", from the view (M)" if reg.get('src') else "") + (f", grid 1/{reg['sub']}" if reg.get('sub') else ""),
                                                     f"no objective: click 'draft' to scan it with {m.objective}x" if not hd_
@@ -1177,10 +1176,10 @@ def _run(m, fullscreen=False, _keys=None):
                 TM.fmt(TM.estimate(m, nfr_, 'points' if m._use_fp and reg['pts'] else 'off', o_)[0])
             hd_ = SM.hidden(m, k)
             sh_ = shot_of(k)
-            items.append(dict(title=SM.title(m, k), obj=f"{o_}x", color=SM.col(m, k),
+            items.append(dict(title=SM.title(m, k), obj=f"{o_}x", color=SM.col(m, k), check=reg.get('export', True),
                               chosen=k in car['multi'], thumbs=[] if hd_ else reg.get('thumbs', []), confirm=car['confirm'] == k, depth=depth,
                               muted=o_ != m.objective or hd_, hidden=bool(reg.get('hidden')),
-                              lines=([(f"scanned {sh_}" + ("" if reg.get('export', True) else ", not in export")
+                              lines=([(f"scanned {sh_}"
                                        if sh_ else "not scanned yet") +
                                       ("" if sh_ or o_ == m.objective else f": put {o_}x in place"),
                                       fr_, mm_ + (",  brush" if reg.get('src') else "")])
@@ -1199,10 +1198,12 @@ def _run(m, fullscreen=False, _keys=None):
         return np.vstack([img_, tb_])
 
     def latest_scans():
-        """Последние сшитые съёмки видимых выделений: [(папка, индекс выделения)], сначала меньшее увеличение."""
+        """Основные съёмки видимых выделений: [(папка, индекс выделения)] — снизу списка вверх (верх списка рисуется
+        последним, поверх всех)."""
         from .project import Selection
         out = []
-        for k_, rg_ in sorted(enumerate(m._regions), key=lambda t: SM.obj(m, t[1])):
+        for k_ in reversed(SM.order(m)):
+            rg_ = m._regions[k_]
             if rg_.get('kind') == 'group' or SM.hidden(m, k_):
                 continue
             sc_ = Selection(m.sample, rg_).latest
@@ -1363,18 +1364,8 @@ def _run(m, fullscreen=False, _keys=None):
         except ValueError as e:
             return str(e)
         g_ = _geom(m, r_)
-        from .layers import nested as _nested
-        bad = [o['num'] for o in m._regions if o.get('kind') not in ('group', 'draft') and SM.obj(m, o) == m.objective
-               and g_.intersection(_geom(m, o)).area > 1e-3 * g_.area and not _nested(g_, _geom(m, o))]
-        if bad:
-            return str(_E('E704', f"Selection {', '.join(map(str, bad))} ({m.objective}x) is partly under it: "
-                                  f"draw fully inside it or fully outside"))
-        from .layers import conflict as _cf
-        bad2_ = _cf(m, r_)
-        if bad2_:
-            return bad2_
         m._regions.append(r_)
-        r_['parent'] = m._regions[gp_]['uid'] if gp_ is not None else None
+        SM.to_top(m, r_)
         m._sel = len(m._regions) - 1
         SM.persist(m)
         nx_, ny_ = SM.frames_of(m, m._sel)
@@ -1421,11 +1412,10 @@ def _run(m, fullscreen=False, _keys=None):
         except ValueError as e:
             return str(e)
         m._regions.append(r_)
-        r_['parent'] = m._regions[gp_]['uid'] if gp_ is not None else None
+        SM.to_top(m, r_)
         m._sel = len(m._regions) - 1
         SM.persist(m)
-        inside_ = (f" Inside {SM.title(m, gp_)}: choose it and Scan area to shoot all boxes in it with {m.objective}x."
-                   if gp_ is not None else "")
+        inside_ = ""
         return (f"Selection {r_['num']} (free box, {m.objective}x): {size_txt(x1_ - x0_, y1_ - y0_)} drawn, "
                 f"{size_txt(bx1 - bx0, by1 - by0)} with {mg_:.1f} um each side for the {src_}; edges on motor steps."
                 f" Scan area shoots it with {m.objective}x.{inside_}")
@@ -1472,18 +1462,8 @@ def _run(m, fullscreen=False, _keys=None):
             return str(e)
         cells = [tuple(c) for c in r_['cells']]
         g_ = _geom(m, r_)
-        from .layers import nested as _nested
-        bad = [o['num'] for o in m._regions if o.get('kind') not in ('group', 'draft') and SM.obj(m, o) == m.objective
-               and g_.intersection(_geom(m, o)).area > 1e-3 * g_.area and not _nested(g_, _geom(m, o))]
-        if bad:
-            return (f"[E704] Selection {', '.join(map(str, bad))} ({m.objective}x) is partly under it: draw fully "
-                    f"inside it or fully outside")
-        from .layers import conflict as _cf
-        bad2_ = _cf(m, r_)
-        if bad2_:
-            return bad2_
         m._regions.append(r_)
-        r_['parent'] = m._regions[gp_]['uid'] if gp_ is not None else None
+        SM.to_top(m, r_)
         m._sel = len(m._regions) - 1
         SM.persist(m)
         return (f"{SM.title(m, m._sel)} ({m.objective}x): {len(cells)} cell{'s' if len(cells) > 1 else ''} "
@@ -1509,60 +1489,61 @@ def _run(m, fullscreen=False, _keys=None):
             out_.insert(0, p_); seen_.add(p_)
 
     def export_drawing():
-        """Export: окно с галочками — какие снятые участки идут в чертёж (выбор запоминается), затем один
-        чертёж образца для AutoCAD (DXF / DWG): картинки на своих местах, контуры, кресты, номера."""
+        """Export: всё, что отмечено галочкой на карточках, — в <образец>/export/ (прежнее заменяется): чертёж для
+        AutoCAD (DXF / DWG), снимки выделений и mixed.png (снимки с наложением по слоям списка; разрешение — спросить)."""
         nonlocal msg, msg_t
-        from . import dialogs as D
         from .drawing import export_sample
         msg_t = time.monotonic()
-        cand = [k_ for k_, r_ in enumerate(m._regions) if r_.get('kind') != 'group']   # всё: снятое, не снятое, черновики
-        if not cand:
-            msg = "No selections yet: drag a rectangle on the map"
+        ks_ = [k_ for k_ in SM.order(m) if m._regions[k_].get('kind') != 'group' and m._regions[k_].get('export', True)]
+        if not ks_:
+            msg = "Nothing ticked for the export: the box on a card puts it into the export"
             return
-        def row_(k_):
-            r_ = m._regions[k_]
-            if r_.get('kind') == 'draft':
-                return f"{SM.title(m, k_):<14}  --    draft: outline and cells"
-            if not shot_of(k_):
-                return f"{SM.title(m, k_):<14} {SM.obj(m, r_):>4}x   not scanned: outline only"
-            from . import quality as Q
-            sc_ = SM.Selection(m.sample, r_).latest if hasattr(SM, 'Selection') else None
-            if sc_ is None:
-                from .project import Selection as _Sel
-                sc_ = _Sel(m.sample, r_).latest
-            q_ = sc_ is not None and Q.is_quality(sc_.folder)
-            return f"{SM.title(m, k_):<14} {SM.obj(m, r_):>4}x   " + \
-                (f"quality {shot_of(k_)}" if q_ else f"quick {shot_of(k_)}: outline only (Stitch: quality)")
-        cand = sorted(cand, key=lambda k_: [m._regions[j_]['num'] for j_ in _chain(k_)])   # вложенное — под своим
-        rows = [("   " * (len(_chain(k_)) - 1)) + row_(k_) for k_ in cand]   # отмечено: что в прошлый раз, иначе — снятое
-        kids_ = {}                                          # галочка выделения — и всё, что внутри него
-        for i_, k_ in enumerate(cand):
-            for j_, k2_ in enumerate(cand):
-                if k2_ != k_ and k_ in _chain(k2_):
-                    kids_.setdefault(i_, []).append(j_)
-        dflt = [m._regions[k_].get('export', bool(m._regions[k_].get('kind') != 'draft' and shot_of(k_))) for k_ in cand]
-        try:
-            got = D.checklist("Export: which areas go into the drawing (a tick takes what is inside too)", rows, dflt,
-                              header="Area            Obj.  Scan", kids=kids_)
-        except (RuntimeError, ImportError):                # нет tkinter (тест): как отмечено
-            got = dflt
-        if got is None:
+        um_ = ask_mixed_um(ks_)
+        if um_ == 'cancel':
             msg = "Export cancelled"
             return
-        for k_, on_, d_ in zip(cand, got, dflt):
-            m._regions[k_]['export'] = bool(on_)
-        SM.persist(m)
-        ks_ = [k_ for k_, on_ in zip(cand, got) if on_]
-        if not ks_:
-            msg = "No area chosen for the export"
-            return
-        res = busy("Export: drawing for AutoCAD", lambda: export_sample(m, ks_))
+        res = busy("Export: drawing, pictures, mixed.png", lambda: export_sample(m, ks_, mixed_um=um_))
         msg_t = time.monotonic()
         if 'e' in res and os.environ.get('MC_TEST'):
             print("Export failed:", res['e'])
         msg = (f"Export failed: {res['e']}" if 'e' in res else
-               f"Exported {len(ks_)} area{'s' if len(ks_) > 1 else ''}: {res['r']}"
+               f"Exported {len(ks_)} selection{'s' if len(ks_) > 1 else ''} to {os.path.dirname(str(res['r']))}"
                + ("" if str(res['r']).endswith('.dwg') else "  (DWG: install ODA File Converter)"))
+
+    def ask_mixed_um(ks_):
+        """Разрешение mixed.png: как у снимка какого объектива или своё (мкм на пиксель). -> число, None или 'cancel'."""
+        from . import dialogs as D
+        from .project import Selection as _Sel
+        px_ = {}
+        for k_ in ks_:
+            sc_ = _Sel(m.sample, m._regions[k_]).latest
+            if sc_ is None:
+                continue
+            try:
+                mt_ = json.load(open(os.path.join(sc_.folder, 'meta.json'), encoding='utf-8'))
+                o_, p_ = int(mt_.get('objective') or 0), float(mt_.get('pixel_size_um') or 0)
+                if p_ > 0:
+                    px_[o_] = min(px_.get(o_, p_), p_)
+            except Exception:
+                continue
+        if not px_:
+            return None
+        opts_ = sorted(px_.items(), key=lambda t_: t_[1])
+        rows_ = [f"as {o_}x: {p_:.4f} um / px" + ("  (the finest)" if i_ == 0 else "") for i_, (o_, p_) in enumerate(opts_)]
+        rows_.append("my own um / px ...")
+        try:
+            r_ = D.choose("mixed.png: one picture of all ticked scans, layered as the list - its pixel", rows_, 0, ("Export",))
+        except (RuntimeError, ImportError):                # нет окон (тест): как у самого точного
+            return None
+        if r_ is None:
+            return 'cancel'
+        if r_[1] is None or r_[1] < len(opts_):
+            return opts_[r_[1] or 0][1]
+        try:
+            v_ = D.ask("mixed.png", "Micrometres per pixel", f"{opts_[0][1]:.4f}")
+            return float(str(v_).replace(',', '.')) if v_ else 'cancel'
+        except (RuntimeError, ImportError, ValueError):
+            return None
 
     def busy(title, fn, plan=None, expect=None, on_stop=None, bg=None):
         """Долгое дело в потоке; в окне — полоса прогресса с кнопкой Stop (Esc) и строка состояния внизу.
@@ -1951,22 +1932,26 @@ def _run(m, fullscreen=False, _keys=None):
         return rows_, fs_
 
     def inner_of(rs_):
-        """Области текущего объектива внутри выделения rs_ (на любой глубине; вложенные друг в друга — верхние)."""
-        kids_ = {}
-        for rg in m._regions:
-            kids_.setdefault(rg.get('parent'), []).append(rg)
-        out_, todo_ = [], list(kids_.get(rs_['uid'], []))
-        while todo_:
-            rg = todo_.pop(0)
+        """Выделения текущего объектива, лежащие внутри выделения rs_ (по месту: вложенности в списке нет)."""
+        from .layers import geom as _g
+        try:
+            G_ = _g(m, rs_).buffer(0.5)
+        except Exception:
+            return []
+        out_ = []
+        for k_, rg in enumerate(m._regions):
+            if rg is rs_ or rg.get('kind') == 'group':
+                continue
+            try:
+                inside_ = G_.contains(_g(m, rg))
+            except Exception:
+                continue
+            if not inside_:
+                continue
             if rg.get('kind') == 'draft' and rg.get('free'):   # рамка-черновик: выделением этого объектива
-                k_ = m._regions.index(rg)
                 draft_to_selection(k_)
-                if rg.get('kind') == 'draft':                # не вышло (пирамидка): пропустить
-                    continue
-            if rg.get('kind') not in ('group', 'draft') and SM.obj(m, rg) == m.objective:
-                out_.append(rg['uid'])                       # её собственные дети этого объектива — в её же скане
-            else:
-                todo_ += kids_.get(rg['uid'], [])
+            if rg.get('kind') != 'draft' and SM.obj(m, rg) == m.objective:
+                out_.append(rg['uid'])
         return out_
 
     def scan_here():
@@ -2138,7 +2123,7 @@ def _run(m, fullscreen=False, _keys=None):
                 Wl_ = W - SM.CAR_W
                 pic_ = view.copy()
                 pic_[:, :Wl_] = (pic_[:, :Wl_].astype(np.float32) * 0.4).astype(np.uint8)
-                UI.progress_panel(pic_[:, :Wl_], "Opening the view", os.path.basename(os.path.dirname(os.path.dirname(f_))),
+                UI.progress_panel(pic_[:, :Wl_], "Opening the view", __import__("microcontrol.project", fromlist=["x"]).scan_label(f_),
                                   0.0, "loading the stitched picture", 0.0, None, "")
                 cv2.imshow(WIN, np.vstack([menu_img(W), pic_]))
                 cv2.waitKey(1)
@@ -2148,6 +2133,11 @@ def _run(m, fullscreen=False, _keys=None):
                 if refresh_from_disk(m):
                     car['shot_t'] = -9
                     m._map_win = None
+                fo_ = json.load(open(m.sample.file, encoding='utf-8')).get('focus')   # просмотр сделал выделение —
+                m.sample.data.pop('focus', None)           # оно и выбрано здесь
+                if fo_:
+                    m._sel = next((i_ for i_, r_ in enumerate(m._regions) if r_['uid'] == fo_), m._sel)
+                    m.sample.save()
             except Exception as e_:
                 L.debug('MAN-021', f"Selections from the view not taken: {e_}")
             try:                                           # решётку по столику просмотр мог записать в образец
@@ -2325,7 +2315,7 @@ def _run(m, fullscreen=False, _keys=None):
                 from .layers import sync_brush, idx as _ix
                 keep_ = (m._regions[m._sel]['uid'] if m._sel is not None and m._sel < len(m._regions) else None,
                          [m._regions[k_]['uid'] for k_ in car['multi'] if k_ < len(m._regions)])
-                r_ = sync_brush(m)
+                r_ = sync_brush(m, make=False)       # новые выделения из клеток — только Enter в просмотре
                 m._sel = _ix(m, keep_[0]) if keep_[0] else m._sel   # индексы сдвинулись — по uid
                 car['multi'] = [k_ for k_ in (_ix(m, u_) for u_ in keep_[1]) if k_ is not None]
                 if r_:
@@ -2893,6 +2883,14 @@ def _run(m, fullscreen=False, _keys=None):
                 if h_:
                     act, k = h_
                     k = car['order'][k] if k < len(car.get('order', [])) else k
+                    if act == 'chk' and k < len(m._regions):       # галочка: в экспорт или нет
+                        rg_ = m._regions[k]
+                        rg_['export'] = not rg_.get('export', True)
+                        SM.persist(m)
+                        msg = f"{SM.title(m, k)}: " + ("goes into the export" if rg_['export'] else "not in the export")
+                        msg_t = time.monotonic()
+                        car['press'] = None
+                        continue
                     if act == 'eye' and k < len(m._regions):       # скрыть / показать на картах
                         rg_ = m._regions[k]
                         rg_['hidden'] = not rg_.get('hidden')
@@ -2910,7 +2908,7 @@ def _run(m, fullscreen=False, _keys=None):
                         if k < len(m._regions):
                             m._sel = k
                             msg, msg_t = (f"{SM.title(m, k)} chosen ({SM.layer_name(m, k)}; Go or Enter: "
-                                          "drive there; Ctrl+click: mark for Merge / Minus / Overlap / Group)"), time.monotonic()
+                                          "drive there; Ctrl+click: mark for Merge / Minus / Overlap)"), time.monotonic()
                     elif act == 'del' and k <= len(m._regions):     # сразу, без подтверждения (Ctrl+Z вернёт)
                         delete_region(k)
                         msg_t = time.monotonic()

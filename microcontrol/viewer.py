@@ -438,14 +438,31 @@ def _view_one(folder, fullscreen, keys, car):
             if u_:
                 mark_toggle(u_)
             return
+        u_k_ = (mp_[k][2] if mp_[k][0] == 'sub' and len(mp_[k]) > 2 else mp_[k][1]) if mp_ is not None and 0 <= k < len(mp_) else None
+        if act == 'chk' and u_k_:                           # галочка: в экспорт или нет
+            st['msg'] = set_export(u_k_)
+            st['car_dirty'] = st['dirty'] = True
+            return
+        if act == 'obj' and u_k_:                           # плашка объектива: следующий
+            from .config import OBJECTIVES
+            cyc_ = ['draft'] + sorted(OBJECTIVES)
+            r0_ = next((r_ for r_ in regions_now()[0] if r_.get('uid') == u_k_), None)
+            if r0_ is not None:
+                cur_ = 'draft' if r0_.get('kind') == 'draft' else r0_.get('obj')
+                st['msg'] = set_objective([u_k_], cyc_[(cyc_.index(cur_) + 1) % len(cyc_)] if cur_ in cyc_ else cyc_[1])
+            st['car_dirty'] = st['dirty'] = True
+            return
         if mp_ is not None and 0 <= k < len(mp_):           # в меню и черновики: карточка -> съёмка
             if mp_[k][0] != 'sub':
-                if act == 'del':                            # крестик черновика: убрать его (Ctrl+Z вернёт квадраты)
+                if act == 'del':                            # крестик: убрать (Ctrl+Z вернёт квадраты)
                     st['msg'] = delete_draft(mp_[k][1], mp_[k][2])
+                    car.pop('focus', None)
                     st['car_dirty'] = True
-                else:
-                    st['msg'] = ("Not scanned yet: G - its objective, Q - queue its scan, x on its card - delete; "
+                elif mp_[k][1] and not str(mp_[k][1]).startswith('cell:'):
+                    car['focus'] = mp_[k][1]                # не снятое: выбрано (рамка на картинке, дела — ему)
+                    st['msg'] = ("Not scanned yet: G - its objective, S - queue its scan, Del - delete; "
                                  "Ctrl+click - mark several")
+                    st['car_dirty'] = True
                 st['dirty'] = True
                 return
             k = mp_[k][1]
@@ -455,6 +472,7 @@ def _view_one(folder, fullscreen, keys, car):
         f = subs[k]
         if act == 'sel':
             car['confirm'] = None
+            car.pop('focus', None)
             if f != folder:
                 st['switch'] = f
         elif act == 'del':                                  # сразу, без подтверждения (Ctrl+Z вернёт)
@@ -886,6 +904,7 @@ def _view_one(folder, fullscreen, keys, car):
     def cut_outline(img):
         """Снятое за контуром выделения (кадры шире контура — до шага мотора, по краям) не показывается:
         картинка — ровно то, что выделено."""
+        return img                                          # без обрезки: картинка — вся снятая
         pm_ = st.get('_outline_px')
         if pm_ is None:
             pm_ = False
@@ -913,7 +932,7 @@ def _view_one(folder, fullscreen, keys, car):
         except (OSError, ValueError):
             return None
         me_ = next((r_ for r_ in regs_ if r_.get('kind') not in ('group', 'draft') and 'A' in r_ and
-                    os.path.abspath(folder).startswith(os.path.abspath(P0_.sel_folder(smp.folder, r_)) + os.sep)), None)
+                    P0_.scan_uid(folder) == r_.get('uid')), None)
         if me_ is None:
             return None
         from shapely.geometry import box as _bx
@@ -955,13 +974,53 @@ def _view_one(folder, fullscreen, keys, car):
 
     def mouse(ev, x, y, flags, _=None):
         shift = bool(flags & cv2.EVENT_FLAG_SHIFTKEY)
+        dg_ = car.get('drag')
+        if dg_ is not None and ev in (cv2.EVENT_MOUSEMOVE, cv2.EVENT_LBUTTONUP) and not st['down']:
+            if dg_['what'] == 'bar':                        # полоса прокрутки: тянуть
+                if ev == cv2.EVENT_MOUSEMOVE:
+                    ct_ = max(car.get('content', 0), st['Hv'] + 1)
+                    car['scroll'] = int(max(0, min(ct_ - st['Hv'] + 20, dg_['s0'] + (y - dg_['y']) * ct_ / st['Hv'])))
+                    st['car_dirty'] = st['dirty'] = True
+                    return
+                car['drag'] = None
+                return
+            if ev == cv2.EVENT_MOUSEMOVE and flags & cv2.EVENT_FLAG_LBUTTON:   # карточку тянут: порядок слоёв
+                if abs(y - dg_['y0']) > 8:
+                    dg_.update(on=True, y=y)
+                    st['car_dirty'] = st['dirty'] = True
+                return
+            if ev == cv2.EVENT_LBUTTONUP:
+                car['drag'] = None
+                if dg_.get('on'):
+                    cards_ = [h_ for h_ in car.get('hits', []) if h_[4] == 'sel']
+                    mp_ = car.get('map') or []
+                    if cards_:
+                        h_ = min(cards_, key=lambda h: 0 if h[1] <= y <= h[3] else min(abs(y - h[1]), abs(y - h[3])))
+                        uk_ = lambda k2_: (mp_[k2_][2] if mp_[k2_][0] == 'sub' and len(mp_[k2_]) > 2 else mp_[k2_][1]) \
+                            if 0 <= k2_ < len(mp_) else None
+                        r_ = reorder_to(dg_['uid'], uk_(h_[5]), y > (h_[1] + h_[3]) / 2)
+                        st['msg'] = (r_ or "Not moved") + "  (the list top is the top layer)"
+                    st['car_dirty'] = st['dirty'] = True
+                    return
         if x >= st['Wv'] and not st['down']:              # карусель образцов справа
             if ev == cv2.EVENT_MOUSEMOVE:                   # наведение: подсветка кнопок и карточек
                 h_ = SM.hit(car['hits'], x - st['Wv'], y)
                 if h_ != car.get('hov'):
                     car['hov'], car['hxy'], st['car_dirty'] = h_, (x - st['Wv'], y), True
                 return
+            if ev == cv2.EVENT_LBUTTONDOWN:                 # нажали: полоса прокрутки или карточку (тянуть)
+                h_ = SM.hit(car['hits'], x - st['Wv'], y)
+                if h_ and h_[0] == 'scroll':
+                    car['drag'] = dict(what='bar', y=y, s0=car['scroll'])
+                    return
+                mp_ = car.get('map') or []
+                if h_ and h_[0] == 'sel' and 0 <= h_[1] < len(mp_):
+                    u_ = mp_[h_[1]][2] if mp_[h_[1]][0] == 'sub' and len(mp_[h_[1]]) > 2 else mp_[h_[1]][1]
+                    if u_ and not str(u_).startswith('cell:'):
+                        car['drag'] = dict(what='card', uid=u_, y0=y, y=y, on=False)
+                return
             if ev == cv2.EVENT_LBUTTONUP:
+                car['drag'] = None
                 car_click(x, y, bool(flags & cv2.EVENT_FLAG_CTRLKEY))
             elif ev == cv2.EVENT_MOUSEWHEEL:
                 car['scroll'] = int(max(0, min(car.get('content', 0) - st['Hv'] + 20,
@@ -1805,8 +1864,11 @@ def _view_one(folder, fullscreen, keys, car):
         pyramid_tint(img)                                     # внутри выделений — всё, кроме выбранного в них
         H_img, W_img = img.shape[:2]
         mks_ = car.get('marks') or set()
+        dqo_ = np.asarray(st['al']['dq'], float) if st.get('al') else np.zeros(2)   # совмещение: контуры других едут
+        me_o_ = sc.st.meta.get('sample_uid')
         for q_, c_, lab_, dash_, new_, *u_ in sample_outlines():      # выделения образца на этой картинке
-            pv_ = np.array([to_view(p_) for p_ in q_], float)
+            sh_o_ = dqo_ if (u_ and u_[0] != me_o_) else 0
+            pv_ = np.array([to_view(p_ + sh_o_) for p_ in q_], float)
             if pv_[:, 0].max() < 0 or pv_[:, 1].max() < 0 or pv_[:, 0].min() > W_img or pv_[:, 1].min() > H_img:
                 continue
             if u_ and u_[0] in mks_:                        # отмеченное (Ctrl+щелчок) — белой каймой
@@ -1936,66 +1998,64 @@ def _view_one(folder, fullscreen, keys, car):
         return np.hstack([with_prof(img), carousel_img()])
 
     def carousel_img():
-        """Меню справа — как в окне микроскопа: снятые выделения и под каждым его черновики (и новые, ещё не
-        записанные — сразу, как выбраны квадраты), с теми же номерами и цветами."""
+        """Меню справа — как в окне микроскопа: все выделения одним списком, в порядке слоёв (верх — верхний слой):
+        снятые (с картинкой), не снятые, без объектива (draft) и новое из выбранных клеток. Галочка — в экспорт."""
         base_ = _car_items(subs, folder, car)
         items_, cmap_ = [], []
         try:
             regs_ = regions_now()[0] if smp is not None else []
         except Exception:
             regs_ = []
-        by_ = {r_.get('uid'): r_ for r_ in regs_ if r_.get('uid')}
-        owner_ = {}
+        sub_of_ = {}
         for k_, f_ in enumerate(subs):
-            for r_ in regs_:
-                if r_.get('kind') not in ('group', 'draft') and r_.get('uid') and \
-                        os.path.abspath(f_).startswith(os.path.abspath(P0_.sel_folder(smp.folder, r_)) + os.sep):
-                    owner_[r_['uid']] = k_
-
-        def top_(r_):
-            seen_ = set()
-            while r_ is not None and id(r_) not in seen_:
-                seen_.add(id(r_))
-                if r_.get('kind') not in ('group', 'draft') and r_.get('uid') in owner_:
-                    return owner_[r_['uid']]
-                r_ = by_.get(r_.get('parent'))
-            return None
-
-        def depth_(r_):
-            d_, seen_ = 0, set()
-            while r_ is not None and r_.get('kind') != 'group' and r_.get('uid') not in owner_ and id(r_) not in seen_:
-                seen_.add(id(r_))
-                d_ += 1
-                r_ = by_.get(r_.get('parent'))
-            return d_
-        sel_k = None
-        f_cur_ = subs.index(folder)
-        sub_uid_ = {v_: k2_ for k2_, v_ in owner_.items()}
+            u_ = P0_.scan_uid(f_)
+            if u_:
+                sub_of_[u_] = k_
+        rk_ = lambda r_: r_.get('rank') if r_.get('rank') is not None else -1e9
+        regs_ = sorted(regs_, key=lambda r_: (0 if r_.get('pending') else 1, rk_(r_), -int(r_.get('num', 0) or 0)))
         mk_ = car.setdefault('marks', set())
-        for k_, it_ in enumerate(base_):
-            if k_ == subs.index(folder):
-                sel_k = len(items_)
-            it_ = dict(it_, chosen=sub_uid_.get(k_) in mk_) if sub_uid_.get(k_) else it_
-            items_.append(it_)
-            cmap_.append(('sub', k_, sub_uid_.get(k_)))
-            for r_ in regs_:
-                unsc_ = r_.get('kind') == 'draft' or (r_.get('kind') != 'group' and r_.get('uid') not in owner_
-                                                       and not r_.get('pending'))
-                if unsc_ and (top_(r_) == k_ or (r_.get('pending') and f_cur_ == k_ and top_(r_) is None)):
-                    new_ = bool(r_.get('pending'))
-                    nc_ = len(r_.get('cells') or [])
-                    dr_ = r_.get('kind') == 'draft'
-                    items_.append(dict(title=("Selection (new)" if new_ else f"Selection {r_.get('num', '')}"),
-                                       color=(235, 235, 235) if new_ else SM.color(int(r_.get('num', 1)) - 1),
-                                       lines=[(f"{nc_} square{'s' if nc_ != 1 else ''}, from the view (M)" if dr_ or nc_ else
-                                               "not scanned yet") + ("" if not new_ else "  - saved on closing")]
-                                       + ([] if dr_ else [f"{r_.get('obj')}x: Q queues its scan"]),
-                                       depth=depth_(r_), go=False, muted=new_, chosen=r_.get('uid') in mk_,
-                                       **({} if dr_ else {'obj': f"{r_.get('obj')}x"})))
-                    cmap_.append(('draft', r_.get('uid'), k_))
+        sel_k = None
+        fo_ = car.get('focus')
+        for r_ in regs_:
+            if r_.get('kind') == 'group':
+                continue
+            u_ = r_.get('uid')
+            new_ = bool(r_.get('pending'))
+            dr_ = r_.get('kind') == 'draft'
+            chk_ = None if new_ else r_.get('export', True)
+            if u_ in sub_of_:                               # снятое: картинка и кадры
+                k_ = sub_of_[u_]
+                it_ = dict(base_[k_], chosen=u_ in mk_, check=chk_, title=f"Selection {r_.get('num', '')}",
+                           color=SM.color(int(r_.get('num', 1)) - 1), obj='draft' if dr_ else f"{r_.get('obj')}x")
+                if subs[k_] == folder and not fo_:
+                    sel_k = len(items_)
+                items_.append(it_)
+                cmap_.append(('sub', k_, u_))
+            else:
+                nc_ = len(r_.get('cells') or [])
+                items_.append(dict(title=("Selection (new)" if new_ else f"Selection {r_.get('num', '')}"),
+                                   color=(235, 235, 235) if new_ else SM.color(int(r_.get('num', 1)) - 1),
+                                   lines=[(f"{nc_} cell{'s' if nc_ != 1 else ''}" if nc_ else "")
+                                          + ("" if not new_ else "  - Enter: make it a selection")
+                                          if new_ else ("not scanned yet" + (f", {nc_} cells" if nc_ else ""))]
+                                   + ([] if dr_ or new_ else [f"{r_.get('obj')}x: S queues its scan"]),
+                                   go=False, muted=new_, chosen=u_ in mk_, check=chk_,
+                                   **({} if new_ else {'obj': 'draft' if dr_ else f"{r_.get('obj')}x"})))
+                if fo_ and u_ == fo_:
+                    sel_k = len(items_)
+                cmap_.append(('draft', u_, subs.index(folder) if folder in subs else 0))
         car['map'] = cmap_
+        if car.get('drag') is not None and car['drag'].get('y') is not None:
+            pass
         pan_, car['hits'], car['content'] = SM.carousel(st['Hv'], items_, sel_k, car['scroll'], title="Selections",
                                                         go=False, hover=car.get('hxy'))
+        dg_ = car.get('drag')
+        if dg_ and dg_.get('on'):                           # куда ляжет карточка
+            cards_ = [h_ for h_ in car['hits'] if h_[4] == 'sel']
+            if cards_:
+                h_ = min(cards_, key=lambda h: 0 if h[1] <= dg_['y'] <= h[3] else min(abs(dg_['y'] - h[1]), abs(dg_['y'] - h[3])))
+                yl_ = h_[3] - 1 if dg_['y'] > (h_[1] + h_[3]) / 2 else h_[1] + 1
+                cv2.line(pan_, (h_[0], yl_), (h_[2], yl_), (90, 220, 90), 3)
         return pan_
 
     # история (Ctrl+Z / Ctrl+Y): после каждого действия разметка (кресты, сетка, квадраты, номера)
@@ -2053,6 +2113,42 @@ def _view_one(folder, fullscreen, keys, car):
         g2_ = _G(folder)
         g.selected = set(g2_.selected)
         h_last[:] = [g_sig(), g_snap()]
+
+    def brush_commit():
+        """Enter: выбранные клетки -> новое выделение (каждая фигура — своё), с объективом для новых (Shift+G) или
+        draft; оно живёт само (клетки уходят из кисти), сразу в списке и выбрано. -> сообщение."""
+        if smp is None:
+            return "No sample: open the scan from a project"
+        from .layers import sync_brush, objective_to, detach
+        from . import project as PJ_
+        g.save(px_um)
+        sh_ = stub()
+        old_ = {r_['uid'] for r_ in sh_._regions}
+        sync_brush(sh_, make=True)
+        new_ = [k_ for k_, x_ in enumerate(sh_._regions) if x_['uid'] not in old_]
+        if not new_:
+            return "Nothing to make: select cells first (M, click / drag), then Enter"
+        no_ = car.get('new_obj', 'draft')
+        bad_ = []
+        for k_ in new_:
+            x_ = sh_._regions[k_]
+            if no_ != 'draft':
+                ok_, m_ = objective_to(sh_, k_, no_)
+                if not ok_:
+                    bad_.append(m_)
+            if x_.get('src'):
+                detach(sh_, x_)                             # живёт само: клетки ушли из кисти
+        u_ = sh_._regions[new_[-1]]['uid']
+        sh_._sample.data['focus'] = u_                      # окно микроскопа выберет его же
+        PJ_.save_regions(sh_)
+        sh_._sample.save()
+        regrid()
+        car['focus'] = u_
+        st['_so_key'] = st['_sg_key'] = None
+        st['car_dirty'] = True
+        nm_ = ", ".join(f"Selection {sh_._regions[k_]['num']}" for k_ in new_)
+        return (f"{nm_} made ({'draft' if no_ == 'draft' else f'{no_}x'}), chosen on the right"
+                + (f"; {bad_[0]}" if bad_ else "") + "   Shift+G: objective of the next new ones")
 
     def sel_geoms():
         """Выделения образца на столике: [(uid, shapely, площадь)] — для щелчков по ним (кэш как у контуров)."""
@@ -2128,9 +2224,6 @@ def _view_one(folder, fullscreen, keys, car):
             if k_ is None:
                 continue
             r_ = sh_._regions[k_]
-            if scanned(r_):
-                bad_.append(f"Selection {r_['num']} is scanned with {r_.get('obj')}x")
-                continue
             o_ok, m_ = objective_to(sh_, k_, o)
             (ok_ if o_ok else bad_).append(r_['num'] if o_ok else m_)
         if ok_:
@@ -2141,6 +2234,31 @@ def _view_one(folder, fullscreen, keys, car):
         return ((f"Selection{'s' if len(ok_) > 1 else ''} {', '.join(map(str, ok_))}: "
                  + ("draft (no objective)" if o == 'draft' else f"{o}x") if ok_ else "Objective not changed")
                 + (f";  {len(bad_)} not: {bad_[0]}" if bad_ else ""))
+
+    def set_export(uid):
+        """Галочка карточки: идёт ли выделение в экспорт. -> сообщение."""
+        from . import project as PJ_
+        sh_ = stub()
+        r_ = next((x_ for x_ in sh_._regions if x_['uid'] == uid), None)
+        if r_ is None:
+            return "Not saved yet"
+        r_['export'] = not r_.get('export', True)
+        PJ_.save_regions(sh_)
+        return f"Selection {r_['num']}: " + ("goes into the export" if r_['export'] else "not in the export")
+
+    def reorder_to(src_uid, dst_uid, after):
+        """Перетащили карточку: src — перед dst (after — после). Порядок списка = слои."""
+        from . import project as PJ_
+        sh_ = stub()
+        ix_ = {r_['uid']: i_ for i_, r_ in enumerate(sh_._regions)}
+        if src_uid not in ix_ or dst_uid not in ix_ or src_uid == dst_uid:
+            return None
+        from .samples import init_areas as _ia
+        _ia(sh_)
+        r2_ = SM.reorder(sh_, ix_[src_uid], ix_[dst_uid], after, save=False)
+        PJ_.save_regions(sh_)
+        st['_fl_key'] = None
+        return r2_
 
     def queue_scans(uids):
         """Q: съёмки выделений — в очередь окна микроскопа (того же образца). -> сообщение."""
@@ -2234,7 +2352,7 @@ def _view_one(folder, fullscreen, keys, car):
         sq_ = sorted(g.selected)
         uv_ = LT.to_uv(L_, mosaic_to_stage(folder, np.array([g.cr.point(i + 0.5, j + 0.5) for i, j in sq_])))
         me_ = next((r_ for r_ in regs_ if r_.get('kind') not in ('group', 'draft') and
-                    os.path.abspath(folder).startswith(os.path.abspath(P0_.sel_folder(smp.folder, r_)) + os.sep)), None)
+                    P0_.scan_uid(folder) == r_.get('uid')), None)
         if me_ is not None:                                 # как в окне микроскопа: середина квадрата — в съёмке
             from shapely.geometry import Point as _Pt, box as _bx
             from .layers import from_json
@@ -2390,8 +2508,9 @@ def _view_one(folder, fullscreen, keys, car):
         return False
 
     def finer_layers():
-        """Съёмки образца крупнее этой (50x, 100x над 10x), каждая — [картинка, preview px -> мозаика этой (2x3),
-        контур в мозаике этой]. Кэш по времени sample.json и превью."""
+        """Снимки всех других выделений образца, в порядке списка (первый — верхний слой): каждый — (объектив,
+        картинка, preview px -> мозаика этой (2x3), None, uid, папка, номер). Без обрезки по контуру.
+        Кэш по времени sample.json, превью и совмещения."""
         if smp is None:
             return []
         from . import project as P2_
@@ -2417,7 +2536,7 @@ def _view_one(folder, fullscreen, keys, car):
                 meta_ = json.load(open(os.path.join(f_, 'meta.json'), encoding='utf-8'))
                 if not os.path.exists(jp_) or (meta_.get('sample_uid') and meta_.get('sample_uid') == me_uid_):
                     continue
-                if (meta_.get('objective') or 0) <= my_obj and not oth_:   # Y: другие выделения — тоже
+                if not oth_:                               # Y: только эта съёмка
                     continue
                 pic_ = cv2.imread(jp_)
                 g2_ = geometry(f_)
@@ -2428,16 +2547,11 @@ def _view_one(folder, fullscreen, keys, car):
                 A_ = cv2.getAffineTransform(src_, dst_)
                 r_ = regs_.get(meta_.get('sample_uid'))
                 ring_ = None
-                if r_ is not None and r_.get('shape'):
-                    gm_ = from_json(r_['shape'])
-                    ps_ = [gm_] if gm_.geom_type == 'Polygon' else list(gm_.geoms)
-                    ring_ = [stage_to_mosaic(folder, np.array(p_.exterior.coords)[:-1]) for p_ in ps_]
                 out_.append((meta_.get('objective') or 0, pic_, A_, ring_, meta_.get('sample_uid'), f_,
                              r_['num'] if r_ is not None else meta_.get('selection')))
             except Exception:
                 continue
-        out_.sort(key=lambda t_: t_[0])                     # крупнее — выше
-        out_ = [L_ + (L_[0] <= my_obj,) for L_ in out_]     # тот же и меньший объектив — только там, где этой съёмки нет
+        out_ = [L_ + (True,) for L_ in out_]                # порядок — как в списке (latest_scans: сверху вниз)
         st['_fl_key'], st['_fl'] = key_, out_
         return out_
 
@@ -2463,9 +2577,9 @@ def _view_one(folder, fullscreen, keys, car):
         return st['_alpha']
 
     def layer_at(xy):
-        """Картинка выделения крупнее этой под мышью (верхняя) -> запись finer_layers или None."""
+        """Снимок другого выделения под мышью (верхний по списку) -> запись finer_layers или None."""
         q_ = from_view(xy) - (np.asarray(st['al']['dq'], float) if st.get('al') else 0)
-        for L_ in reversed(finer_layers()):
+        for L_ in finer_layers():
             o_, pic_, A_, ring_ = L_[:4]
             if ring_:
                 if any(cv2.pointPolygonTest(np.float32(r2_), (float(q_[0]), float(q_[1])), False) >= 0 for r2_ in ring_):
@@ -2518,20 +2632,46 @@ def _view_one(folder, fullscreen, keys, car):
         d0_ = np.asarray(G_.get('d_um', (0.0, 0.0)), float)
         d_ = d0_ - G_['ms'] * np.linalg.solve(G_['Mo'], np.asarray(st['al']['dq'], float))
         _align(folder, d_ if np.hypot(*d_) > 1e-4 else (0, 0), to=st['al'].get('to'))
+        dd_ = d_ - d0_                                      # выделение этой съёмки едет вместе с её картинкой
+        if np.hypot(*dd_) > 1e-4 and smp is not None:
+            try:
+                from .layers import move as _mv
+                from . import project as PJ_
+                sh_ = stub()
+                me_ = sc.st.meta.get('sample_uid')
+                k_ = next((i_ for i_, r_ in enumerate(sh_._regions) if r_['uid'] == me_), None)
+                if k_ is not None:
+                    _mv(sh_, k_, float(dd_[0]), float(dd_[1]))
+                    PJ_.save_regions(sh_)
+            except Exception as e_:
+                L.debug('VIW-011', f"Selection not moved with its picture: {e_}")
         st['_fl_key'] = None
+        st['_so_key'] = st['_sg_key'] = None
         st.pop('_lat', None)
         return d_
 
     def draw_finer(img):
+        """Слои: снимки всех выделений по порядку списка (снизу вверх), выбранная съёмка — поверх всех (с ней
+        работают); при совмещении (L) — под ними, чтобы видеть, как они ложатся. У каждого — своя прозрачность (O)."""
         Hh, Ww = img.shape[:2]
         Rm = R() * st['s']                                  # мозаика этой -> окно: mid + s R (M - c)
         T_ = np.c_[Rm, mid() - Rm @ np.array([st['cx'], st['cy']])]
         dq_ = np.asarray(st['al']['dq'], float) if st.get('al') else np.zeros(2)   # совмещение: сдвиг на просмотр
         al_ = alphas()
-        empty_ = None
-        for o_, pic_, A_, ring_, uid_, f_, n_, under_ in finer_layers():
-            if under_ and empty_ is None:
-                empty_ = (((img.max(2) <= 28) & (img.min(2) >= 14)).astype(np.uint8) * 255)   # фон вне мозаики
+        base_ok_ = ~(((img.max(2) <= 28) & (img.min(2) >= 14)))   # где у этой съёмки картинка (фон вне мозаики — нет)
+        comp_ = np.full_like(img, 20)
+        me_u_ = sc.st.meta.get('sample_uid')
+
+        def put_base(c_):
+            a_ = al_.get(me_u_, 1.0) if not st.get('al') else 1.0
+            if a_ >= 0.99:
+                c_[base_ok_] = img[base_ok_]
+            elif a_ > 0.01:
+                c_[base_ok_] = (img[base_ok_].astype(np.float32) * a_ + c_[base_ok_].astype(np.float32) * (1 - a_)).astype(np.uint8)
+            return c_
+        if st.get('al'):                                    # совмещение: эта — снизу
+            comp_ = put_base(comp_)
+        for o_, pic_, A_, ring_, uid_, f_, n_, under_ in reversed(finer_layers()):   # снизу списка вверх
             a_ = al_.get(uid_, 1.0)
             if a_ <= 0.01:                                    # прозрачность 0: только контур
                 continue
@@ -2545,16 +2685,12 @@ def _view_one(folder, fullscreen, keys, car):
                 continue
             w_ = cv2.warpAffine(pic_, np.float32(np.c_[M_, t_]), (Ww, Hh), flags=cv2.INTER_LINEAR, borderValue=0)
             mask_ = cv2.inRange(w_, (7, 7, 7), (255, 255, 255))  # вне кадров (чёрное) — не кладём
-            if ring_:
-                cm_ = np.zeros_like(mask_)
-                cv2.fillPoly(cm_, [np.int32(np.round(to_view_arr(r2_ + dq_))) for r2_ in ring_], 255, cv2.LINE_8)
-                mask_ = cv2.bitwise_and(mask_, cm_)
-            if under_:
-                mask_ = cv2.bitwise_and(mask_, empty_)
             if a_ < 0.99:                                     # полупрозрачная: видно, что под ней
-                w_ = cv2.addWeighted(w_, a_, img, 1 - a_, 0)
-            img = cv2.copyTo(w_, mask_, img)
-        return img
+                w_ = cv2.addWeighted(w_, a_, comp_, 1 - a_, 0)
+            comp_ = cv2.copyTo(w_, mask_, comp_)
+        if not st.get('al'):                                # выбранная — поверх всех
+            comp_ = put_base(comp_)
+        return comp_
 
     def draw_subgrids(img):
         """Сетка каждого выделения из клеток — его цветом, внутри его клеток: края клеток и подсетка (2-5), если есть;
@@ -2620,7 +2756,7 @@ def _view_one(folder, fullscreen, keys, car):
         for r_ in regs_:
             if r_.get('kind') == 'group' or not r_.get('shape'):
                 continue
-            if os.path.abspath(folder).startswith(os.path.abspath(P0_.sel_folder(smp.folder, r_)) + os.sep):
+            if P0_.scan_uid(folder) == r_.get('uid'):
                 continue                                    # своё выделение этой съёмки — по квадратам (выше)
             holes_ = [from_json(k_['shape']) for k_ in kids_.get(r_['uid'], []) if k_.get('shape')]
             pc_ = (rf_.get(r_['uid']) or {}).get('cells', [])
@@ -2699,8 +2835,8 @@ def _view_one(folder, fullscreen, keys, car):
                 sel_changed_ = sg_[2] != h_last[0][2]
                 hist.push(g_label(), h_last[1], new_, folder=folder, px=px_um)
                 h_last[:] = [sg_, new_]
-                if sel_changed_:                            # клетки выбраны — выделение (draft) в списке сразу
-                    brush_now()
+                if sel_changed_:                            # клетки выбраны — «Selection (new)» в списке; Enter — сделать
+                    st['car_dirty'] = True
         if _t.monotonic() - st.get('_sync_t', 0) > 0.5:  # окно микроскопа поменяло образец или кисть —
             st['_sync_t'] = _t.monotonic()                 # показать то же, что и там
             mt_ = tuple(os.path.getmtime(p_) if os.path.exists(p_) else 0 for p_ in
@@ -2713,8 +2849,7 @@ def _view_one(folder, fullscreen, keys, car):
                 if subs2 != subs:                            # выделение удалили / вернули / сняли новое
                     subs[:] = subs2
                     st['car_dirty'] = st['dirty'] = True
-                    if smp is not None and not any(os.path.abspath(folder).startswith(os.path.abspath(
-                            P0_.sel_folder(smp.folder, r_)) + os.sep) for r_ in json.load(
+                    if smp is not None and not any(P0_.scan_uid(folder) == r_.get('uid') for r_ in json.load(
                             open(smp.file, encoding='utf-8')).get('selections', [])):
                         st['msg'] = ("This selection was deleted in the microscope window "
                                      "(Ctrl+Z there brings it back)")
@@ -2866,7 +3001,7 @@ def _view_one(folder, fullscreen, keys, car):
                 st['msg'] = "Back to the stage coordinates (no shift): Enter saves"
             elif key == 32:                                 # пробел: само, по содержимому
                 L_ = layer_at(st['hov']) if st.get('hov') else None
-                L_ = L_ or (st['al'].get('L') if st['al'].get('L') else (finer_layers() or [None])[-1])
+                L_ = L_ or (st['al'].get('L') if st['al'].get('L') else (finer_layers() or [None])[0])
                 if L_ is None:
                     st['msg'] = "No picture of a higher objective here to align with"
                 else:
@@ -2880,6 +3015,10 @@ def _view_one(folder, fullscreen, keys, car):
             elif key == 27:
                 st['mode'], st['al'] = 'look', None
                 st['msg'] = "Alignment cancelled"
+            st['dirty'] = True
+            continue
+        if key in (13, 10) and st['mode'] in ('look', 'select', 'paint'):   # Enter: выбранные клетки -> выделение
+            st['msg'] = brush_commit()
             st['dirty'] = True
             continue
         if key == 27 and st['mode'] == 'look' and car.get('marks') and not st.get('help'):
@@ -2982,7 +3121,12 @@ def _view_one(folder, fullscreen, keys, car):
             st['msg'] = ("Pictures of the other selections: on (each in its outline; O - transparency)" if car['others']
                          else "Only this scan and the higher objectives over it")
         elif ch == 'o':                                      # O / Shift+O: прозрачность картинки выделения под мышью
-            L_ = layer_at(st['hov']) if st.get('hov') else None
+            q_o = from_view(st['hov']) if st.get('hov') else None
+            on_base_ = q_o is not None and 0 <= q_o[0] < sc.size[0] and 0 <= q_o[1] < sc.size[1]
+            L_ = None if on_base_ else (layer_at(st['hov']) if st.get('hov') else None)
+            if on_base_:                                    # выбранная — сверху: ей
+                me_u_ = sc.st.meta.get('sample_uid')
+                L_ = (sc.st.meta.get('objective') or 0, None, None, None, me_u_, folder, SM.sample_index(folder))
             if L_ is None:
                 st['msg'] = "O: point at a picture of a higher objective (a selection drawn over this scan)"
             else:
@@ -3110,7 +3254,36 @@ def _view_one(folder, fullscreen, keys, car):
             g.save(px_um); st['msg'] = f"All {len(g.selected)} squares selected"
         elif ch == 'x' and st['mode'] in ('select', 'paint'):
             g.selected.clear(); g.save(px_um); st['msg'] = "Selection cleared"
-        elif ch == 'e':                                      # вывод: картинки квадратов + чертёж, прогресс в окне
+        elif ch == 'e' and smp is not None:                  # экспорт образца: всё с галочкой -> <образец>/export/
+            g.save(px_um)
+            from .drawing import export_sample
+            sh_ = stub()
+            from .samples import init_areas as _ia, order as _ord
+            _ia(sh_)
+            ks_ = [k_ for k_ in _ord(sh_) if sh_._regions[k_].get('export', True)]
+            um_ = None
+            pxs_ = {}
+            for f2_ in subs:
+                try:
+                    mt_ = json.load(open(os.path.join(f2_, 'meta.json'), encoding='utf-8'))
+                    pxs_[int(mt_.get('objective') or 0)] = float(mt_.get('pixel_size_um') or 0) or None
+                except Exception:
+                    pass
+            opts_ = sorted(((o_, p_) for o_, p_ in pxs_.items() if p_), key=lambda t_: t_[1])
+            if keys is None and opts_:
+                from . import dialogs as D
+                r_ = D.choose("mixed.png: one picture of all ticked scans, layered as the list - its pixel",
+                              [f"as {o_}x: {p_:.4f} um / px" for o_, p_ in opts_], 0, ("Export",))
+                if r_ is None:
+                    st['msg'] = "Export cancelled"
+                    st['dirty'] = True
+                    continue
+                um_ = opts_[r_[1] or 0][1]
+            r, e = busy("Export", lambda: export_sample(sh_, ks_, mixed_um=um_))
+            st['msg'] = (f"Export: {e}" if e is not None else
+                         f"Exported {len(ks_)} ticked selection{'s' if len(ks_) != 1 else ''} to {os.path.dirname(str(r))}"
+                         + ("" if str(r).endswith('.dwg') else "  (DWG: install ODA File Converter)"))
+        elif ch == 'e':                                      # без образца: картинки квадратов + чертёж этой съёмки
             g.save(px_um)
             r, e = busy("Export", lambda: export(folder))
             if e is not None:

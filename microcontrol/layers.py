@@ -292,6 +292,8 @@ def clip_to_parent(m, reg, pk=None):
     """Пирамидка: участок внутри большего не вылезает за его край — обрезается по нему (клетки — только целые
     внутри). pk — индекс родителя (None — по месту). Возвращает (родитель или None, обрезан ли).
     ValueError, если внутри родителя ничего не остаётся."""
+    return None, False                                     # список плоский: ничего не обрезается
+
     from . import lattice as LT
     if pk is None:
         pk = geometric_parent(m, reg)
@@ -513,6 +515,8 @@ def conflict(m, reg):
     """Какое правило нарушает выделение (сообщение) или None. Правила пирамидки:
     1) лежит внутри родителя; 2) объектив больше, чем у снятого выделения сверху, и меньше, чем у выделений
     внутри; 3) не наезжает на другое выделение того же объектива (черновики и группы не в счёт)."""
+    return None                                            # список плоский: перекрытия любые, объектив любой
+
     from .samples import obj
     if is_group(reg):
         return None
@@ -755,7 +759,7 @@ def obj_of(m, r):
     return obj(m, r)
 
 
-def sync_brush(m):
+def sync_brush(m, make=True):
     """Кисть в просмотре -> черновики (Draft): каждая замкнутая фигура клеток — свой черновик.
     Уровень 1 (квадраты литографии, grid.json 'selected') — дети снятого выделения; подсетка выделения
     (grid.json 'refine': {uid: {'n': 2…5, 'cells': [[a, b], ...]}}) — его дети на уровне N·n (строго внутри него).
@@ -839,9 +843,8 @@ def sync_brush(m):
         N = int(np.prod(fac)) if fac else 1
         pgeo = geom(m, par)
 
-        def shape_of(fg_):                                       # клетки, обрезанные по краю родителя
-            g_ = LT.cells_geom(Lq, fg_, N)
-            return g_.intersection(pgeo) if not pgeo.is_empty and not pgeo.buffer(EPS).contains(g_) else g_
+        def shape_of(fg_):                                       # клетки как есть (без обрезки: список плоский)
+            return LT.cells_geom(Lq, fg_, N)
         for fg in LT.figures(cells):
             if shape_of(fg).is_empty:                            # снаружи родителя целиком — не черновик
                 continue
@@ -855,11 +858,13 @@ def sync_brush(m):
                     r['cells'] = [list(c) for c in fg]
                     set_geom(m, r, shape_of(fg))
                     changed.append(f"{_t(r)} follows the brush")
-            else:
+            elif make:                                           # новое — только по Enter в просмотре (make)
                 r = dict(uid=uuid.uuid4().hex, num=new_num(m), obj=obj(m, par), fw=par.get('fw', m.frame_size[0]),
-                         fh=par.get('fh', m.frame_size[1]), pts=[], thumbs=[], kind='draft', parent=puid, src=src,
+                         fh=par.get('fh', m.frame_size[1]), pts=[], thumbs=[], kind='draft', src=src,
                          cells=[list(c) for c in fg], factors=list(fac))
                 set_geom(m, r, shape_of(fg))
+                from .samples import to_top as _top
+                _top(m, r)                                       # новое — наверх списка
                 m._regions.append(r)
                 changed.append(f"Selection {r['num']} ({LT.address(*fg[0], list(fac))}{' ...' if len(fg) > 1 else ''})")
         for i, r in enumerate(mine):
@@ -881,7 +886,7 @@ def sync_brush(m):
                 json.dump(d2, fo, indent=1)
             renamed = True
     if renamed:
-        more = sync_brush(m)
+        more = sync_brush(m, make)
         if more:
             changed.append(more)
     for r in [r for r in m._regions if r.get('src') and is_mask(r)]:   # кисть очищена (или подсетка сменилась)
@@ -913,7 +918,7 @@ def brush_into_grid(regs, L, folder, g):
     from . import lattice as LT
     from .snap import stage_to_mosaic
     me = next((r for r in regs if not is_group(r) and not is_mask(r) and
-               os.path.abspath(folder).startswith(os.path.abspath(_sel_dir(folder, r)) + os.sep)), None)
+               __import__('microcontrol.project', fromlist=['x']).scan_uid(folder) == r.get('uid')), None)
     if me is not None:
         for r in regs:
             if r.get('src') == f"{me['uid']}@1":

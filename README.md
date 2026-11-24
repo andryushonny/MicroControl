@@ -2,7 +2,7 @@
 
 **Python control of the Optosky ATR8300 Raman microscope: scan a substrate, stitch one picture of it, put the lithography grid on it, choose the squares you need and export them for AutoCAD.**
 
-**Authors:** A. Lyapeikov, S. Domenko · **Version:** 0.27.0 · Русский: [docs/README_ru.md](docs/README_ru.md) · 中文: [docs/README_zh.md](docs/README_zh.md) · PDF: [EN](docs/MicroControl_en.pdf), [RU](docs/MicroControl_ru.pdf), [中文](docs/MicroControl_zh.pdf) · Full technical reference: [EN](docs/reference_en.md), [RU](docs/reference_ru.md), [中文](docs/reference_zh.md)
+**Authors:** A. Lyapeikov, S. Domenko · **Version:** 0.28.0 · Русский: [docs/README_ru.md](docs/README_ru.md) · 中文: [docs/README_zh.md](docs/README_zh.md) · PDF: [EN](docs/MicroControl_en.pdf), [RU](docs/MicroControl_ru.pdf), [中文](docs/MicroControl_zh.pdf) · Full technical reference: [EN](docs/reference_en.md), [RU](docs/reference_ru.md), [中文](docs/reference_zh.md)
 
 ![Overview: numbered lithography squares, chosen squares as drafts, the 20x and 100x areas inside, the status bar at the bottom](docs/img/view.jpg)
 
@@ -79,7 +79,7 @@ The final result is the drawing `export/drawing.dwg`: every chosen square is its
 
 `mc.projects()` and `mc.all_samples()` print a table: id, name, samples, selections, scans, created, updated, description (the Open dialogs show the same). In the viewer, Open → **New window** shows another project in its own window (`mc.view_window(folder)`), the current one stays open.
 
-Squares selected in the viewer become a **Draft** — a sketch that is never scanned (a helper: it never goes into the export; its *draft* chip or **Scan area** turns it into a Selection of the objective in place, with no way back). Over any selection, keys `2`–`5` give it its own grid 2–5 times denser; `M` then selects cells of that grid strictly inside it, and they become drafts one level deeper (address `13,7 > 2,1`). On the map, drag over such a selection: the new area for the objective in place is made of whole cells of its grid. **Export** asks which areas go into the drawing and writes one AutoCAD drawing of the sample: origin at cross 1,1, pictures in place, every cell as a closed square, crosses with their numbers. In the viewer what you chose stays clear and the rest is tinted; a smaller area is always cut to the edge of the larger one it lies in (a pyramid: 10x → 50x → 100x), and the 50x / 100x pictures lie on top of the overview.
+Squares selected in the viewer (`M`) become a selection on **Enter** — a **draft** (no objective, not scanned) or with the objective chosen for new ones (`Shift+G`); it appears in the list at once and is chosen. All selections are on one level: any objectives may overlap, nothing is cut; the order of the list is the order of the layers (top on top), drag cards to change it; the box on a card puts it into the export. Over any selection, keys `2`–`9` (and `1` `0` — 10) give it its own finer grid; `M` then selects its cells. **Export** writes everything ticked into one folder `<sample>/export/`: one AutoCAD drawing (origin at cross 1,1, pictures in place, every cell as a closed square, crosses with their numbers), the pictures, and `mixed.png` — all ticked scans laid over each other in the list order, at the pixel you choose.
 
 | | |
 |---|---|
@@ -112,7 +112,7 @@ For the circuit itself, outline the flakes at 50x / 100x: at 10x the optics blur
 
 ## Projects and samples
 
-Work is grouped like this: **Project** (a piece of work, with a description) → **Sample** (one substrate on the stage: its own selections and coordinates, a description) → **Selection** (an area on one objective; layers: map 10x > details 50x > 100x) → **Scan** (every scan of a selection is a new version) → grid, chosen squares, drawing. Selections are saved in the sample and come back when it is opened again; the chosen squares on the maps, `m.list()` and the viewer show only the open sample. Selections are layers: an outline made of rectangles (no inner squares), a level of the pyramid (objective), nesting; Ctrl+click cards, then Merge / Minus / Overlap / Group / Ungroup. Squares chosen with the brush in the viewer become selections by themselves (one per figure, on the next objective); a selection is scanned only by the frames that touch its outline; the eye on a card hides it on the maps.
+Work is grouped like this: **Project** (a piece of work, with a description) → **Sample** (one substrate on the stage: its own selections and coordinates, a description) → **Selection** (an area on one objective; layers: map 10x > details 50x > 100x) → **Scan** (every scan of a selection is a new version) → grid, chosen squares, drawing. Selections are saved in the sample and come back when it is opened again; the chosen squares on the maps, `m.list()` and the viewer show only the open sample. Selections are layers: an outline made of rectangles (no inner squares), a level of the pyramid (objective), nesting; Ctrl+click cards, then Merge / Minus / Overlap. Squares chosen with the brush in the viewer become selections by themselves (one per figure, on the next objective); a selection is scanned only by the frames that touch its outline; the eye on a card hides it on the maps.
 
 ```python
 p = mc.Project("Graphene", "flakes for transport")   # open or create; p.uid — its short id, e.g. "k3f9x"
@@ -244,7 +244,7 @@ Arrows move; letters do things. As much as possible is done right in the window.
 | Arrows | move by one frame (Step X, Y) |
 | `E` / `Q` (`PgUp` / `PgDn`) | stage up / down by Step Z (`Shift` — ×5) |
 | `F` · `K` | autofocus · keep $Z$ here as a focus point |
-| Ctrl+click cards · Shift+drag over a selection | mark for Merge / Minus / Overlap / Group / Ungroup · move a selection |
+| Ctrl+click cards · Shift+drag over a selection | mark for Merge / Minus / Overlap · move a selection; drag a card up / down: the layer order (top on top); the box on a card: in the export |
 | menu **Scans** (a selection chosen) · objective chip `… 100x, draft` | its scans oldest first: View, **Make main** (maps, view and export use it) · a selection without an objective (draft) is not scanned |
 | Scan area / `S` · Ctrl+click cards · bar at the bottom, menu **Queue** | queue the scan of the chosen selection (several: Ctrl+click their cards); scans go one after another at the instrument, quick stitches in the background on other cores; the window lives · `x` stops a job, Stop all; the whole queue: all done in ~T; keys that move the stage wait until the instrument is free |
 | Scan area · **Stitch** (buttons on top) | scan + quick stitch (fast overview, not edited, not exported) · quality stitch of the chosen selection: exact straight-edged picture for the drawing, re-shot where needed; export takes only these |
@@ -277,7 +277,7 @@ Arrows move; letters do things. As much as possible is done right in the window.
 | `S` | stitch right here (frames by their overlaps, the preview); the view reopens stitched |
 | `C` · `F` | mark crosses (`Shift+C` — start again) · frames onto the crosses (exact: frames, grid and distortion together) |
 | `N` | number a square |
-| `M` | select (click, box); `Shift` — unselect; right click — remove one, `Shift` + right click — the whole area; `A` / `X` — all / none |
+| `M` | select (click, box); `Shift` — unselect; right click — remove one, `Shift` + right click — the whole area; `A` / `X` — all / none **Enter** — the selected cells become a selection (draft, or the objective for new ones: `Shift+G`), chosen on the right. |
 | `2`…`9` · `1` `0` · `1` | over a selection: its own grid 2–9 times denser (`M` then selects its cells) · `1` then `0` within a second — 10 times · no finer grid; zoom up to 32× to see it |
 | `T` | picture level / as shot |
 | `P` | profiles window: R, G, B across the arms of the cross under the mouse, arm edges (green), width in µm, contrast, overexposure. Click a cross — pin it; drag the yellow edge lines in the window — they move on the map too; wheel over the window — profile range; right click — edges found automatically. Cross search prefers the largest «+», so dust and dots do not pull it Lines are set by **4 clicks** first (two ends of the cyan line, then of the pink one: «k of 4»), only then the plots are built and pinned; a click after that starts again, `P` — clear. |
@@ -295,9 +295,11 @@ Arrows move; letters do things. As much as possible is done right in the window.
 
 ```
 projects/<project>/project.json                       name, description
-projects/<project>/samples/<sample>/sample.json       its selections (layers, focus points), description
-    selections/S01_10x/scans/<date>/                  every scan of a selection is a new version:
-        frames/  join/  grid.json  export/            frames, stitched picture, crosses and squares, drawing
+projects/<project>/samples/<sample>/sample.json       its selections (the list order = layers), description
+    scans/<date>_<time>_S03_50x/                      all scans, one level; every scan is a new version:
+        frames/  join/  grid.json                     frames, stitched picture, crosses and squares
+    export/                                           the export (replaced each time): drawing, pictures, mixed.png
+    thumbs/<uid>/                                     corner pictures of the selections
     photos/                                           single pictures (Space)
 logs/                                                 log of every session
 ```

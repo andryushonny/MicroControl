@@ -667,7 +667,8 @@ class Frames:
             f = cv2.warpAffine(self.feather, M, (w, h), flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP)
             acc += t * f[..., None]
             ws += f
-            imgs.append(t); wts.append(f)
+            if blend == 'multiband':                            # копии кадров — только для частотного смешивания
+                imgs.append(t); wts.append(f)
         avg = np.where(ws[..., None] > 1e-3, acc / np.maximum(ws, 1e-6)[..., None], bg)
         if blend == 'multiband' and len(imgs) > 1:
             from .optics import multiband

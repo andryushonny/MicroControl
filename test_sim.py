@@ -883,7 +883,7 @@ from microcontrol.mask import Grid
 m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp()); m.focus()
 fw, fh = m.frame_size
 m.area = mc.Area(0, 0, 3 * fw, 2 * fh)
-f = m.scan(); mc.stitch(f, verbose=False)
+f = m.scan(mode='quality')                                       # в чертёж — только quality
 px_um = json.load(open(os.path.join(f, 'meta.json')))['pixel_size_um']
 g = Grid(f); p0 = np.array([66.0, 52.8]) / px_um; a_ = 100 / px_um   # 66, 53 мкм от угла мозаики
 g.cr.add(p0); g.cr.add(p0 + (a_, 0)); g.cr.add(p0 + (0, a_)); g.selected |= {(1, 0), (2, 0)}
@@ -895,8 +895,8 @@ kd = next(k for k, r in enumerate(m._regions) if r.get('kind') == 'draft')
 assert SM.title(m, kd).startswith('Draft') and SM.frames_of(m, kd) == (0, 0)
 assert sorted(map(tuple, m._regions[kd]['cells'])) == [(5, 6), (6, 6)], m._regions[kd]['cells']   # квадраты 6,7 и 7,7
 assert LT.address(5, 6, []) == "6,7"
-assert len(m.scan(name='again') and m.last_scans) == 1            # черновик не снимается
-f = m.last_scans[0]; mc.stitch(f, verbose=False)
+assert len(m.scan(name='again', mode='quality') and m.last_scans) == 1   # черновик не снимается
+f = m.last_scans[0]
 uid = m._regions[kd]['uid']
 q1 = g.cr.point(1 + 0.5 / 3, 0.5 / 3)                              # левая верхняя клетка 1/3 квадрата 6,7
 V_.view(f, _keys=[-1, ('qmove', *q1), ord('3'), ord('b'), ('qclick', *q1), -1, 27])   # 3 — подсетка; кисть — клетка
@@ -924,7 +924,8 @@ M.run(m, fullscreen=False, _keys=[-1, ('maprect', *nav.to_px(c_ - (60, 40)), *na
 k50 = next(k for k, r in enumerate(m._regions) if r['obj'] == 50)
 r50 = m._regions[k50]
 assert r50['parent'] == uid and r50['factors'] == [3] and all(c[0] // 3 in (5, 6) and c[1] // 3 == 6 for c in r50['cells']), r50
-m.scan(); [mc.stitch(x, verbose=False) for x in m.last_scans]
+r50['mode'] = 'quality'
+m.scan()
 dx = mc.export_sample(m, ks=[0, kd, k50])                            # 10x и 50x и черновик: каждый на своём слое
 doc = ezdxf.readfile(dx if dx.endswith('.dxf') else dx[:-4] + '.dxf')
 ms = doc.modelspace()
@@ -2180,7 +2181,9 @@ for r_ in fr_:                                                                  
     f_ = next(f_ for f_ in m.last_scans if f"S{r_['num']:02d}_50x" in f_)
     st_ = ScanData(f_); n_fr = len(st_); st_.close()
     nf_.append(n_fr)
-    assert n_fr == int(np.prod(SM.frames_of(m, LY.idx(m, r_['uid'])))), (r_['num'], n_fr)
+    from microcontrol import quality as Q51
+    assert SM.stitch_mode(m, r_) == 'quality' and Q51.info(f_) and n_fr >= int(np.prod(Q51.plan_area(m, r_, 0.4).n)), \
+        (r_['num'], n_fr)                                                                  # рамка — quality
 m.objective = 10
 m._sel = LY.idx(m, u10)
 M.run(m, fullscreen=False, _keys=[-1, ord('s'), -1, -1])                                              # 10x: сам обзор
@@ -2429,9 +2432,11 @@ srv = subprocess.Popen([sys.executable, '-m', 'microcontrol', 'serve', '--port',
                         '--dead', '2'], env=dict(os.environ, HOME=hs_, USERPROFILE=hs_, PYTHONPATH=root56),
                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
 t_ = time.time()
-while not os.path.exists(os.path.join(hs_, '.microcontrol', 'server_token')) and time.time() - t_ < 30:
-    time.sleep(0.1)
-time.sleep(1.0)
+while time.time() - t_ < 60:                                        # сервер слушает (симулятор создаётся ~2 с)
+    try:
+        _so.create_connection(('127.0.0.1', P56), timeout=1).close(); break
+    except OSError:
+        time.sleep(0.2)
 TOK = open(os.path.join(hs_, '.microcontrol', 'server_token')).read().strip()
 U = f'net://127.0.0.1:{P56}'
 try:

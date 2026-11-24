@@ -120,7 +120,7 @@ def render(folder, verbose=False):
     w, h = int(math.floor(bx1 - bx0)), int(math.floor(by1 - by0))
     fr = Frames(folder, skip=replaced)
     M = np.array([[1.0, 0.0, bx0], [0.0, 1.0, by0]])
-    img, cov = fr.warp(M, (w, h), 0, blend='multiband')
+    img, cov = fr.warp(M, (w, h), 0, blend='feather')        # веса к краю кадра: память — один снимок
     fr.close()
     # непокрытые места рамки -> точки столика (туда доснять)
     gaps = []

@@ -2167,7 +2167,7 @@ def _view_one(folder, fullscreen, keys, car):
             N_ = LT.level(r_)
             col_ = SM.color(r_['num'] - 1)
             for a, b in r_['cells']:
-                for t in range(1, n_):
+                for t in range(0, n_ + 1):                  # и края клетки: иначе каждая n-я линия пропадает
                     for p0, p1 in ((((a + t / n_) / N_, b / N_), ((a + t / n_) / N_, (b + 1) / N_)),
                                    ((a / N_, (b + t / n_) / N_), ((a + 1) / N_, (b + t / n_) / N_))):
                         q_ = stage_to_mosaic(folder, LT.to_stage(L_, [p0, p1]))
@@ -2251,7 +2251,10 @@ def _view_one(folder, fullscreen, keys, car):
             for r_ in json.load(open(sp_, encoding='utf-8')).get('selections', []):
                 if r_.get('kind') == 'group':
                     continue
-                if r_.get('shape'):
+                L_c = lat_now() if r_.get('cells') else None
+                if L_c is not None:                         # из клеток — по той же решётке, что и их подсетка
+                    gm_ = LT.cells_geom(L_c, [tuple(c) for c in r_['cells']], LT.level(r_))
+                elif r_.get('shape'):
                     gm_ = from_json(r_['shape'])
                 else:
                     (ax, ay), (bx, by) = r_['A'], r_['B']

@@ -240,6 +240,8 @@ def queue_panel(img, x0, y1, x1, q, scale=0.45):
             x += 130
             lft = j.remaining()
             s_ = f"{j.step_title}  {100 * (j.frac or 0):.0f}%  {_tm(j.elapsed())}" + (f", ~{_tm(lft)} left" if lft else "")
+        elif j.active and q.held(j):
+            s_ = f"waits for {j.obj}x: put it in place, then S (Scan area)"
         elif j.active:
             nx_ = getattr(j, '_next', None)
             s_ = f"waiting: {nx_[1] if nx_ else 'start'}  ~{_tm(j.remaining())}"

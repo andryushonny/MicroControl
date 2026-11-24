@@ -1978,6 +1978,13 @@ def _run(m, fullscreen=False, _keys=None):
         from .stitch import stitch as _stitch
         msg_t = time.monotonic()
         only_ = None
+        qw_ = m.__dict__.get('_queue')
+        if qw_ is not None and qw_.waiting_for().get(m.objective):   # съёмки ждали этот объектив — в работу
+            n_ = qw_.release(m.objective)
+            msg = f"Started {n_} scan{'s' if n_ != 1 else ''} that waited for {m.objective}x (the queue at the bottom)"
+            if keys is not None and not getattr(m, '_test_async', False):
+                qw_.wait()
+            return
         if m._pending:                                     # новая область без угла 2 — она и выделена в меню
             msg = "Finish the new area first: key 2 sets its second corner (C: drop it)"
             return
@@ -2136,6 +2143,13 @@ def _run(m, fullscreen=False, _keys=None):
                 cv2.imshow(WIN, np.vstack([menu_img(W), pic_]))
                 cv2.waitKey(1)
             _view(f_, fullscreen=fullscreen, _keys=keys)          # в тестах — те же нажатия
+            try:                                           # просмотр мог менять выделения (объектив, удалить)
+                from .layers import refresh_from_disk
+                if refresh_from_disk(m):
+                    car['shot_t'] = -9
+                    m._map_win = None
+            except Exception as e_:
+                L.debug('MAN-021', f"Selections from the view not taken: {e_}")
             try:                                           # решётку по столику просмотр мог записать в образец
                 sm_ = getattr(m, '_sample', None)
                 if sm_ is not None and sm_.data.get('lattice') is None:
@@ -3109,6 +3123,9 @@ def _run(m, fullscreen=False, _keys=None):
                 d0 = default_steps(m)
                 steps['x'], steps['y'] = d0['x'], d0['y']
                 msg = f"Objective {m.objective}x: put it in place. Steps X, Y = one frame: {steps['x']:g}, {steps['y']:g} um"
+                wq_ = (m.__dict__.get('_queue').waiting_for() if m.__dict__.get('_queue') is not None else {}).get(m.objective)
+                if wq_:
+                    msg += f".  {wq_} scan{'s' if wq_ != 1 else ''} wait for {m.objective}x: S starts them"
             elif ch == 'g':
                 d0 = default_steps(m)
                 steps['x'], steps['y'] = d0['x'], d0['y']

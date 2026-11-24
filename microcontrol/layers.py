@@ -104,6 +104,60 @@ def to_draft(m, k):
     return f"Selection {r['num']}: draft - no objective, not scanned (click 'draft' to choose its objective)"
 
 
+def objective_to(m, k, o):
+    """Не снятое выделение k -> объектив o ('draft' или None — без объектива), если пирамидка цела.
+    -> (вышло, сообщение)."""
+    from .samples import obj
+    r = m._regions[k]
+    if r.get('kind') == 'group':
+        return False, f"Group {r['num']} has no objective"
+    if o in (None, 'draft'):
+        if r.get('kind') == 'draft':
+            return True, f"Selection {r['num']}: draft already"
+        return True, to_draft(m, k)
+    o = int(o)
+    if r.get('kind') == 'draft':
+        return draft_to_selection(m, k, o)
+    if obj(m, r) == o:
+        return True, f"Selection {r['num']}: {o}x already"
+
+    def set_o(mm, kk):
+        r2 = mm._regions[kk]
+        g2 = geom(mm, r2)
+        r2.update(obj=o, fw=m.frame_size[0] * m.objective / o, fh=m.frame_size[1] * m.objective / o)
+        if r2.get('shape'):
+            set_geom(mm, r2, g2)
+        return kk
+    bad = _try(m, lambda t_: set_o(t_, k))
+    if bad:
+        return False, f"Selection {r['num']}: {o}x does not fit here ({bad})"
+    set_o(m, k)
+    return True, f"Selection {r['num']}: {o}x"
+
+
+def refresh_from_disk(m):
+    """Выделения в sample.json поменяли снаружи (просмотр): взять их в память микроскопа. -> True, если взяли."""
+    import json as _json
+    sm = getattr(m, '_sample', None)
+    if sm is None:
+        return False
+    try:
+        dk = _json.load(open(sm.file, encoding='utf-8'))
+    except (OSError, ValueError):
+        return False
+    if dk.get('selections') == sm.data.get('selections') and dk.get('seq') == sm.data.get('seq'):
+        return False
+    from . import project as _P
+    from .samples import init_areas
+    keep = m._regions[m._sel]['uid'] if getattr(m, '_sel', None) is not None and m._sel < len(m._regions or []) else None
+    sm.data.update(dk)
+    _P.load_regions(m)
+    m._area_seq = max(getattr(m, '_area_seq', 0), int(dk.get('seq', 0) or 0))
+    init_areas(m)
+    m._sel = next((i for i, r in enumerate(m._regions) if r['uid'] == keep), m._sel) if keep else m._sel
+    return True
+
+
 def next_objective_of(m, k, objectives):
     """Не снятое выделение k — на следующий объектив из списка, при котором пирамидка цела. -> (вышло, сообщение)."""
     from .samples import obj

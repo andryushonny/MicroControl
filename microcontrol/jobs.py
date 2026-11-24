@@ -130,6 +130,10 @@ class JobQueue:
         поставленных вместе: m.last_scans — их папки (как после m.scan() нескольких выделений)."""
         m = self.m
         rg = next((r for r in m._regions if r.get('uid') == uid), None)
+        if rg is None:                                  # выделение сделали в просмотре: взять с диска
+            from .layers import refresh_from_disk
+            refresh_from_disk(m)
+            rg = next((r for r in m._regions if r.get('uid') == uid), None)
         from . import samples as SM
         k = m._regions.index(rg) if rg is not None else None
         title = title or (f"Scan {SM.title(m, k)}" if k is not None else "Scan")
@@ -139,8 +143,10 @@ class JobQueue:
             nf = int(np.prod(SM.frames_of(m, k)))
             est = TM.estimate(m, nf, ('points' if m._use_fp else 'off') if rg.get('pts') else 'off')[0] \
                 + nf * _rates('quick')
-        j = Job('scan', title, None, est=est, uid=uid, obj=m.objective)
+        o_ = SM.obj(m, rg) if rg is not None else m.objective
+        j = Job('scan', title, None, est=est, uid=uid, obj=o_)
         j.batch = batch if batch is not None else j.id
+        j.hold = o_ != m.objective                     # другой объектив: ждёт, пока его поставят (и S)
         j._gen = self._scan_steps(j)
         return self.add(j)
 
@@ -164,6 +170,8 @@ class JobQueue:
 
         def shoot():
             from .util import no_stop
+            from .layers import refresh_from_disk
+            refresh_from_disk(m)                        # просмотр мог поменять выделения: не затереть их
             if not any(r.get('uid') == j.uid for r in m._regions):
                 raise RuntimeError("the selection is gone (deleted)")
             if j.obj != m.objective:
@@ -268,11 +276,36 @@ class JobQueue:
         with self._lock:
             if self._inst is not None:
                 return True
-            return any(j.active and (j.lane == 'inst' or (j.kind == 'scan' and j.state == 'queued')) for j in self.jobs)
+            return any(j.active and (j.lane == 'inst' or (j.kind == 'scan' and j.state == 'queued' and not self.held(j)))
+                       for j in self.jobs)
+
+    def held(self, j):
+        """Съёмка ждёт свой объектив (его ещё не поставили или не сказали S)."""
+        return j.kind == 'scan' and j.state == 'queued' and (getattr(j, 'hold', False) or
+                                                             j.obj != getattr(self.m, 'objective', j.obj))
+
+    def waiting_for(self):
+        """{объектив: сколько съёмок его ждут}."""
+        out = {}
+        for j in self.jobs:
+            if j.active and self.held(j):
+                out[j.obj] = out.get(j.obj, 0) + 1
+        return out
+
+    def release(self, obj):
+        """Объектив obj поставили: ждущие его съёмки — в работу. -> сколько."""
+        n = 0
+        with self._lock:
+            for j in self.jobs:
+                if j.active and j.kind == 'scan' and j.state == 'queued' and j.obj == obj and getattr(j, 'hold', False):
+                    j.hold = False
+                    n += 1
+        self._wake.set()
+        return n
 
     def total_left(self):
         """Сколько ещё всей очереди (оценка): прибор — подряд, ядра — параллельно на workers."""
-        inst = sum(j.remaining() for j in self.jobs if j.active and j.lane in ('inst', None))
+        inst = sum(j.remaining() for j in self.jobs if j.active and j.lane in ('inst', None) and not self.held(j))
         cpu = sum(j.remaining() for j in self.jobs if j.active and j.lane == 'cpu')
         return max(inst, cpu / self.workers)
 
@@ -281,9 +314,12 @@ class JobQueue:
         if not a:
             return ""
         run_ = [j for j in a if j.state == 'running']
-        wait_ = len(a) - len(run_)
+        wf_ = self.waiting_for()
+        held_ = sum(wf_.values())
+        wait_ = len(a) - len(run_) - held_
         return (f"Queue: {len(run_)} running" + (f", {wait_} waiting" if wait_ else "")
-                + f"  -  all done in ~{tm(self.total_left())}")
+                + "".join(f", {n} wait for {o}x" for o, n in sorted(wf_.items()))
+                + (f"  -  all done in ~{tm(self.total_left())}" if len(a) > held_ else ""))
 
     def recent(self, sec=8.0):
         now = time.monotonic()
@@ -362,6 +398,8 @@ class JobQueue:
         with self._lock:
             for j in self.jobs:                          # новые задачи: первый шаг
                 if j.state == 'queued' and not j._stop:
+                    if j.kind == 'scan' and (getattr(j, 'hold', False) or j.obj != getattr(self.m, 'objective', j.obj)):
+                        continue                         # ждёт свой объектив
                     self._advance(j)
             if self._inst is None:                       # прибор свободен: первая ждущая на приборе
                 j = next((j for j in self.jobs if j.state == 'waiting' and j.lane == 'inst'), None)

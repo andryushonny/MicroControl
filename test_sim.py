@@ -2732,3 +2732,44 @@ assert np.allclose(q_, stage_to_mosaic(f10, [(100 - d10[0], 100 - d10[1])])[0], 
 m.close()
 print(f"Layers: picture transparency O (75 % kept per selection); L: drag moves the higher pictures, Esc cancels; "
       f"Space aligns by the picture: 10x shifted by {d10[0]:+.2f}, {d10[1]:+.2f} um (true {d_true}): OK")
+
+
+# ------------------------------------------------------------------ 60. Просмотр: много выделений разом — новые сразу с объективом (Shift+G), отметить (Ctrl+щелчок), объектив (G), в очередь (Q, ждут свой объектив), удалить (Del), картинки других (Y)
+import microcontrol.viewer as V_
+from microcontrol import samples as SM, layers as LY, lattice as LT
+from microcontrol.mask import Grid
+cv2.getWindowImageRect = lambda w: (0, 0, 1400, 900)
+m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp()); m.focus()
+fw, fh = m.frame_size
+m.area = mc.Area(0, 0, 3 * fw, 2 * fh); f = m.scan(); mc.stitch(f, verbose=False)
+px_um = json.load(open(os.path.join(f, 'meta.json')))['pixel_size_um']
+g = Grid(f); p0 = np.array([66.0, 52.8]) / px_um; a_ = 100 / px_um
+g.cr.add(p0); g.cr.add(p0 + (a_, 0)); g.cr.add(p0 + (0, a_)); g.labels = {(0, 0): (5, 7), (2, 1): (7, 8)}; g.save(px_um)
+LY.sync_brush(m); SM.persist(m)
+q = m.queue                                                          # очередь окна микроскопа (в этом процессе)
+qc = lambda i, j: g.cr.point(i + 0.5, j + 0.5)
+res = {}
+V_.view(f, _keys=[-1, ord('G'), ord('G'), ord('G'), ord('G'), -1, ('call', lambda st: res.update(new=st['msg'])),   # новые: 50x
+                  ord('m'), ('qclick', *qc(0, 0)), -1, ('qclick', *qc(2, 0)), -1, 27, -1, -1,
+                  ('call', lambda st: res.update(made=st['msg'])),
+                  ('qclick', *qc(0, 0), 'ctrl'), -1, ('qclick', *qc(2, 0), 'ctrl'), -1, ('call', lambda st: res.update(mk=st['msg'])),
+                  ord('g'), -1, ('call', lambda st: res.update(g=st['msg'])),      # 50x -> 100x обеим
+                  ord('q'), -1, ('call', lambda st: res.update(q=st['msg'])),
+                  ord('y'), -1, ord('y'), -1, 27, -1, ('qmove', *qc(2, 0)), 3014656, -1, ('call', lambda st: res.update(d=st['msg'])), 27, 27])
+regs = json.load(open(m.sample.file))['selections']
+print("  ", res)
+assert '50x' in res['new'], res
+assert res['mk'].startswith('Marked 2'), res
+assert '100x' in res['g'] and 'Queued 2 scans' in res['q'] and 'wait for 100x' in res['q'], res
+assert [j_.obj for j_ in q.active()] == [100, 100] and not q.inst_busy(), [(j_.obj, j_.state) for j_ in q.jobs]   # ждут 100x
+assert 'Deleted' in res['d'], res
+left_ = [r_ for r_ in regs if r_.get('cells') and r_.get('kind') != 'group' and r_.get('parent')]
+assert len(left_) == 1 and left_[0]['obj'] == 100 and left_[0].get('kind') != 'draft', left_
+m.objective = 100; m.focus()                                         # поставили 100x и S: ждавшие — в работу
+import microcontrol.manual as M
+M.run(m, fullscreen=False, _keys=[-1, ord('s'), -1, -1])
+st_ = sorted((j_.state, str(j_.error or '')[:30]) for j_ in q.jobs)
+assert st_[0][0] == 'done' and st_[1][0] == 'failed' and 'gone' in st_[1][1], st_       # удалённое — снимать нечего
+m.close()
+print("View: new selections from cells right with 50x, Ctrl+click marks two, G sets 100x to both, Q queues them "
+      "(they wait for 100x), Del deletes the one under the mouse, Y shows / hides the others: OK")

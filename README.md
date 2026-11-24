@@ -2,7 +2,7 @@
 
 **Python control of the Optosky ATR8300 Raman microscope: scan a substrate, stitch one picture of it, put the lithography grid on it, choose the squares you need and export them for AutoCAD.**
 
-**Authors:** A. Lyapeikov, S. Domenko · **Version:** 0.26.0 · Русский: [docs/README_ru.md](docs/README_ru.md) · 中文: [docs/README_zh.md](docs/README_zh.md) · PDF: [EN](docs/MicroControl_en.pdf), [RU](docs/MicroControl_ru.pdf), [中文](docs/MicroControl_zh.pdf) · Full technical reference: [EN](docs/reference_en.md), [RU](docs/reference_ru.md), [中文](docs/reference_zh.md)
+**Authors:** A. Lyapeikov, S. Domenko · **Version:** 0.27.0 · Русский: [docs/README_ru.md](docs/README_ru.md) · 中文: [docs/README_zh.md](docs/README_zh.md) · PDF: [EN](docs/MicroControl_en.pdf), [RU](docs/MicroControl_ru.pdf), [中文](docs/MicroControl_zh.pdf) · Full technical reference: [EN](docs/reference_en.md), [RU](docs/reference_ru.md), [中文](docs/reference_zh.md)
 
 ![Overview: numbered lithography squares, chosen squares as drafts, the 20x and 100x areas inside, the status bar at the bottom](docs/img/view.jpg)
 
@@ -283,6 +283,7 @@ Arrows move; letters do things. As much as possible is done right in the window.
 | `P` | profiles window: R, G, B across the arms of the cross under the mouse, arm edges (green), width in µm, contrast, overexposure. Click a cross — pin it; drag the yellow edge lines in the window — they move on the map too; wheel over the window — profile range; right click — edges found automatically. Cross search prefers the largest «+», so dust and dots do not pull it Lines are set by **4 clicks** first (two ends of the cyan line, then of the pink one: «k of 4»), only then the plots are built and pinned; a click after that starts again, `P` — clear. |
 | `R` | ruler, `R` again — the next kind, then off: two points — the distance; two lines (4 clicks) — the distance between them at their middles and the angle; a line and a point (3 clicks) — the distance from the point to the line |
 | `O` / `Shift+O` · `L` | picture of a higher objective under the mouse: more / less transparent (100…0 %, kept per selection) · align this scan with the higher one: drag (arrows), `Space` — by itself, `Enter` — save (`align.json`: grid, selections, map, export go with it) |
+| Ctrl+click selections / cards · `G` · `Q` · `Del` · `Shift+G` · `Y` | mark several (`Esc` — unmark); for the marked (or the one under the mouse): objective draft / 4x … 100x · queue their scans (other objectives wait for theirs: `S` in the microscope window starts them) · delete · objective of new selections from cells · pictures of the other selections on / off |
 | `E` | export: square pictures + the drawing (DWG / DXF), progress in the window |
 | `,` `.` | previous / next selection |
 | `Ctrl+Z` · `Ctrl+Y` | undo · redo any change |

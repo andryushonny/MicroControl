@@ -2,7 +2,7 @@
 
 **Python control of the Optosky ATR8300 Raman microscope: scan a substrate, stitch one picture of it, put the lithography grid on it, choose the squares you need and export them for AutoCAD.**
 
-**Authors:** A. Lyapeikov, S. Domenko · **Version:** 0.29.0 · Русский: [docs/README_ru.md](docs/README_ru.md) · 中文: [docs/README_zh.md](docs/README_zh.md) · PDF: [EN](docs/MicroControl_en.pdf), [RU](docs/MicroControl_ru.pdf), [中文](docs/MicroControl_zh.pdf) · Full technical reference: [EN](docs/reference_en.md), [RU](docs/reference_ru.md), [中文](docs/reference_zh.md)
+**Authors:** A. Lyapeikov, S. Domenko · **Version:** 0.30.0 · Русский: [docs/README_ru.md](docs/README_ru.md) · 中文: [docs/README_zh.md](docs/README_zh.md) · PDF: [EN](docs/MicroControl_en.pdf), [RU](docs/MicroControl_ru.pdf), [中文](docs/MicroControl_zh.pdf) · Full technical reference: [EN](docs/reference_en.md), [RU](docs/reference_ru.md), [中文](docs/reference_zh.md)
 
 ![Overview: numbered lithography squares, chosen squares as drafts, the 20x and 100x areas inside, the status bar at the bottom](docs/img/view.jpg)
 
@@ -255,7 +255,7 @@ T = T_0 + t\,N,
 | `P` · `G` · `A` · `Y` | profiles · straight edges · align · the others | — | profile lines (4 clicks) · crop the steps · align this scan with the others (Space — by itself) · other selections' pictures on / off |
 | `2`…`9`, `1` `0` | finer grid | — | of the selection under the mouse (1/2 … 1/10) |
 | `E` / `Q` (`PgUp` / `PgDn`) · `F` · `K` · `1` / `2` | stage up / down · autofocus · focus point · corners | ✓ (`Shift` — ×5) | — |
-| `L` · `I` · `W` · `Space` · `V` | light · laser · white balance · picture · open the view | ✓ | — |
+| `L` · `I` · `W` · `Space` · `V` | light · laser · white balance · picture · open the view (its own window: this one keeps working) | ✓ | — |
 | `Tab` or click a field | steps, exposure, objective | ✓ | — |
 | `Ctrl+Z` · `Ctrl+Y` | undo · redo | ✓ (moves too) | ✓ |
 | `H` · `Esc` · `Shift+Esc` | all keys · leave the mode / unmark · exit | ✓ | ✓ |

@@ -408,8 +408,8 @@ def _view_one(folder, fullscreen, keys, car):
         except Exception:
             pass
     seeded_, st0_msg = False, ""
-    if not g.ready() and not g.cr.marks and LAT is not None and not LAT.get('stage'):
-        try:                                                # решётка по крестам есть: сетка — если кресты здесь видны
+    if False and not g.ready() and not g.cr.marks and LAT is not None and not LAT.get('stage'):
+        try:                                                # сетка сама не появляется: только по крестам, отмеченным руками
             g, st0_msg = _seed(folder, g, LAT, smp0, sc, px_um, need_crosses=True)
             seeded_ = g.ready()
         except Exception:
@@ -2003,6 +2003,13 @@ def _view_one(folder, fullscreen, keys, car):
             UI.keys_line(img, h_, 12, Hv - hb + 6 + (k_ + 1) * (th_ + 12) - 4, fs, Wv - 10)
         from .jobs import summary_all as _qsum
         qs_ = _qsum()                                      # очередь окна микроскопа идёт и здесь: видно, что в фоне
+        if not qs_ and smp is not None:                    # окно микроскопа — другой процесс: его состояние очереди
+            try:
+                sq_ = json.load(open(os.path.join(smp.folder, '.queue_status.json'), encoding='utf-8'))
+                if sq_.get('summary') and _t.time() - float(sq_.get('t', 0)) < 5:
+                    qs_ = sq_['summary']
+            except (OSError, ValueError):
+                pass
         UI.status_bar(img, 0, Hv - sbh, Wv, Hv, None, [mode, f"{len(sc.st)} frames"] + ([qs_] if qs_ else []), scale=0.5)
         import time as _t
         if st['msg'] != st.get('_lm'):
@@ -2298,8 +2305,19 @@ def _view_one(folder, fullscreen, keys, car):
         from .jobs import _ALL, tm as _qtm
         q_ = next((q2_ for q2_ in _ALL if getattr(q2_.m, '_sample', None) is not None and smp is not None and
                    os.path.abspath(q2_.m._sample.folder) == os.path.abspath(smp.folder)), None)
-        if q_ is None:
-            return "The scan queue lives in the microscope window: open m.manual() with this sample, then V and Q here"
+        if q_ is None:                                      # окно микроскопа — другой процесс: запрос ему через файл
+            regs_ = {r_['uid']: r_ for r_ in regions_now()[0]}
+            ok_ = [u_ for u_ in uids if u_ in regs_ and regs_[u_].get('kind') not in ('draft', 'group')]
+            skip_ = len(uids) - len(ok_)
+            if not ok_:
+                return "Nothing to scan: give the selection an objective (O) first"
+            st_q_ = os.path.join(smp.folder, '.queue_status.json')
+            alive_ = os.path.exists(st_q_) and _t.time() - os.path.getmtime(st_q_) < 600
+            with open(os.path.join(smp.folder, '.queue_requests.jsonl'), 'a', encoding='utf-8') as fo_:
+                fo_.write(json.dumps(dict(op='scan', uids=ok_)) + "\n")
+            return (f"Sent {len(ok_)} scan{'s' if len(ok_) != 1 else ''} to the queue of the microscope window"
+                    + ("" if alive_ else " (it takes them when m.manual() with this sample is open)")
+                    + (f"; {skip_} without an objective skipped" if skip_ else ""))
         regs_ = {r_['uid']: r_ for r_ in regions_now()[0]}
         b_ = object()
         inq_ = {j_.uid for j_ in q_.active() if j_.kind == 'scan'}
@@ -2872,6 +2890,12 @@ def _view_one(folder, fullscreen, keys, car):
                     st['car_dirty'] = True
         if _t.monotonic() - st.get('_sync_t', 0) > 0.5:  # окно микроскопа поменяло образец или кисть —
             st['_sync_t'] = _t.monotonic()                 # показать то же, что и там
+            if smp is not None:                            # очередь окна микроскопа идёт: строка внизу — живая
+                qsp_ = os.path.join(smp.folder, '.queue_status.json')
+                qmt_ = os.path.getmtime(qsp_) if os.path.exists(qsp_) else 0
+                if qmt_ != st.get('_qmt') or (qmt_ and _t.time() - qmt_ < 6 and _t.monotonic() - st.get('_qdraw', 0) > 1):
+                    st['_qmt'], st['_qdraw'] = qmt_, _t.monotonic()
+                    st['dirty'] = True
             mt_ = tuple(os.path.getmtime(p_) if os.path.exists(p_) else 0 for p_ in
                         ((smp.file if smp is not None else ''), os.path.join(folder, 'grid.json')))
             if st.get('_mt') is None:
@@ -3204,17 +3228,16 @@ def _view_one(folder, fullscreen, keys, car):
                 st['msg'] = ("Click a cross, then its neighbour in the same row: the picture turns level. "
                              "Del: start again")
         elif ch in 'mb' and ch:                              # M (и B по привычке): выбирать клетки
-            if not g.ready() and not g.cr.marks:            # крестов нет — квадраты по координатам столика
+            L_us_ = smp0.data.get('lattice') if smp0 is not None else None
+            if not g.ready() and not g.cr.marks and (L_us_ is None or L_us_.get('stage')):
+                st['msg'] = "No grid yet: mark the crosses first (C, then two neighbouring crosses), then M"
+                st['dirty'] = True
+                continue
+            if not g.ready() and not g.cr.marks:            # кресты отмечены руками в другой съёмке образца — по ним
                 try:
-                    P_um_ = float(sc.st.meta.get('mask_pitch') or 100.0)
-                    while P_um_ > 5 and P_um_ > min(sc.size) * px_um / 3:     # хотя бы 3 квадрата поперёк
-                        P_um_ /= 2
-                    L_st_ = (smp0.data.get('lattice') if smp0 is not None else None) or stage_lattice(smp0, P_um_)
-                    g, m_ = _seed(folder, g, L_st_, smp0, sc, px_um)
+                    g, m_ = _seed(folder, g, L_us_, smp0, sc, px_um)
                     st['seeded'] = True
-                    if L_st_.get('stage'):
-                        st['msg'] = (f"No crosses here: squares of {L_st_['pitch']:g} um by the stage coordinates. "
-                                     "C: mark crosses for the exact grid")
+                    st['msg'] = "No crosses marked here: the grid comes from the crosses marked in another scan (C: mark your own)"
                 except Exception as e_:
                     st['msg'] = f"No grid: {e_}"
             st['mode'] = 'select' if g.ready() else st['mode']

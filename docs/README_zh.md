@@ -2,7 +2,7 @@
 
 **用 Python 控制 Optosky ATR8300 拉曼显微镜：扫描基底，把它拼接成一张图，叠加光刻网格，选出需要的方格并导出给 AutoCAD。**
 
-**作者：** A. Lyapeikov, S. Domenko · **版本：** 0.29.0 · English: [README.md](../README.md) · Русский: [README_ru.md](README_ru.md) · PDF: [中文](MicroControl_zh.pdf) · 完整技术参考：[中文](reference_zh.md)、[EN](reference_en.md)、[RU](reference_ru.md)
+**作者：** A. Lyapeikov, S. Domenko · **版本：** 0.30.0 · English: [README.md](../README.md) · Русский: [README_ru.md](README_ru.md) · PDF: [中文](MicroControl_zh.pdf) · 完整技术参考：[中文](reference_zh.md)、[EN](reference_en.md)、[RU](reference_ru.md)
 
 ![扫描查看器：方格的红色网格、选中的方格（绿色）、右侧的样品列表](img/view.jpg)
 
@@ -255,7 +255,7 @@ T = T_0 + t\,N,
 | `P` · `G` · `A` · `Y` | 剖面 · 平直边缘 · 对齐 · 其他 | — | 剖面线（4 次点击）· 裁去台阶 · 将当前扫描与其他对齐（空格 —— 自动）· 其他选区图片开 / 关 |
 | `2`…`9`、`1` `0` | 细网格 | — | 鼠标下选区（1/2 … 1/10） |
 | `E` / `Q`（`PgUp` / `PgDn`）· `F` · `K` · `1` / `2` | 载物台上 / 下 · 自动对焦 · 对焦点 · 角点 | ✓（`Shift` —— ×5） | — |
-| `L` · `I` · `W` · `空格` · `V` | 照明 · 激光 · 白平衡 · 拍照 · 打开查看器 | ✓ | — |
+| `L` · `I` · `W` · `空格` · `V` | 照明 · 激光 · 白平衡 · 拍照 · 打开查看器（独立窗口：本窗口继续工作） | ✓ | — |
 | `Tab` 或单击字段 | 步长、曝光、物镜 | ✓ | — |
 | `Ctrl+Z` · `Ctrl+Y` | 撤销 · 重做 | ✓（包括移动） | ✓ |
 | `H` · `Esc` · `Shift+Esc` | 全部按键 · 退出模式 / 取消标记 · 关闭 | ✓ | ✓ |

@@ -1206,6 +1206,66 @@ def _run(m, fullscreen=False, _keys=None):
         tb_, menu['thits'] = UI.tool_bar(W_, STEPS, step_now(), BUTTONS, menu['thover'])
         return np.vstack([img_, tb_])
 
+    def external_sync():
+        """Окно просмотра — отдельный процесс: выделения, которые оно поменяло (sample.json), — сюда; его съёмки в
+        очередь (<образец>/.queue_requests.jsonl) — в очередь; состояние очереди — ему (.queue_status.json).
+        -> сообщение или None."""
+        out_ = None
+        sf_ = m.sample.file
+        mt_ = os.path.getmtime(sf_) if os.path.exists(sf_) else 0
+        if mt_ != car.get('ext_mt'):
+            car['ext_mt'] = mt_
+            from .layers import refresh_from_disk
+            if refresh_from_disk(m):
+                car['shot_t'] = -9
+                m._map_win = None
+                out_ = "Selections changed in the view: taken here"
+            d_ = json.load(open(sf_, encoding='utf-8'))
+            fo_ = d_.pop('focus', None)                    # просмотр сделал / выбрал выделение — оно и выбрано здесь
+            if fo_:
+                m._sel = next((i_ for i_, r_ in enumerate(m._regions) if r_['uid'] == fo_), m._sel)
+                m.sample.data.pop('focus', None)
+                m.sample.save()
+                car['ext_mt'] = os.path.getmtime(sf_)
+        rq_ = os.path.join(m.sample.folder, '.queue_requests.jsonl')
+        if os.path.exists(rq_):                            # съёмки, поставленные в просмотре
+            try:
+                lines_ = open(rq_, encoding='utf-8').read().splitlines()
+                os.remove(rq_)
+            except OSError:
+                lines_ = []
+            uids_ = []
+            for ln_ in lines_:
+                try:
+                    d2_ = json.loads(ln_)
+                except ValueError:
+                    continue
+                if d2_.get('op') == 'scan':
+                    uids_ += list(d2_.get('uids') or [])
+            if uids_:
+                from .layers import refresh_from_disk
+                refresh_from_disk(m)
+                q_ = m.queue
+                inq_ = {j_.uid for j_ in q_.active() if j_.kind == 'scan'}
+                b_ = object()
+                n_ = 0
+                for u_ in dict.fromkeys(uids_):
+                    if u_ not in inq_ and any(r_['uid'] == u_ for r_ in m._regions):
+                        q_.scan(u_, batch=b_)
+                        n_ += 1
+                out_ = f"Queued from the view: {n_} scan{'s' if n_ != 1 else ''}" if n_ else out_
+        qq_ = m.__dict__.get('_queue')                     # состояние очереди — просмотру (строка внизу)
+        stp_ = os.path.join(m.sample.folder, '.queue_status.json')
+        txt_ = qq_.summary() if qq_ is not None else ""
+        if txt_ != car.get('ext_q') or (txt_ and time.monotonic() - car.get('ext_qt', 0) > 2):
+            car['ext_q'], car['ext_qt'] = txt_, time.monotonic()
+            try:
+                with open(stp_, 'w', encoding='utf-8') as fo_:
+                    json.dump(dict(summary=txt_, t=time.time()), fo_)
+            except OSError:
+                pass
+        return out_
+
     def map_alpha(new=None):
         """Прозрачность картинок выделений (общая с просмотром: view.json образца). new — {uid: 0..1}."""
         p_ = os.path.join(m.sample.folder, 'view.json')
@@ -2139,6 +2199,15 @@ def _run(m, fullscreen=False, _keys=None):
         if not f_:
             msg = "Nothing scanned in this sample yet: mark a selection (1, 2) and press S"
             return
+        if keys is None and not getattr(m, '_view_inline', False):   # просмотр — своим окном, своим процессом:
+            from .viewer import view_window                            # это окно живёт (очередь, камера, линейка)
+            try:
+                view_window(f_)
+                msg = (f"The view of {__import__('microcontrol.project', fromlist=['x']).scan_label(f_)} opens in its own "
+                       "window; this one keeps working (the queue, the camera). Changes there come here by themselves")
+            except Exception as e_:
+                msg = f"The view did not open: {e_}"
+            return
         if live is not None:
             live.paused = True
         err_ = None
@@ -2356,6 +2425,14 @@ def _run(m, fullscreen=False, _keys=None):
                 live.paused, qbar['paused'] = True, True
             elif not qb_ and qbar['paused']:
                 live.paused, qbar['paused'] = False, False
+        if time.monotonic() - car.get('ext_t', 0) > 0.5:  # просмотр (свой процесс) поменял образец — взять;
+            car['ext_t'] = time.monotonic()                # его запросы в очередь — в очередь; ей — состояние очереди
+            try:
+                msg_x_ = external_sync()
+                if msg_x_:
+                    msg, msg_t = msg_x_, time.monotonic()
+            except Exception as e_:
+                L.debug('MAN-022', f"External sync skipped: {e_}")
         qq_ = m.__dict__.get('_queue')
         if qq_ is not None:                                # закончилось в очереди: сообщение, карты заново
             for txt_, j_ in qq_.pop_events():

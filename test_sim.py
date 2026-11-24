@@ -1094,8 +1094,9 @@ assert Grid(f).selected == {(1, 1)}, Grid(f).selected                      # у�
 assert len(P_.latest_scans(m.sample.folder)) == 1                          # и Selection 2 в просмотре нет
 LY.sync_brush(m); SM.persist(m)
 assert [r['num'] for r in m._regions if r.get('kind') == 'draft'] and not any(r['num'] == 2 for r in m._regions)
-m.area = mc.Area(0, 0, 2 * fw, fh); f3 = m.scan(); mc.stitch(f3, verbose=False)   # новая съёмка: сетка — по решётке
-V_.view(f3, _keys=[-1, 27])
+m.area = mc.Area(0, 0, 2 * fw, fh); f3 = m.scan(); mc.stitch(f3, verbose=False)   # новая съёмка: сама сетки нет,
+V_.view(f3, _keys=[-1, 27]); assert not Grid(f3).ready()                          # M — по решётке образца
+V_.view(f3, _keys=[-1, ord('m'), -1, 27, 27])
 g3 = Grid(f3)
 assert json.load(open(os.path.join(f3, 'grid.json'))).get('seeded') and g3.labels
 c3 = g3.cell_at(g3.cr.point(0.5, 0.5))
@@ -1784,12 +1785,12 @@ def opened(f_, lat):
     mc.view(f_, _keys=[-1, -1, 27, 27])
     return Grid(f_).ready()
 assert not opened(fA, dict(O=[0.0, 0.0], e1=[100.0, 0.0], e2=[0.0, 100.0], pitch=100.0, numbered=False, stage=True, src=None))
-assert opened(fA, Lc) and not opened(fB, Lc)                       # по столику — не сама; по крестам — где они видны
+assert not opened(fA, Lc) and not opened(fB, Lc)                   # сама — никогда: только по крестам, отмеченным руками
 # черновик: выбрать квадраты (M, рамка), крестик на его карточке — квадраты сняты, черновика нет
 box_ = {}
 def keys54():
     yield -1; yield ord('m'); yield -1
-    yield ('drag', 420, 300, 700, 520); yield -1
+    yield ('drag', 420, 300, 700, 520); yield -1; yield 13; yield -1      # M: сетка — по крестам образца; Enter
     yield ('call', lambda st: box_.update(t=st['_t'])); yield -1
     dr_ = [r_ for r_ in box_['t']['regions']() if r_.get('kind') == 'draft']
     assert dr_ and Grid(fA).selected, (dr_, Grid(fA).selected)
@@ -1800,7 +1801,7 @@ def keys54():
 mc.view(fA, _keys=keys54())
 assert not Grid(fA).selected and 'deleted' in box_['msg'], box_['msg']
 m.close()
-print(f"Grid by itself only where crosses are seen (none by the stage coordinates); draft x in the view: {box_['msg']}: OK")
+print(f"No grid by itself (only from crosses marked by hand; M takes the sample's); draft x in the view: {box_['msg']}: OK")
 
 
 # ------------------------------------------------------------------ 55. Сторож: программа вылетела (os._exit, SIGKILL, необработанная ошибка) — лазер, моторы, свет, охлаждение выключены; штатное закрытие — сторож молчит
@@ -2241,3 +2242,31 @@ assert abs(dj2['mixed']['um_per_px'] - 4 * um0) < 1e-3 and cv2.imread(os.path.jo
 m.close()
 print(f"Flat list: overlaps of any objectives, new on top, scans in scans/, export to export/ (ticked only), "
       f"mixed.png {um0:.3f} um/px or chosen: OK")
+
+
+# ------------------------------------------------------------------ 62. Окно просмотра — свой процесс: окно микроскопа живёт; выделения, съёмки в очередь и её состояние — через файлы образца
+import microcontrol.manual as M
+from microcontrol import samples as SM
+import copy as _cp62
+m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp()); m.focus(); fw, fh = m.frame_size
+SM.corner(m, 1); m.move(dx=fw); SM.corner(m, 2); SM.persist(m)
+sf = m.sample.file
+def _from_view():                                                    # «просмотр» дописал выделение и выбрал его
+    d_ = json.load(open(sf)); r_ = _cp62.deepcopy(d_['selections'][0])
+    r_.update(uid='fromview', num=7, A=[r_['A'][0] + 3 * fw, r_['A'][1]], B=[r_['B'][0] + 3 * fw, r_['B'][1]])
+    d_['selections'].append(r_); d_['focus'] = 'fromview'; json.dump(d_, open(sf, 'w'))
+def _queue_from_view():
+    with open(os.path.join(m.sample.folder, '.queue_requests.jsonl'), 'a') as f_:
+        f_.write(json.dumps(dict(op='scan', uids=['fromview'])) + "\n")
+st62 = {}
+M.run(m, fullscreen=False, _keys=[-1, ('call', _from_view), ('call', lambda: time.sleep(0.6)), -1, -1,
+                                  ('call', lambda: st62.update(sel=m._regions[m._sel]['uid'], n=len(m._regions))),
+                                  ('call', _queue_from_view), ('call', lambda: time.sleep(0.6)), -1, -1,
+                                  ('call', lambda: st62.update(q=[j_.uid for j_ in m.queue.jobs])), ('call', lambda: time.sleep(0.6)), -1,
+                                  ('call', lambda: st62.update(stq=json.load(open(os.path.join(m.sample.folder, '.queue_status.json'))))),
+                                  ('qwait',), -1])
+assert st62['n'] == 2 and st62['sel'] == 'fromview', st62                    # выделение из просмотра — здесь и выбрано
+assert st62['q'] == ['fromview'] and not os.path.exists(os.path.join(m.sample.folder, '.queue_requests.jsonl')), st62
+assert 'Queue' in st62['stq']['summary'], st62                              # состояние очереди — просмотру
+assert m.queue.jobs[0].state == 'done'
+m.close(); print("The view as its own process: selections, scans into the queue and the queue state go through the sample files: OK")

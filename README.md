@@ -2,7 +2,7 @@
 
 **Python control of the Optosky ATR8300 Raman microscope: scan a substrate, stitch one picture of it, put the lithography grid on it, choose the squares you need and export them for AutoCAD.**
 
-**Authors:** A. Lyapeikov, S. Domenko · **Version:** 0.31.0 · Русский: [docs/README_ru.md](docs/README_ru.md) · 中文: [docs/README_zh.md](docs/README_zh.md) · PDF: [EN](docs/MicroControl_en.pdf), [RU](docs/MicroControl_ru.pdf), [中文](docs/MicroControl_zh.pdf) · Full technical reference: [EN](docs/reference_en.md), [RU](docs/reference_ru.md), [中文](docs/reference_zh.md)
+**Authors:** A. Lyapeikov, S. Domenko · **Version:** 0.32.0 · Русский: [docs/README_ru.md](docs/README_ru.md) · 中文: [docs/README_zh.md](docs/README_zh.md) · PDF: [EN](docs/MicroControl_en.pdf), [RU](docs/MicroControl_ru.pdf), [中文](docs/MicroControl_zh.pdf) · Full technical reference: [EN](docs/reference_en.md), [RU](docs/reference_ru.md), [中文](docs/reference_zh.md)
 
 ![Overview: numbered lithography squares, chosen squares as drafts, the 20x and 100x areas inside, the status bar at the bottom](docs/img/view.jpg)
 
@@ -31,7 +31,7 @@ mc.export(folder)            # 5. the chosen squares: pictures + a drawing in mi
 m.close()
 ```
 
-Both windows close with **Shift+Esc** or the window's ×. A single `Esc` only cancels. **H** shows all keys.
+The microscope window closes with **Shift+Esc** or its ×; the view — with **Esc** (when no mode, help or list is open) or its ×. **H** shows all keys. **Ctrl+P** shows / hides the Settings panel on the left.
 
 ---
 
@@ -65,7 +65,7 @@ Both windows close with **Shift+Esc** or the window's ×. A single `Esc` only ca
 
 - Press `C` and click **two neighbouring crosses in one row**. From them the program knows the tilt and the size of the squares, turns the picture level and draws the red grid over everything. The mark lands exactly where you click; `Shift`+click snaps it to the cross centre, a mark can be dragged. The grid is fitted to all crosses at once; `F` then puts every frame onto the crosses (see *Accuracy for lithography*).
 - **Numbers:** press `N`, click a square and type the number written next to it (`12 7`). Do this for two squares in different rows and columns — then every square has its real number.
-- **The grid is always the grid of what is selected in the menu on the right.** Its own crosses if they are marked in its scan; otherwise the crosses of the larger area around it (50x inside 10x); otherwise the sample lattice. The red grid on the map, the squares of a new area drawn inside it and the grid of its next scan all follow this. `Shift+C` clears the crosses (then just click new ones); cleared crosses are no longer used anywhere.
+- **One grid for the whole sample.** It is made from the crosses marked by hand on any selection (the ones marked last; mark them on the selection chosen in the list) and does not change while they do not. Every other scan takes it as it is; if its picture is off, `A` (align) moves the picture under the grid. `Shift+C` clears the crosses (then just click new ones).
 
 ### 4. Choose squares — the mask
 
@@ -75,7 +75,7 @@ Both windows close with **Shift+Esc** or the window's ×. A single `Esc` only ca
 
 `E` in the viewer or `mc.export(folder)` writes `export/` inside the scan folder: a straight PNG of the chosen squares (transparent background), a DXF for AutoCAD in micrometres and a list of the square numbers.
 
-The final result is the drawing `export/drawing.dwg`: every chosen square is its own picture (`export/squares/*.png`, cut exactly along the grid) placed at its real position in micrometres, with the square outlines and numbers on separate layers and an empty `BONDS` layer for drawing bonds. The DWG is written by the free ODA File Converter if it is installed; otherwise there is `drawing.dxf` (AutoCAD: Save As → DWG). Keep the `export/` folder together: pictures in DWG are always separate files. The progress is shown right in the window.
+The final result is the drawing `export/drawing.dwg`: every chosen square is its own picture (`export/squares/*.png`, cut exactly along the grid) placed at its real position in micrometres, with the square outlines and numbers on separate layers and an empty `BONDS` layer for drawing bonds. The DWG is written by the free ODA File Converter if it is installed; otherwise there is `drawing.dxf` (AutoCAD: Save As → DWG). Keep the `export/` folder together: pictures in DWG are always separate files. The progress is shown right in the window. **The drawing is made only when the crosses are marked and every ticked selection is quality-stitched** (the crosses are the beacons that put everything together for the lithography); otherwise the export has the pictures and `mixed.png` without the drawing, and the message says why.
 
 `mc.projects()` and `mc.all_samples()` print a table: id, name, samples, selections, scans, created, updated, description (the Open dialogs show the same). In the viewer, Open → **New window** shows another project in its own window (`mc.view_window(folder)`), the current one stays open.
 
@@ -245,7 +245,7 @@ T = T_0 + t\,N,
 | `Enter` | confirm | drive to the chosen selection | chosen cells -> a selection (chosen here and there); save the alignment |
 | `Del` | delete | the chosen selection / the new one (Ctrl+Z brings it back) | the marked / pointed ones (not scanned); in the crosses mode — crosses again |
 | `S` | scan: into the queue | the chosen / marked selections (Scan area) | the pointed / marked ones (the microscope window's queue) |
-| `J` | stitch | check the live picture against the mosaic; `Shift+J` — exact (quality) stitch of the chosen (Stitch) | edit the seams by hand; `Shift+J` — stitch right here |
+| `J` | stitch | check the live picture against the mosaic; `Shift+J` — exact (quality) stitch of the chosen (Stitch) | edit the seams by hand (a quick one: its quality stitch first); `Shift+J` — quality stitch into the microscope window's queue |
 | `X` | export | everything ticked -> `<sample>/export/` (Export) | the same |
 | `O` | objective | the one in place: next (put it in place) | of the pointed / marked selections; `Shift+O` — for new ones |
 | `[` `]` | transparency | the picture of the chosen selection on the map | the picture under the mouse / of the marked ones |
@@ -258,7 +258,9 @@ T = T_0 + t\,N,
 | `L` · `I` · `W` · `Space` · `V` | light · laser · white balance · picture · open the view (its own window: this one keeps working) | ✓ | — |
 | `Tab` or click a field | steps, exposure, objective | ✓ | — |
 | `Ctrl+Z` · `Ctrl+Y` | undo · redo | ✓ (moves too) | ✓ |
-| `H` · `Esc` · `Shift+Esc` | all keys · leave the mode / unmark · exit | ✓ | ✓ |
+| `H` · `Esc` | all keys · leave the mode / unmark | ✓ | ✓; `Esc` with nothing open — **close the view** |
+| `Shift+Esc` | exit | the microscope window (only so) | ✓ |
+| `Ctrl+P` | Settings panel (left) | show / hide | — |
 
 **Settings panel** of the microscope window (button Settings): Z follows the focus points, One-side approach (backlash), **Prepare**, **Distortion**, **Zero here**, **Steps = frame**, **Check directions**, **Arrows X / Y** the other way, **Map 90 deg**. On top: Prepare, New area, Scan area, Stitch, Export, Settings; the menu: Open, New, Info, Scans (history of the chosen selection: View, Make main), Queue, View, Help. Ctrl+drag on the map — a box on the objective in place (a crystal); `Esc` during a job — stop it.
 

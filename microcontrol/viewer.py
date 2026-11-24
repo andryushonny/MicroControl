@@ -42,8 +42,11 @@ class _Scene:
         self.cache, self.cache_b = OrderedDict(), 0         # (i, уровень) -> уменьшенный кадр; байт в кэше
         self.over, self.ok_ = None, 0.0                     # обзорная мозаика (join/preview_all.jpg)
         pv = os.path.join(folder, 'join', 'preview_all.jpg')
-        if os.path.exists(pv) and (not os.path.exists(jp) or os.path.getmtime(pv) >= os.path.getmtime(jp)):
-            img = cv2.imdecode(np.fromfile(pv, np.uint8), cv2.IMREAD_COLOR)
+        if os.path.exists(pv) and (not os.path.exists(jp) or _mt(pv) >= _mt(jp)):
+            try:                                            # очередь как раз пишет его — тогда без обзора
+                img = cv2.imdecode(np.fromfile(pv, np.uint8), cv2.IMREAD_COLOR)
+            except (OSError, ValueError):
+                img = None
             if img is not None:
                 self.over, self.ok_ = img, (img.shape[1] - 2) / self.size[0]
 
@@ -123,7 +126,7 @@ MICRO_ONLY = {'e': "stage up", 'q': "stage down", 'f': "autofocus", 'k': "focus 
               'i': "laser", 'w': "white balance", 'v': "open the view", ' ': "picture", 'E': "stage up",
               'Q': "stage down", 'F': "autofocus", 'K': "focus point", 'L': "light", 'I': "laser", 'W': "white balance",
               'V': "open the view"}
-HELP_V2 = "Arrows / drag: move  Wheel: zoom  0: whole  , / .: selection  Ctrl+click: mark  H: all keys  Shift+Esc: exit"
+HELP_V2 = "Arrows / drag: move  Wheel: zoom  0: whole  , / .: selection  Ctrl+click: mark  H: all keys  Esc: close"
 HELP_MODE = {
     'look': "C: crosses  M: select cells (Enter: a selection)  N: numbers  T: level  2-9, 10: finer grid  R: ruler  [ ]: transparency  A: align  O: objective  S: scan (queue)  X: export  Y: others",
     'cross': "Click: cross exactly there (2 in a row = tilt)  Shift+click: snap to centre  Drag a mark: move  Right click: remove  Del: start again  Shift+C: frames onto the crosses  C / Esc: done",
@@ -142,10 +145,10 @@ HELP_ALL = [
     ("Look", "Arrows or drag (right / middle in any mode): move   Wheel, + / -: zoom   0: whole"),
     ("", "T: level (tilt removed, from the crosses) / as shot   , / .: previous / next selection   H: this help   Esc: leave the mode"),
     ("Undo", "Ctrl+Z: undo any change (crosses, grid, squares, numbers, removed selection)   Ctrl+Y: redo"),
-    ("Exit", "Shift+Esc (or Ctrl+Esc), or close the window"),
+    ("Exit", "Esc (when nothing else is open: a mode, the help, a list), or close the window"),
     ("Stitch", "J: edit the stitch by hand - seam dots (green < 0.5 px, yellow < 1.5, red; grey = off): click to switch a seam; "
                "click a frame: its row (Shift: its column), arrows: 1 px (Shift: 10), Backspace: automatic, J: save"),
-    ("", "Shift+J: stitch this selection right here (frames by their overlaps; the view reopens)   G: straight edges (crop the steps)"),
+    ("", "Shift+J: exact (quality) stitch of this scan - into the queue of the microscope window (it re-shoots blurry frames)   G: straight edges (crop the steps)"),
     ("Crosses", "C: mark crosses: click two neighbouring crosses in one row = tilt; more crosses far apart = more exact"),
     ("", "The mark goes exactly where you click   Shift+click: snap to the cross centre   Drag a mark: move it"),
     ("", "Right click: remove a cross   Backspace: the last one   Del: start again   Shift+C: frames onto the crosses (exact)"),
@@ -155,11 +158,12 @@ HELP_ALL = [
     ("Ruler", "R: point-point -> line-line -> point-line -> off; click the points"),
     ("Layers", "All pictures in the order of the list (top = on top); the chosen card - on top for now   Y: the others on / off"),
     ("", "[ / ]: the picture under the mouse (or the marked ones) more / less transparent (100 / 75 / 50 / 25 / 0 % = outline)"),
-    ("", "A: align this scan with the others: drag (or arrows), Space - by the picture itself, Enter - save (it moves with its selection)"),
+    ("", "A: align the chosen selection (this scan) with the others: drag it (or arrows) - only it moves; Space - by the picture itself, Enter - save (its outline moves with it)"),
     ("Many", "Ctrl+click selections (picture or cards): mark several; Esc: unmark. For the marked (or the one under the mouse): "
              "O - objective (draft, 4x ... 100x), S - queue their scans, [ ] - transparency, Del - delete (not scanned)"),
     ("", "Shift+O: the objective of new selections made from cells (M, Enter): draft or 4x ... 100x"),
-    ("Export", "X: everything ticked on the cards -> <sample>/export/: drawing, pictures, mixed.png (asks its pixel)"),
+    ("Export", "X: everything ticked on the cards -> <sample>/export/: pictures, mixed.png (pixel of the finest scan); the drawing - when the crosses are marked and all ticked are quality"),
+    ("Scans", "... on a card: all scans of the selection; the star = the main one (maps, view, export); View - open it"),
     ("Profiles", "P: two profile lines (cyan, pink): 4 clicks, then R, G, B along them, averaged over a band: edges, width, contrast"),
 ]
 
@@ -172,8 +176,8 @@ def _preview(folder, w):
     pv = os.path.join(folder, 'join', 'preview_all.jpg')
     from . import samples as _SM
     gp_ = os.path.join(folder, 'grid.json')
-    key = (folder, _SM.sample_uid(folder), os.path.getmtime(pv) if os.path.exists(pv) else 0, w,   # uid: не путать
-           os.path.getmtime(gp_) if os.path.exists(gp_) else 0)
+    key = (folder, _SM.sample_uid(folder), _mt(pv), w,   # uid: не путать
+           _mt(gp_))
                                                                                                    # с убранным
     if key not in _PREV:
         img = cv2.imdecode(np.fromfile(pv, np.uint8), cv2.IMREAD_COLOR) if os.path.exists(pv) else None
@@ -256,6 +260,14 @@ def view(folder, fullscreen=False, _keys=None):
         raise
 
 
+def _mt(p):
+    """Время изменения файла или 0 (нет его — или его как раз переписывает очередь в другом процессе)."""
+    try:
+        return os.path.getmtime(p)
+    except OSError:
+        return 0
+
+
 def view_window(folder):
     """Открыть съёмку в просмотре в НОВОМ окне (отдельный процесс): на каждый проект — своё окно, текущее
     остаётся открытым. Возвращает процесс."""
@@ -269,8 +281,11 @@ def view_window(folder):
     env = dict(os.environ, PYTHONPATH=pkg + os.pathsep + os.environ.get('PYTHONPATH', ''))
     kw = dict(creationflags=getattr(subprocess, 'CREATE_NEW_PROCESS_GROUP', 0)) if os.name == 'nt' else \
         dict(start_new_session=True)
-    return subprocess.Popen([sys.executable, '-c', f"import microcontrol as mc; mc.view({folder!r})"], cwd=base,
-                            env=env, **kw)
+    log_ = os.path.join(smp.folder if smp else folder, '.view_error.log')   # упало — окно микроскопа скажет почему
+    pr_ = subprocess.Popen([sys.executable, '-c', f"import microcontrol as mc; mc.view({folder!r})"], cwd=base,
+                           env=env, stderr=open(log_, 'w', encoding='utf-8'), **kw)
+    pr_.error_log = log_
+    return pr_
 
 
 def _view(folder, fullscreen=False, _keys=None):
@@ -315,7 +330,7 @@ def _arrow(key):
     return _ARROWS.get(key) or _ARROWS.get(key & 0xFFFF)
 
 
-def _seed(folder, g, LAT, smp0, sc, px_um, need_crosses=False):
+def _seed(folder, g, LAT, smp0, sc, px_um, need_crosses=False, snap=True):
     """Сетка без своих крестов — из решётки LAT (выделения, большего вокруг, образца или по столику):
     подставлена (seeded), кисть прежних съёмок перенесена, затем притянута к крестам этих кадров, если они есть.
     need_crosses (сама, при открытии): в этих кадрах не нашлось ни одного креста — сетки нет, grid.json как был.
@@ -347,7 +362,7 @@ def _seed(folder, g, LAT, smp0, sc, px_um, need_crosses=False):
         json.dump(d_, f_, indent=1)
     g = Grid(folder)
     nfx_ = 0
-    if not LAT.get('stage'):
+    if not LAT.get('stage') and snap:
         try:                                                # по координатам столика — на кресты этих кадров
             nfx_, dfx_ = g.snap_to_crosses(lambda x, y, w, h: sc.render(x, y, 1.0, w, h), sc.size, px_um,
                                            render_s=lambda x, y, s_, w, h: sc.render(x, y, s_, w, h))
@@ -366,6 +381,18 @@ def _seed(folder, g, LAT, smp0, sc, px_um, need_crosses=False):
             return Grid(folder), ("   No crosses in this scan: no grid drawn (C: mark crosses; M: squares by the "
                                   "stage coordinates)")
     return g, msg_
+
+
+def _seed_mark(folder, LAT):
+    """Подставленной сетке — отпечаток решётки и совмещения (поменяются — подставить заново). -> Grid."""
+    from .layers import lattice_key
+    from .mask import Grid
+    gp_ = os.path.join(folder, 'grid.json')
+    d_ = json.load(open(gp_, encoding='utf-8'))
+    d_['seed_key'] = lattice_key(LAT, folder)
+    with open(gp_, 'w', encoding='utf-8') as f_:
+        json.dump(d_, f_, indent=1)
+    return Grid(folder)
 
 
 def stage_lattice(smp0, pitch):
@@ -399,24 +426,25 @@ def _view_one(folder, fullscreen, keys, car):
     from . import project as P0_
     from . import lattice as LT
     smp0 = P0_.sample_obj(folder)
+    from .layers import update_lattice_of, lattice_key
+    if smp0 is not None:                                    # сетка образца ОДНА: по крестам, отмеченным руками
+        update_lattice_of(smp0)                             # последними (на любом выделении)
     LAT = smp0.data.get('lattice') if smp0 is not None else None
-    if smp0 is not None and LAT is not None:                # решётка этого выделения: своя разметка (другие его
-        try:                                                # съёмки) или ближайшего родителя, иначе — образца
-            from .layers import lattice_in, _sel_dir
-            regs0_ = smp0.data.get('selections', [])
-            me_ = next((r_ for r_ in regs0_ if r_.get('kind') not in ('group', 'draft') and
-                        os.path.abspath(folder).startswith(os.path.abspath(_sel_dir(folder, r_)) + os.sep)), None)
-            if me_ is not None:
-                LAT = lattice_in(smp0, regs0_, me_, self_too=True) or LAT
-        except Exception:
-            pass
     seeded_, st0_msg = False, ""
-    if False and not g.ready() and not g.cr.marks and LAT is not None and not LAT.get('stage'):
-        try:                                                # сетка сама не появляется: только по крестам, отмеченным руками
-            g, st0_msg = _seed(folder, g, LAT, smp0, sc, px_um, need_crosses=True)
-            seeded_ = g.ready()
-        except Exception:
-            pass
+    hand_ = LAT is not None and not LAT.get('stage') and LAT.get('src') and os.path.isdir(LAT['src'])
+    if hand_ and os.path.abspath(LAT['src']) != os.path.abspath(folder):   # кресты — на другой съёмке: её сетка здесь
+        try:
+            d0_ = json.load(open(os.path.join(folder, 'grid.json'), encoding='utf-8'))
+        except (OSError, ValueError):
+            d0_ = {}
+        key_ = lattice_key(LAT, folder)
+        if not (d0_.get('seeded') and d0_.get('seed_key') == key_):     # нет её здесь или устарела (кресты, совмещение)
+            try:
+                g, st0_msg = _seed(folder, g, LAT, smp0, sc, px_um, snap=False)
+                g = _seed_mark(folder, LAT)
+                seeded_ = g.ready()
+            except Exception:
+                pass
     ses, subs = SM.session_of(folder)
     Wv, Hv = car['size']
     Hv -= UI.MENU_H                                         # сверху — строка меню
@@ -428,8 +456,8 @@ def _view_one(folder, fullscreen, keys, car):
               poly=[], dirty=True, Wv=Wv - SM.CAR_W, Hv=Hv, straight=False, switch=None, ruler=[], mouse=None,
               msg=car.pop('msg', None) or (f"Selection {SM.sample_index(folder)} ({subs.index(folder) + 1} of {len(subs)})" if len(subs) > 1 else "")
               + (f"   Crosses moved with the stitched frames ({moved_}); Shift+C: frames onto the crosses" if moved_ else "")
-              + ("   The grid comes from the crosses marked before (this selection, the larger one around it or the "
-                 "sample): no crosses to mark here; C: mark your own" if seeded_ else "")
+              + ("   The grid of the sample (crosses marked on another selection); the picture is off: A aligns it; "
+                 "C here: these crosses make the grid for all" if seeded_ else "")
               + st0_msg)
     st['seeded'] = seeded_
 
@@ -445,6 +473,10 @@ def _view_one(folder, fullscreen, keys, car):
                 mark_toggle(u_)
             return
         u_k_ = (mp_[k][2] if mp_[k][0] == 'sub' and len(mp_[k]) > 2 else mp_[k][1]) if mp_ is not None and 0 <= k < len(mp_) else None
+        if act == 'more' and u_k_:                          # «...»: все съёмки выделения, звезда — основная
+            st['msg'] = pick_open(u_k_)
+            st['car_dirty'] = st['dirty'] = True
+            return
         if act == 'chk' and u_k_:                           # галочка: в экспорт или нет
             st['msg'] = set_export(u_k_)
             st['car_dirty'] = st['dirty'] = True
@@ -492,6 +524,67 @@ def _view_one(folder, fullscreen, keys, car):
             st['msg'] = f"Selection {SM.sample_index(dst)} removed to {dst} (Ctrl+Z: bring it back)"
             st['switch'] = (folder if f != folder else (rest[min(k, len(rest) - 1)] if rest else False))
         st['dirty'] = True
+
+    def queue_quality():
+        """J на quick: точная сшивка (quality) этой съёмки — в очередь окна микроскопа (там прибор: доснять
+        размытые кадры); своей очереди нет — запросом через файл образца."""
+        from .jobs import _ALL
+        q_ = next((q2_ for q2_ in _ALL if getattr(q2_.m, '_sample', None) is not None and smp is not None and
+                   os.path.abspath(q2_.m._sample.folder) == os.path.abspath(smp.folder)), None)
+        if q_ is not None:
+            same_ = (sc.st.meta.get('objective') or 0) == getattr(q_.m, 'objective', None)
+            q_.quality(folder, title="Quality stitch " + os.path.basename(folder), reshoot=same_)
+            return "Quality stitch queued: when it is done, J edits it"
+        if smp is None:
+            return "The quality stitch needs the sample of this scan (and the microscope window)"
+        with open(os.path.join(smp.folder, '.queue_requests.jsonl'), 'a', encoding='utf-8') as fo_:
+            fo_.write(json.dumps(dict(op='quality', folder=os.path.abspath(folder))) + "\n")
+        return ("Quality stitch sent to the queue of the microscope window (it re-shoots blurry frames at the "
+                "instrument); when it is done, J edits it")
+
+    def pick_open(uid):
+        """Список съёмок выделения uid посреди окна (как в окне микроскопа)."""
+        from .project import scan_table
+        r_ = next((x_ for x_ in regions_now()[0] if x_.get('uid') == uid), None)
+        if r_ is None or smp is None:
+            return "This selection is gone"
+        rows_, fs_, i_ = scan_table(smp.folder, r_)
+        if not rows_:
+            return f"Selection {r_.get('num', '')}: no scans yet"
+        st['pick'] = dict(uid=uid, rows=rows_, folders=fs_, star=i_, scroll=max(0, len(rows_) - 14),
+                          title=f"Scans of Selection {r_.get('num', '')} (oldest first)")
+        return f"Selection {r_.get('num', '')}: {len(rows_)} scan{'s' if len(rows_) != 1 else ''} - the star is the main one"
+
+    def pick_do(c_):
+        """Щелчок в списке съёмок: звезда / строка — основная (sample.json: окно микроскопа берёт сам), View —
+        открыть её здесь, x / мимо / Esc — закрыть."""
+        pk_ = st.get('pick')
+        if pk_ is None or c_ == 'panel' or c_ is None:
+            return None
+        if c_ == 'close' or not isinstance(c_, tuple):
+            st.pop('pick', None)
+            return None
+        what_, i_ = c_
+        fs_ = pk_['folders']
+        if not 0 <= i_ < len(fs_):
+            return None
+        if what_ == 'view':
+            st.pop('pick', None)
+            if os.path.abspath(fs_[i_]) != os.path.abspath(folder):
+                st['switch'] = fs_[i_]
+            return f"View: {os.path.basename(fs_[i_])}"
+        from . import project as PJ_
+        s_ = PJ_.sample_obj(folder)
+        for r_ in s_.data.get('selections', []):
+            if r_.get('uid') == pk_['uid']:
+                if i_ == len(fs_) - 1:
+                    r_.pop('main', None)
+                else:
+                    r_['main'] = os.path.basename(fs_[i_])
+        s_.save()
+        pk_['star'] = i_
+        st['_fl_key'] = None
+        return f"Main scan: {os.path.basename(fs_[i_])} (maps, view, export)"
 
     def delete_draft(uid, k_sub):
         """Черновик из списка: его квадраты (или клетки подсетки) больше не выбраны в съёмке, где их выбрали,
@@ -660,6 +753,13 @@ def _view_one(folder, fullscreen, keys, car):
     def show(img):
         ttl = (smp.title + f"  [{smp.project.uid}]" + (f"  —  {smp.description}" if smp.description else "")) if smp else os.path.basename(folder)
         bar, menu['hits'] = UI.menu_bar(img.shape[1], ttl, ["Open", "Scans", "Info", "Help"], menu['hover'])
+        pk_ = st.get('pick')
+        if pk_:                                             # список съёмок выделения — поверх всего
+            img = img.copy()
+            from .project import SCAN_HEAD
+            pk_['rects'] = UI.pick_panel(img, pk_['title'], SCAN_HEAD, pk_['rows'], pk_['star'], pk_.get('hover'),
+                                         pk_.get('scroll', 0), note="Click a star (or a row): the main scan - maps, "
+                                         "view, export. View: open it here. Esc: close")
         cv2.imshow(WIN, np.vstack([bar, img]))
 
     def menu_do(item):
@@ -891,6 +991,8 @@ def _view_one(folder, fullscreen, keys, car):
             g.save(px_um)
             if st['straight']:
                 set_straight(True)
+            if smp0 is not None and g.ready():              # эти кресты — теперь сетка образца для всех съёмок
+                update_lattice_of(P0_.sample_obj(folder))
         except ValueError as e:
             st['msg'] = str(e)
 
@@ -1001,6 +1103,22 @@ def _view_one(folder, fullscreen, keys, car):
             (f"; {out_} outside this scan's selection - not taken" if out_ else "")
 
     def mouse(ev, x, y, flags, _=None):
+        if st.get('pick') and st['pick'].get('rects'):     # список съёмок: пока открыт — только он
+            pk_ = st['pick']
+            in_ = lambda r_: r_[0] <= x <= r_[2] and r_[1] <= y <= r_[3]
+            hit_ = next((h_ for r_, h_ in pk_['rects'][1:] if in_(r_)), None)
+            if ev == cv2.EVENT_MOUSEMOVE:
+                pk_['hover'] = (x, y)
+                st['car_dirty'] = True
+            elif ev == cv2.EVENT_LBUTTONDOWN:
+                r_ = pick_do(hit_ if hit_ is not None else ('panel' if in_(pk_['rects'][0][0]) else 'close'))
+                if r_:
+                    st['msg'] = r_
+                st['dirty'] = st['car_dirty'] = True
+            elif ev == cv2.EVENT_MOUSEWHEEL:
+                pk_['scroll'] = max(0, pk_.get('scroll', 0) - int(np.sign(wheel_delta(flags))))
+                st['car_dirty'] = True
+            return
         shift = bool(flags & cv2.EVENT_FLAG_SHIFTKEY)
         dg_ = car.get('drag')
         if dg_ is not None and ev in (cv2.EVENT_MOUSEMOVE, cv2.EVENT_LBUTTONUP) and not st['down']:
@@ -1090,7 +1208,7 @@ def _view_one(folder, fullscreen, keys, car):
             elif st['mode'] == 'align' and ev0 == cv2.EVENT_LBUTTONDOWN:   # L: картинки едут за мышью
                 if abs(x - x0) + abs(y - y0) > 1 or moved:
                     st['down'] = (x0, y0, cx, cy, ev0, sh0, True)
-                    st['al']['dq'] = np.asarray(st['al']['dq0'], float) + R().T @ (np.array([x - x0, y - y0], float) / st['s'])
+                    al_set(np.asarray(st['al']['dq0'], float) - R().T @ (np.array([x - x0, y - y0], float) / st['s']))
                     st['dirty'] = True
             elif abs(x - x0) + abs(y - y0) > 4:
                 st['down'] = (x0, y0, cx, cy, ev0, sh0, True)
@@ -2068,7 +2186,7 @@ def _view_one(folder, fullscreen, keys, car):
             chk_ = None if new_ else r_.get('export', True)
             if u_ in sub_of_:                               # снятое: картинка и кадры
                 k_ = sub_of_[u_]
-                it_ = dict(base_[k_], chosen=u_ in mk_, check=chk_, title=f"Selection {r_.get('num', '')}",
+                it_ = dict(base_[k_], chosen=u_ in mk_, check=chk_, title=f"Selection {r_.get('num', '')}", more=True,
                            color=SM.color(int(r_.get('num', 1)) - 1), obj='draft' if dr_ else f"{r_.get('obj')}x")
                 if subs[k_] == folder and not fo_:
                     sel_k = len(items_)
@@ -2088,17 +2206,27 @@ def _view_one(folder, fullscreen, keys, car):
                     sel_k = len(items_)
                 cmap_.append(('draft', u_, subs.index(folder) if folder in subs else 0))
         car['map'] = cmap_
-        if car.get('drag') is not None and car['drag'].get('y') is not None:
-            pass
         pan_, car['hits'], car['content'] = SM.carousel(st['Hv'], items_, sel_k, car['scroll'], title="Selections",
                                                         go=False, hover=car.get('hxy'))
         dg_ = car.get('drag')
-        if dg_ and dg_.get('on'):                           # куда ляжет карточка
-            cards_ = [h_ for h_ in car['hits'] if h_[4] == 'sel']
-            if cards_:
+        if dg_ and dg_.get('on'):                           # тянут карточку: список сразу такой, каким станет
+            cards_ = [h_ for h_ in car['hits'] if h_[4] == 'sel']     # место — по раскладке ДО перестановки
+            uid_ = lambda c_: c_[2] if c_[0] == 'sub' and len(c_) > 2 else c_[1]
+            src_ = next((i_ for i_, c_ in enumerate(cmap_) if uid_(c_) == dg_['uid']), None)
+            if cards_ and src_ is not None:
                 h_ = min(cards_, key=lambda h: 0 if h[1] <= dg_['y'] <= h[3] else min(abs(dg_['y'] - h[1]), abs(dg_['y'] - h[3])))
-                yl_ = h_[3] - 1 if dg_['y'] > (h_[1] + h_[3]) / 2 else h_[1] + 1
-                cv2.line(pan_, (h_[0], yl_), (h_[2], yl_), (90, 220, 90), 3)
+                idx_ = list(range(len(items_)))
+                idx_.remove(src_)
+                if h_[5] != src_:
+                    idx_.insert(idx_.index(h_[5]) + (1 if dg_['y'] > (h_[1] + h_[3]) / 2 else 0), src_)
+                else:
+                    idx_.insert(src_, src_)
+                sel2_ = idx_.index(sel_k) if sel_k is not None and sel_k in idx_ else None
+                pan_, hits2_, _c = SM.carousel(st['Hv'], [items_[i_] for i_ in idx_], sel2_, car['scroll'],
+                                               title="Selections", go=False)
+                sh_ = next((h2_ for h2_ in hits2_ if h2_[4] == 'sel' and h2_[5] == idx_.index(src_)), None)
+                if sh_ is not None and sh_[3] > 39:          # карточку видно в рамке
+                    cv2.rectangle(pan_, (sh_[0], max(39, sh_[1])), (sh_[2] - 1, sh_[3] - 1), (90, 220, 90), 2)
         return pan_
 
     # история (Ctrl+Z / Ctrl+Y): после каждого действия разметка (кресты, сетка, квадраты, номера)
@@ -2197,8 +2325,8 @@ def _view_one(folder, fullscreen, keys, car):
         """Выделения образца на столике: [(uid, shapely, площадь)] — для щелчков по ним (кэш как у контуров)."""
         if smp is None:
             return []
-        key_ = (os.path.getmtime(smp.file) if os.path.exists(smp.file) else 0,
-                os.path.getmtime(os.path.join(folder, 'grid.json')) if os.path.exists(os.path.join(folder, 'grid.json')) else 0)
+        key_ = (_mt(smp.file),
+                _mt(os.path.join(folder, 'grid.json')))
         if st.get('_sg_key') == key_:
             return st['_sg']
         from .layers import from_json
@@ -2315,7 +2443,7 @@ def _view_one(folder, fullscreen, keys, car):
             if not ok_:
                 return "Nothing to scan: give the selection an objective (O) first"
             st_q_ = os.path.join(smp.folder, '.queue_status.json')
-            alive_ = os.path.exists(st_q_) and _t.time() - os.path.getmtime(st_q_) < 600
+            alive_ = _t.time() - _mt(st_q_) < 600
             with open(os.path.join(smp.folder, '.queue_requests.jsonl'), 'a', encoding='utf-8') as fo_:
                 fo_.write(json.dumps(dict(op='scan', uids=ok_)) + "\n")
             return (f"Sent {len(ok_)} scan{'s' if len(ok_) != 1 else ''} to the queue of the microscope window"
@@ -2575,10 +2703,10 @@ def _view_one(folder, fullscreen, keys, car):
         ap_ = os.path.join(folder, 'align.json')
         oth_ = car.get('others', True)
         me_uid_ = sc.st.meta.get('sample_uid')
-        key_ = (oth_, os.path.getmtime(smp.file) if os.path.exists(smp.file) else 0,
-                os.path.getmtime(ap_) if os.path.exists(ap_) else 0,
-                tuple((f_, os.path.getmtime(os.path.join(f_, 'join', 'preview_all.jpg')),
-                       os.path.getmtime(os.path.join(f_, 'align.json')) if os.path.exists(os.path.join(f_, 'align.json')) else 0)
+        key_ = (oth_, _mt(smp.file),
+                _mt(ap_),
+                tuple((f_, _mt(os.path.join(f_, 'join', 'preview_all.jpg')),
+                       _mt(os.path.join(f_, 'align.json')))
                       for f_ in scans_ if os.path.exists(os.path.join(f_, 'join', 'preview_all.jpg'))))
         if st.get('_fl_key') == key_:
             return st['_fl']
@@ -2679,6 +2807,14 @@ def _view_one(folder, fullscreen, keys, car):
             return None, f"no clear match (response {resp_:.3f}): drag it by hand"
         return dq0 - np.array([sx_, sy_]) / k_, resp_
 
+    def al_set(dq_new):
+        """Совмещение: сдвиг dq — остальных картинок относительно этой; вид едет так же, чтобы на экране двигалась
+        ТОЛЬКО эта съёмка (выбранное выделение), а остальные стояли."""
+        d_ = np.asarray(dq_new, float) - np.asarray(st['al']['dq'], float)
+        st['al']['dq'] = [float(v_) for v_ in np.asarray(dq_new, float)]
+        st['cx'] += float(d_[0])
+        st['cy'] += float(d_[1])
+
     def align_save():
         """Записать сдвиг этой съёмки (align.json): картинки и контуры совпали с выбранной точной съёмкой."""
         from .snap import geometry, align as _align
@@ -2717,14 +2853,12 @@ def _view_one(folder, fullscreen, keys, car):
         me_u_ = sc.st.meta.get('sample_uid')
 
         def put_base(c_):
-            a_ = al_.get(me_u_, 1.0) if not st.get('al') else 1.0
+            a_ = al_.get(me_u_, 1.0) if not st.get('al') else 0.6   # совмещение: сверху, сквозь неё видно остальные
             if a_ >= 0.99:
                 c_[base_ok_] = img[base_ok_]
             elif a_ > 0.01:
                 c_[base_ok_] = (img[base_ok_].astype(np.float32) * a_ + c_[base_ok_].astype(np.float32) * (1 - a_)).astype(np.uint8)
             return c_
-        if st.get('al'):                                    # совмещение: эта — снизу
-            comp_ = put_base(comp_)
         for o_, pic_, A_, ring_, uid_, f_, n_, under_ in reversed(finer_layers()):   # снизу списка вверх
             a_ = al_.get(uid_, 1.0)
             if a_ <= 0.01:                                    # прозрачность 0: только контур
@@ -2737,13 +2871,13 @@ def _view_one(folder, fullscreen, keys, car):
                 continue
             if np.hypot(*M_[:, 0]) * pic_.shape[1] < 12:        # совсем мелко — не видно, не тратим время
                 continue
-            w_ = cv2.warpAffine(pic_, np.float32(np.c_[M_, t_]), (Ww, Hh), flags=cv2.INTER_LINEAR, borderValue=0)
-            mask_ = cv2.inRange(w_, (7, 7, 7), (255, 255, 255))  # вне кадров (чёрное) — не кладём
+            from .util import warp_clean                  # дробный сдвиг: без чёрной каймы на краях кадров
+            w_, mb_ = warp_clean(pic_, np.c_[M_, t_], (Ww, Hh))
+            mask_ = mb_.astype(np.uint8) * 255               # вне кадров (чёрное) — не кладём
             if a_ < 0.99:                                     # полупрозрачная: видно, что под ней
                 w_ = cv2.addWeighted(w_, a_, comp_, 1 - a_, 0)
             comp_ = cv2.copyTo(w_, mask_, comp_)
-        if not st.get('al'):                                # выбранная — поверх всех
-            comp_ = put_base(comp_)
+        comp_ = put_base(comp_)                             # выбранная — поверх всех (совмещение: полупрозрачно)
         return comp_
 
     def draw_subgrids(img):
@@ -2834,8 +2968,8 @@ def _view_one(folder, fullscreen, keys, car):
         if smp is None:
             return []
         sp_ = smp.file
-        key_ = (os.path.getmtime(sp_) if os.path.exists(sp_) else 0,
-                os.path.getmtime(os.path.join(folder, 'grid.json')) if os.path.exists(os.path.join(folder, 'grid.json')) else 0)
+        key_ = (_mt(sp_),
+                _mt(os.path.join(folder, 'grid.json')))
         if st.get('_so_key') == key_:
             return st['_so']
         out_ = []
@@ -2895,11 +3029,11 @@ def _view_one(folder, fullscreen, keys, car):
             st['_sync_t'] = _t.monotonic()                 # показать то же, что и там
             if smp is not None:                            # очередь окна микроскопа идёт: строка внизу — живая
                 qsp_ = os.path.join(smp.folder, '.queue_status.json')
-                qmt_ = os.path.getmtime(qsp_) if os.path.exists(qsp_) else 0
+                qmt_ = _mt(qsp_)
                 if qmt_ != st.get('_qmt') or (qmt_ and _t.time() - qmt_ < 6 and _t.monotonic() - st.get('_qdraw', 0) > 1):
                     st['_qmt'], st['_qdraw'] = qmt_, _t.monotonic()
                     st['dirty'] = True
-            mt_ = tuple(os.path.getmtime(p_) if os.path.exists(p_) else 0 for p_ in
+            mt_ = tuple(_mt(p_) for p_ in
                         ((smp.file if smp is not None else ''), os.path.join(folder, 'grid.json')))
             if st.get('_mt') is None:
                 st['_mt'] = mt_
@@ -2928,7 +3062,10 @@ def _view_one(folder, fullscreen, keys, car):
             W_, H_ = window_size(WIN, (st['Wv'] + SM.CAR_W, st['Hv'] + UI.MENU_H))
             H_ -= UI.MENU_H
             if W_ >= 100 + SM.CAR_W and H_ >= 100 and (W_ - SM.CAR_W, H_) != (st['Wv'], st['Hv']):
+                if st['s'] is not None:                     # окно тянут: видно то же место, крупнее / мельче
+                    st['s'] *= min((W_ - SM.CAR_W) / max(1, st['Wv']), H_ / max(1, st['Hv']))
                 st['Wv'], st['Hv'], st['dirty'] = W_ - SM.CAR_W, H_, True
+                st['car_dirty'] = True
                 car['size'] = (W_, H_ + UI.MENU_H)
         if st['s'] is None:
             fit()
@@ -2984,11 +3121,22 @@ def _view_one(folder, fullscreen, keys, car):
                     mouse(dn, a[0], a[1], fl); mouse(up, a[0], a[1], fl)
                 elif kind == 'wheel':                       # ('wheel', x, y, +1 | -1)
                     mouse(cv2.EVENT_MOUSEWHEEL, a[0], a[1], (120 if a[2] > 0 else -120) << 16)
+                elif kind == 'ldown':                       # тянуть по шагам: нажать, вести, отпустить
+                    mouse(cv2.EVENT_LBUTTONDOWN, a[0], a[1], fl)
+                elif kind == 'lmove':
+                    mouse(cv2.EVENT_MOUSEMOVE, a[0], a[1], fl | cv2.EVENT_FLAG_LBUTTON)
+                elif kind == 'lup':
+                    mouse(cv2.EVENT_LBUTTONUP, a[0], a[1], fl)
                 elif kind == 'drag':
                     mouse(cv2.EVENT_LBUTTONDOWN, a[0], a[1], fl)
                     mouse(cv2.EVENT_MOUSEMOVE, a[2], a[3], fl | cv2.EVENT_FLAG_LBUTTON)
                     mouse(cv2.EVENT_LBUTTONUP, a[2], a[3], fl)
                 key = -1
+        if st.get('pick') and key != -1:                  # список съёмок открыт: Esc — закрыть, прочее — мимо
+            if key == 27:
+                st.pop('pick', None)
+                st['dirty'] = True
+            key = -1
         if key == -1:
             if keys is None and cv2.getWindowProperty(WIN, cv2.WND_PROP_VISIBLE) < 1:
                 st['switch'] = False
@@ -3071,16 +3219,33 @@ def _view_one(folder, fullscreen, keys, car):
             u_ = lambda: (f"{st['al']['name']}: " if st['al'].get('name') else "")
             if a_ is not None:                              # стрелки: 1 точка экрана (Shift: 10)
                 k_ = 10 if shift_held(key) else 1
-                st['al']['dq'] = list(np.asarray(st['al']['dq'], float) + R().T @ (np.array(a_, float) * k_ / st['s']))
+                al_set(np.asarray(st['al']['dq'], float) - R().T @ (np.array(a_, float) * k_ / st['s']))
             elif key in (13, 10) or ch == 'l':
                 d_ = align_save()
                 st['mode'], st['al'] = 'look', None
-                st['msg'] = (f"This scan is shifted on the stage by {d_[0]:+.2f}, {d_[1]:+.2f} um (align.json): the grid, "
+                st['msg'] = (f"This scan is shifted on the stage by {d_[0]:+.2f}, {d_[1]:+.2f} um (align.json): "
                              "the selections, the map and the export go with it. A again: change it")
+                smpA_ = P0_.sample_obj(folder) if smp0 is not None else None
+                if smpA_ is not None:                       # сетка образца — одна, по крестам
+                    update_lattice_of(smpA_)
+                    LA_ = smpA_.data.get('lattice')
+                    if st.get('seeded') and LA_ and not LA_.get('stage'):
+                        try:                                # кресты не здесь: сетка стоит, картинка уехала под ней
+                            g, _m = _seed(folder, Grid(folder), LA_, smpA_, sc, px_um, snap=False)
+                            g = _seed_mark(folder, LA_)
+                            st['seeded'] = True
+                            st['msg'] += ".  The grid of the sample stays put: the picture moved under it"
+                        except Exception as e_:
+                            L.debug('VIW-012', f"Grid not re-seeded after align: {e_}")
+                    elif g.ready():                         # кресты этой съёмки задают сетку: она уехала с ними
+                        st['msg'] += (".  These crosses make the grid of the sample: it moved with them "
+                                      "(other scans take it when opened)")
+                st['_sg_key'] = None
+                st.pop('_lat', None)
             elif key == 8:                                  # Backspace: как по столику (сдвиг 0)
                 from .snap import geometry
                 G_ = geometry(folder)
-                st['al']['dq'] = list(G_['Mo'] @ (np.asarray(G_.get('d_um', (0, 0)), float) / G_['ms']))
+                al_set(G_['Mo'] @ (np.asarray(G_.get('d_um', (0, 0)), float) / G_['ms']))
                 st['msg'] = "Back to the stage coordinates (no shift): Enter saves"
             elif key == 32:                                 # пробел: само, по содержимому
                 L_ = layer_at(st['hov']) if st.get('hov') else None
@@ -3092,10 +3257,12 @@ def _view_one(folder, fullscreen, keys, car):
                     if dq_ is None:
                         st['msg'] = f"Not aligned: {r_}"
                     else:
-                        st['al']['dq'], st['al']['to'] = list(dq_), L_[5]
+                        al_set(dq_)
+                        st['al']['to'] = L_[5]
                         st['msg'] = (f"Aligned with Selection {L_[6]} ({L_[0]}x) by the picture (match {r_:.2f}): "
                                      "check it, Enter saves, Esc cancels")
             elif key == 27:
+                al_set((0.0, 0.0))                          # картинка — на прежнее место
                 st['mode'], st['al'] = 'look', None
                 st['msg'] = "Alignment cancelled"
             st['dirty'] = True
@@ -3114,8 +3281,9 @@ def _view_one(folder, fullscreen, keys, car):
                 st['help'] = False
             elif st['mode'] != 'look':
                 st['mode'], st['ruler'] = 'look', []
-            else:
-                st['msg'] = "Exit: Shift+Esc or close the window"
+            else:                                           # просмотр закрывается просто Esc (окно микроскопа — Shift+Esc)
+                st['switch'] = False
+                break
             st['dirty'] = True
         elif raw in (',', '.') and len(subs) > 1:           # предыдущий / следующий образец
             i_ = subs.index(folder) if folder in subs else -1
@@ -3124,9 +3292,8 @@ def _view_one(folder, fullscreen, keys, car):
             unseed(); g.cr.clear(); g.refined = None; set_straight(False); g.save(px_um)
             st['mode'] = 'cross'
             st['msg'] = "Crosses cleared (Ctrl+Z brings them back). Click a cross, then its neighbour in the same row"
-        elif ch == 's':                                      # S: сшить прямо здесь; окно потом откроется заново
-            stitch_here()
-            break
+        elif ch == 's':                                      # Shift+J: точная сшивка (quality) — в очередь, как в окне микроскопа
+            st['msg'] = queue_quality()
         elif ch == 'r':                                      # R: линейка: точка-точка -> прямая-прямая -> точка-прямая -> выкл
             nxt_ = {'pp': 'll', 'll': 'pl', 'pl': None}
             if st['mode'] == 'ruler' and nxt_[st.get('rk', 'pp')] is None:
@@ -3142,15 +3309,14 @@ def _view_one(folder, fullscreen, keys, car):
         elif ch == 'l':                                      # L: совместить эту съёмку с более точной (крупнее)
             fl_ = finer_layers()
             if not fl_:
-                st['msg'] = ("No scan of a higher objective lies over this one: nothing to align with "
-                             "(open the scan of the lower objective, the higher ones are drawn over it)")
+                st['msg'] = "No other stitched selection here: nothing to align this one with"
             else:
                 L_ = layer_at(st['hov']) if st.get('hov') else None
                 st['mode'] = 'align'
                 st['al'] = dict(dq=[0.0, 0.0], dq0=[0.0, 0.0], L=L_, to=L_[5] if L_ else None)
-                st['msg'] = ("Align: drag the pictures of the higher objective (or arrows, Shift: x10) until they sit on "
-                             "this scan; Space: by itself, by the picture under the mouse; Enter: save (this scan "
-                             "moves on the stage), Backspace: no shift, Esc: cancel")
+                st['msg'] = ("Align this selection (on top, half transparent): drag it (or arrows, Shift: x10) until it "
+                             "sits on the others - they stay; Space: by itself, by the picture under the mouse; Enter: "
+                             "save (it moves on the stage with its outline), Backspace: no shift, Esc: cancel")
         elif ch == 'o' and car.get('marks'):                 # O при отметках: всем отмеченным разом
             lv_ = [1.0, 0.75, 0.5, 0.25, 0.0]
             mk_ = sorted(car['marks'])
@@ -3238,7 +3404,8 @@ def _view_one(folder, fullscreen, keys, car):
                 continue
             if not g.ready() and not g.cr.marks:            # кресты отмечены руками в другой съёмке образца — по ним
                 try:
-                    g, m_ = _seed(folder, g, L_us_, smp0, sc, px_um)
+                    g, m_ = _seed(folder, g, L_us_, smp0, sc, px_um, snap=False)
+                    g = _seed_mark(folder, L_us_)
                     st['seeded'] = True
                     st['msg'] = "No crosses marked here: the grid comes from the crosses marked in another scan (C: mark your own)"
                 except Exception as e_:
@@ -3282,8 +3449,7 @@ def _view_one(folder, fullscreen, keys, car):
                     st['switch'] = folder
                     break
             elif __import__('microcontrol.quality', fromlist=['x']).stitched_as(folder) == 'quick':
-                st['msg'] = ("A quick stitch is an overview and is not edited: S makes the quality stitch (exact), "
-                             "then J edits it")
+                st['msg'] = queue_quality()                 # quick — обзор: сначала точная сшивка (очередь)
             else:
                 st['mode'] = 'stitch'
                 st['edit'] = dict(orig=sc.P.copy(), ids=[], sel=None, moved=False)
@@ -3343,28 +3509,9 @@ def _view_one(folder, fullscreen, keys, car):
             from .samples import init_areas as _ia, order as _ord
             _ia(sh_)
             ks_ = [k_ for k_ in _ord(sh_) if sh_._regions[k_].get('export', True)]
-            um_ = None
-            pxs_ = {}
-            for f2_ in subs:
-                try:
-                    mt_ = json.load(open(os.path.join(f2_, 'meta.json'), encoding='utf-8'))
-                    pxs_[int(mt_.get('objective') or 0)] = float(mt_.get('pixel_size_um') or 0) or None
-                except Exception:
-                    pass
-            opts_ = sorted(((o_, p_) for o_, p_ in pxs_.items() if p_), key=lambda t_: t_[1])
-            if keys is None and opts_:
-                from . import dialogs as D
-                r_ = D.choose("mixed.png: one picture of all ticked scans, layered as the list - its pixel",
-                              [f"as {o_}x: {p_:.4f} um / px" for o_, p_ in opts_], 0, ("Export",))
-                if r_ is None:
-                    st['msg'] = "Export cancelled"
-                    st['dirty'] = True
-                    continue
-                um_ = opts_[r_[1] or 0][1]
-            r, e = busy("Export", lambda: export_sample(sh_, ks_, mixed_um=um_))
-            st['msg'] = (f"Export: {e}" if e is not None else
-                         f"Exported {len(ks_)} ticked selection{'s' if len(ks_) != 1 else ''} to {os.path.dirname(str(r))}"
-                         + ("" if str(r).endswith('.dwg') else "  (DWG: install ODA File Converter)"))
+            r, e = busy("Export", lambda: export_sample(sh_, ks_))
+            from .drawing import export_message
+            st['msg'] = f"Export: {e}" if e is not None else export_message(r, len(ks_))
         elif ch == 'e':                                      # без образца: картинки квадратов + чертёж этой съёмки
             g.save(px_um)
             r, e = busy("Export", lambda: export(folder))

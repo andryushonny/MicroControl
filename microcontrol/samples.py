@@ -755,6 +755,10 @@ def carousel(H, items, sel, scroll=0, title="Selections", go=True, hover=None, t
             ex1 = right
             ex0 = ex1 - 24
             right = ex0 - 6
+        if it.get('more'):                                                 # кнопка «...»: все съёмки, основная
+            mx1_ = right
+            mx0_ = mx1_ - 26
+            right = mx0_ - 6
         tx = ix + 12
         if it.get('check') is not None:                                   # галочка: идёт ли в экспорт
             cx0, cy0 = tx, y0 + 10
@@ -801,6 +805,9 @@ def carousel(H, items, sel, scroll=0, title="Selections", go=True, hover=None, t
             _button(img, ex0, y0 + 8, ex1, y0 + 28, '', over(ex0, y0 + 8, ex1, y0 + 28))
             _eye(img, (ex0 + ex1) // 2, y0 + 18, not it['hidden'])
             hits.append((ex0, y0 + 8, ex1, y0 + 28, 'eye', k))
+        if it.get('more'):
+            _button(img, mx0_, y0 + 8, mx1_, y0 + 28, '...', over(mx0_, y0 + 8, mx1_, y0 + 28))
+            hits.append((mx0_, y0 + 8, mx1_, y0 + 28, 'more', k))
         yy = y0 + 44
         for ln in it.get('lines', []):
             cv2.putText(img, ln, (tx, yy), _FONT, 0.4, (200, 200, 205) if not it.get('muted') else (160, 160, 165),

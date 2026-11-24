@@ -25,7 +25,8 @@ def open_window(name, fullscreen=False):
     """Окно OpenCV одного размера во всех режимах: полный экран или последний размер (по умолчанию WINDOW_SIZE)."""
     import cv2
     from .config import WINDOW_SIZE
-    cv2.namedWindow(name, cv2.WINDOW_NORMAL)
+    cv2.namedWindow(name, cv2.WINDOW_NORMAL | getattr(cv2, 'WINDOW_FREERATIO', 0x100))   # тянут край — кадр на всё окно,
+                                                                                      # без серых полос; следующий — по размеру
     set_icon(name)
     if fullscreen:
         cv2.setWindowProperty(name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
@@ -356,6 +357,24 @@ def _save_image(path, img, params=None, title="Saving", pr=None):
         if own:
             bar.close()
     return path
+
+
+def warp_clean(img, M, size, alpha=None, inverse=False):
+    """Картинку — аффинно на холст size (w, h) без тёмной каймы на краях и стыках: дробный сдвиг смешивает край с
+    чёрным «вне кадров», поэтому картинка берётся с весом своей маски (alpha; None — всё ярче 6) и делится на
+    перенесённый вес. -> (картинка uint8, маска bool: веса больше половины)."""
+    import cv2
+    fl = cv2.INTER_LINEAR | (cv2.WARP_INVERSE_MAP if inverse else 0)
+    M = np.asarray(M, np.float32)
+    g = img.max(2) if img.ndim == 3 else img
+    a = ((g > 6) if alpha is None else (np.asarray(alpha) > 0)).astype(np.float32)
+    pm = img.astype(np.float32) * (a[..., None] if img.ndim == 3 else a)
+    w = cv2.warpAffine(pm, M, tuple(int(v) for v in size), flags=fl, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+    wa = cv2.warpAffine(a, M, tuple(int(v) for v in size), flags=fl, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+    m = wa > 0.5
+    out = np.zeros(w.shape, np.uint8)
+    out[m] = np.clip(w[m] / (wa[m][:, None] if w.ndim == 3 else wa[m]) + 0.5, 0, 255).astype(np.uint8)
+    return out, m
 
 
 def wheel_delta(flags):

@@ -104,12 +104,19 @@ def _overview_png(path, pics, outlines, max_side=12000, res=None, max_px=200e6):
         img = img if img.ndim == 3 else cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
         Ai = np.linalg.inv(np.r_[A, [[0, 0, 1]]])                  # мкм чертежа -> пиксель картинки
         Mo = Ai @ np.array([[res, 0, x0], [0, -res, y1], [0, 0, 1]])   # пиксель PNG -> пиксель картинки
-        wimg = cv2.warpAffine(img, Mo[:2].astype(np.float32), (W, H), flags=cv2.INTER_AREA | cv2.WARP_INVERSE_MAP,
-                              borderMode=cv2.BORDER_CONSTANT, borderValue=0)
         mk = np.ones(img.shape[:2], np.uint8) * 255 if a is None else a
-        wm = cv2.warpAffine(mk, Mo[:2].astype(np.float32), (W, H), flags=cv2.INTER_NEAREST | cv2.WARP_INVERSE_MAP,
-                            borderMode=cv2.BORDER_CONSTANT, borderValue=0)
-        out[wm > 0] = wimg[wm > 0]
+        Mf = np.linalg.inv(Mo)                                     # пиксель картинки -> пиксель PNG: где она ляжет
+        h_, w_ = img.shape[:2]
+        cq = np.array([[0, 0, 1], [w_, 0, 1], [0, h_, 1], [w_, h_, 1]], float) @ Mf[:2].T
+        bx0, by0 = np.maximum(np.floor(cq.min(0)).astype(int) - 2, 0)
+        bx1, by1 = np.minimum(np.ceil(cq.max(0)).astype(int) + 2, (W, H))
+        if bx1 <= bx0 or by1 <= by0:
+            continue
+        from .util import warp_clean                               # только свой прямоугольник; без чёрной каймы
+        Mb = Mo @ np.array([[1, 0, bx0], [0, 1, by0], [0, 0, 1]], float)
+        wimg, wm = warp_clean(img, Mb[:2], (bx1 - bx0, by1 - by0), alpha=mk, inverse=True)
+        sub = out[by0:by1, bx0:bx1]
+        sub[wm] = wimg[wm]
     for q, n in outlines:
         pq = np.c_[(q[:, 0] - x0) / res, (y1 - q[:, 1]) / res]
         cv2.polylines(out, [np.int32(np.round(pq))], True, (0, 0, 255), max(1, W // 3000), cv2.LINE_AA)
@@ -144,13 +151,30 @@ def best_scan(m, r):
     return q[-1] if q else sel.latest
 
 
-def export_sample(m, ks=None, out=None, dwg=True, verbose=True, nested=False, png=True, mixed_um=None):
+def export_message(path, n):
+    """Строка для окна: что вышло из export_sample (path — его результат), n — сколько выделений."""
+    d_ = os.path.dirname(str(path))
+    s_ = f"Exported {n} selection{'s' if n != 1 else ''} to {d_}"
+    if str(path).endswith('drawing.json'):
+        try:
+            why_ = json.load(open(path, encoding='utf-8')).get('no_drawing') or []
+        except (OSError, ValueError):
+            why_ = []
+        return s_ + ": pictures and mixed.png, no drawing (" + "; ".join(why_) + ")"
+    return s_ + ("" if str(path).endswith('.dwg') else "  (DWG: install ODA File Converter)")
+
+
+def export_sample(m, ks=None, out=None, dwg=True, verbose=True, nested=False, png=True, mixed_um=None, drawing=None):
     """Экспорт образца в одну папку <образец>/export/ (прежнее там заменяется): drawing.dxf (и .dwg), снимки
     выделений S03_50x.png, mixed.png — все снимки одной картинкой с наложением в порядке слоёв списка (верх списка —
     сверху), drawing.json — отчёт. ks — индексы m._regions (по умолчанию — все с галочкой «в экспорт»): снятое —
     картинка (в чертёж — только quality) и контур, не снятое и draft — контур (и клетки). mixed_um — мкм на
     пиксель mixed.png (None — как у самого точного снимка). Решётка с номерами — чертёж от креста 1,1; без неё —
-    в координатах столика (мкм, Y вверх). Возвращает путь к DXF (DWG рядом, если есть ODA)."""
+    в координатах столика (мкм, Y вверх). Чертёж (DXF / DWG) — только когда кресты размечены (решётка с номерами) и
+    все отмеченные выделения сшиты quality: кресты — маяки, по которым снимки ложатся без ошибки для литографии;
+    иначе — снимки и mixed.png без чертежа (причина — в drawing.json, no_drawing). drawing=True — чертёж всё равно
+    (в координатах столика, если крестов нет), False — без чертежа.
+    Возвращает путь к DWG / DXF, а без чертежа — к drawing.json."""
     import ezdxf
     from .project import Selection
     from .samples import obj, num, title
@@ -188,6 +212,15 @@ def export_sample(m, ks=None, out=None, dwg=True, verbose=True, nested=False, pn
         lab_ = []
     if any(not (1 <= X <= 58 and 1 <= Y <= 58) for X, Y in lab_) and verbose:
         print("  [!] Some square numbers are outside 1..58: check the numbering (N in the viewer)")
+    from . import quality as Q0
+    no_draw_ = []                                               # почему без чертежа
+    if stage_frame:
+        no_draw_.append("the crosses are not marked (C and N in the view)")
+    nq_ = [title(m, k) for k in ks if m._regions[k].get('kind') == 'draft' or
+           not (lambda sc_: sc_ is not None and Q0.is_quality(sc_.folder))(best_scan(m, m._regions[k]))]
+    if nq_:
+        no_draw_.append("not quality-stitched: " + ", ".join(nq_))
+    make_dxf = (not no_draw_) if drawing is None else bool(drawing)
     D = (lambda S: np.asarray(S, float) * (1.0, -1.0)) if stage_frame else \
         (lambda S: LT.to_uv(L, S) * (P, -P))                    # столик -> чертёж: крест 1,1 в (0, 0), Y вверх
 
@@ -359,7 +392,8 @@ def export_sample(m, ks=None, out=None, dwg=True, verbose=True, nested=False, pn
             msp.add_line((cx, cy - arm), (cx, cy + arm), dxfattribs={'layer': 'CROSSES'})
             msp.add_text(f"{X},{Y}", height=0.06 * P, dxfattribs={'layer': 'NUMBERS', 'insert': (cx + 0.04 * P, cy + 0.04 * P)})
     path = os.path.join(out, 'drawing.dxf')
-    doc.saveas(path)
+    if make_dxf:
+        doc.saveas(path)
     mixed_ = None
     if png and mix_:                                             # mixed.png: все снимки с наложением по слоям
         try:
@@ -373,11 +407,19 @@ def export_sample(m, ks=None, out=None, dwg=True, verbose=True, nested=False, pn
             skipped_.append(f"mixed.png not made: {e}")
     json.dump(dict(frame=("stage coordinates, um, Y up" if stage_frame else
                           "lattice: cross 1,1 at (0, 0), X to cross 2,1, Y up (to cross 1,2 is -Y)"), pitch_um=P,
-                   lattice=L, areas=placed, pictures=local_rep, mixed=mixed_, notes=skipped_),
+                   lattice=L, areas=placed, pictures=local_rep, mixed=mixed_, notes=skipped_,
+                   drawing=make_dxf, no_drawing=[] if make_dxf else no_draw_),
               open(os.path.join(out, 'drawing.json'), 'w'), indent=1, default=float)
     if verbose:
         for s_ in skipped_:
             print("  [!] " + s_)
+        if not make_dxf:
+            print("  [!] No drawing: " + "; ".join(no_draw_) + " - pictures and mixed.png only")
+    if not make_dxf:
+        if pr:
+            pr.update(1, "no drawing")
+            pr.close()
+        return os.path.join(out, 'drawing.json')
     dw = dxf_to_dwg(path) if dwg else None
     if pr:
         pr.update(1, "DWG" if dw else "DXF (DWG: ODA File Converter not found)")

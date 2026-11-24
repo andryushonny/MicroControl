@@ -620,9 +620,12 @@ assert 'Where the time goes' in txt and 'Camera: picture' in inf['Time'] and inf
 print(txt.split("\n\n")[1].splitlines()[2])
 r = m.remove(2, confirm=False); print(r)
 assert not os.path.exists(det) and len(m.list()) == 1 and os.path.isdir(mapf)
-mc.view(mapf, _keys=[-1, ord('J'), -1, -1, 27, 27])                                # Shift+J: сшить прямо в просмотре
-assert os.path.exists(os.path.join(mapf, 'join', 'positions_all.csv'))
-m.close(); print("Layers 10x > 50x, list, remove, time report, stitch from the viewer (S): OK")
+m.queue                                                                            # очередь этого окна
+mc.view(mapf, _keys=[-1, ord('J'), -1, -1, 27, 27])                                # Shift+J: точная сшивка — в очередь
+m.queue.wait()
+from microcontrol import quality as Q22
+assert Q22.stitched_as(mapf) == 'quality', Q22.stitched_as(mapf)
+m.close(); print("Layers 10x > 50x, list, remove, time report, quality stitch from the viewer (Shift+J -> queue): OK")
 
 # ------------------------------------------------------------------ 23. Ctrl+Z / Ctrl+Y в ручном режиме
 import microcontrol.manual as M
@@ -862,8 +865,10 @@ g.labels = {(0, 0): (3, 2), (2, 1): (5, 3)}; g.save(px_um)                # но
 m._sel = 0
 M.run(m, fullscreen=False, _keys=[-1, ('tbar', bx("Export")), -1, -1])   # чертёж одной кнопкой
 import glob as _glob
-assert os.path.exists(os.path.join(m.sample.folder, 'export', 'drawing.dxf')), "no sample drawing"
-m.close(); print("Navigator: drag on the map - new area, click - go, Tab, Scan area, Export: OK")
+dj31 = json.load(open(os.path.join(m.sample.folder, 'export', 'drawing.json')))    # quick: без чертежа, причина названа
+assert not dj31['drawing'] and any('quality' in w_ for w_ in dj31['no_drawing']), dj31['no_drawing']
+assert not os.path.exists(os.path.join(m.sample.folder, 'export', 'drawing.dxf'))
+m.close(); print("Navigator: drag on the map - new area, click - go, Tab, Scan area, Export (no drawing without quality): OK")
 
 # ------------------------------------------------------------------ 32. Проекты таблицей с датами; просмотр в своём окне
 import time as _t
@@ -932,7 +937,9 @@ k50 = next(k for k, r in enumerate(m._regions) if r['obj'] == 50)
 r50 = m._regions[k50]
 assert r50['factors'] == [3] and all(c[0] // 3 in (5, 6) and c[1] // 3 == 6 for c in r50['cells']), r50
 m.scan(); [mc.stitch(x, verbose=False) for x in m.last_scans]
-dx = mc.export_sample(m, ks=[0, kd, k50])                            # 10x и 50x и черновик: каждый на своём слое
+dx = mc.export_sample(m, ks=[0, kd, k50])                            # черновик, quick: без чертежа
+assert dx.endswith('drawing.json') and any('not quality' in w_ for w_ in json.load(open(dx))['no_drawing']), dx
+dx = mc.export_sample(m, ks=[0, kd, k50], drawing=True)              # 10x и 50x и черновик: каждый на своём слое
 doc = ezdxf.readfile(dx if dx.endswith('.dxf') else dx[:-4] + '.dxf')
 ms = doc.modelspace()
 ims = ms.query('IMAGE')
@@ -1095,7 +1102,7 @@ assert len(P_.latest_scans(m.sample.folder)) == 1                          # и 
 LY.sync_brush(m); SM.persist(m)
 assert [r['num'] for r in m._regions if r.get('kind') == 'draft'] and not any(r['num'] == 2 for r in m._regions)
 m.area = mc.Area(0, 0, 2 * fw, fh); f3 = m.scan(); mc.stitch(f3, verbose=False)   # новая съёмка: сама сетки нет,
-V_.view(f3, _keys=[-1, 27]); assert not Grid(f3).ready()                          # M — по решётке образца
+V_.view(f3, _keys=[-1, 27]); assert Grid(f3).ready()                              # сетка образца одна: она уже здесь
 V_.view(f3, _keys=[-1, ord('m'), -1, 27, 27])
 g3 = Grid(f3)
 assert json.load(open(os.path.join(f3, 'grid.json'))).get('seeded') and g3.labels
@@ -1793,11 +1800,14 @@ def keys54():
     yield ('drag', 420, 300, 700, 520); yield -1; yield 13; yield -1      # M: сетка — по крестам образца; Enter
     yield ('call', lambda st: box_.update(t=st['_t'])); yield -1
     dr_ = [r_ for r_ in box_['t']['regions']() if r_.get('kind') == 'draft']
-    assert dr_ and Grid(fA).selected, (dr_, Grid(fA).selected)
+    assert dr_ and dr_[0].get('cells'), dr_
     box_['msg'] = box_['t']['delete_draft'](dr_[0]['uid'], -1)
     yield -1
     assert not [r_ for r_ in box_['t']['regions']() if r_.get('kind') == 'draft'], box_['t']['regions']()
     yield 27; yield 27
+sc_ = V._Scene(fA); V._seed(fA, Grid(fA), Lc, None, sc_, sc_.st.meta.get('pixel_size_um'), need_crosses=True); sc_.st.close()
+d54 = json.load(open(os.path.join(fA, 'grid.json'))); d54.pop('seeded', None); d54['marks_t'] = 1.0   # кресты на A — как руками
+json.dump(d54, open(os.path.join(fA, 'grid.json'), 'w'))
 mc.view(fA, _keys=keys54())
 assert not Grid(fA).selected and 'deleted' in box_['msg'], box_['msg']
 m.close()
@@ -2157,14 +2167,14 @@ mc.view(f10, _keys=[-1, ('qmove', *c50), -1, ('qclick', *c50, 'ctrl'), -1, ord('
                     ('call', lambda st: res.update(auto=st['msg'])), 13, -1, 27, 27])
 uid50 = json.load(open(os.path.join(f50, 'meta.json')))['sample_uid']
 assert json.load(open(os.path.join(m.sample.folder, 'view.json')))['alpha'] == {uid50: 0.75} and '75 %' in res['a'], res   # отмеченному (Ctrl+щелчок)
-assert abs(res['dq'][0] - 30) < 0.5 and abs(res['dq'][1]) < 0.5 and res['mode'] == 'look', res   # тянуть: едут за мышью; Esc — отмена
+assert abs(res['dq'][0] + 30) < 0.5 and abs(res['dq'][1]) < 0.5 and res['mode'] == 'look', res   # тянут эту: она едет, остальные стоят; Esc — отмена
 assert align(f10) != (0.0, 0.0) and 'by the picture' in res['auto'], res
 d10 = align(f10)
 assert np.hypot(d10[0] - d_true[0], d10[1] - d_true[1]) < 0.5, (d10, d_true)                       # само: с точностью < 0.5 мкм
 q_ = stage_to_mosaic(f10, [(100.0, 100.0)])[0]; align(f10, (0, 0))
 assert np.allclose(q_, stage_to_mosaic(f10, [(100 - d10[0], 100 - d10[1])])[0], atol=1e-6)   # сдвиг — во всех пересчётах
 m.close()
-print(f"Layers: picture transparency O (75 % kept per selection); L: drag moves the higher pictures, Esc cancels; "
+print(f"Layers: picture transparency O (75 % kept per selection); A: drag moves this selection (the others stay), Esc cancels; "
       f"Space aligns by the picture: 10x shifted by {d10[0]:+.2f}, {d10[1]:+.2f} um (true {d_true}): OK")
 
 
@@ -2289,3 +2299,106 @@ try:
 except mc.MicroControlError as e:
     assert 'objective' in str(e), e
 m.close(); print("K: the focus point goes to the chosen selection (overlapping ones too), only with its objective: OK")
+
+
+# ------------------------------------------------------------------ 64. «...» на карточке: все съёмки выделения посреди окна, звезда — основная
+import cv2 as _cv64
+import microcontrol.manual as M
+from microcontrol import samples as SM, project as PJ, ui as UI64
+m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp()); m.focus(); fw, fh = m.frame_size
+SM.corner(m, 1); m.move(dx=fw); SM.corner(m, 2); SM.persist(m)
+m.scan(); u64 = m._regions[0]['uid']; m.scan(only=[u64])                   # две съёмки выделения 1
+s64 = PJ.scans_of(m.sample.folder, u64)
+assert len(s64) == 2 and PJ.Selection(m.sample, m._regions[0]).latest.folder == s64[-1]
+
+
+def keys64():
+    yield -1; yield -1
+    car_ = m._ui_car
+    h_ = next(h for h in car_['hits'] if h[4] == 'more')                   # кнопка «...» первой карточки
+    yield ('car', car_['W'] - SM.CAR_W + (h_[0] + h_[2]) // 2, (h_[1] + h_[3]) // 2); yield -1; yield -1
+    pk_ = m._ui_pick
+    assert pk_.get('k') == 0 and len(pk_['rows']) == 2 and pk_['star'] == 1, pk_
+    r_ = next(r for r, h in pk_['rects'] if h == ('star', 0))              # звезда у старой съёмки
+    yield ('mouse', _cv64.EVENT_LBUTTONDOWN, (r_[0] + r_[2]) // 2, (r_[1] + r_[3]) // 2 + UI64.MENU_H + UI64.TOOL_H, 0)
+    yield -1; yield -1
+    assert m._ui_pick['star'] == 0, m._ui_pick.get('star')
+    yield 27; yield -1                                                      # Esc: список закрыт
+    assert m._ui_pick.get('k') is None
+    yield 27
+
+
+M.run(m, fullscreen=False, _keys=keys64())
+r64 = next(r for r in m._regions if r['uid'] == u64)
+assert r64.get('main') == os.path.basename(s64[0]), r64.get('main')
+assert PJ.Selection(m.sample, r64).latest.folder == s64[0]
+m.scan(only=[u64])                                                          # новая съёмка — снова основная
+assert 'main' not in next(r for r in m._regions if r['uid'] == u64)
+m.close(); print("... on a card: the scans of the selection in the middle, the star - the main one; a new scan is the main one: OK")
+
+
+# ------------------------------------------------------------------ 65. Сетка образца одна: по крестам, отмеченным последними на любом выделении; совмещение
+from microcontrol import samples as SM, project as PJ, snap as SN65, lattice as LT65
+from microcontrol.mask import Grid
+m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp()); m.focus(); fw, fh = m.frame_size
+SM.corner(m, 1); m.move(dx=fw); SM.corner(m, 2)                                         # A
+m.goto(x=0.5 * fw, y=0.4 * fh); SM.corner(m, 1); m.move(dx=fw); SM.corner(m, 2)          # B, перекрывает A
+SM.persist(m); m.scan()
+fA = PJ.Selection(m.sample, m._regions[0]).latest.folder; fB = PJ.Selection(m.sample, m._regions[1]).latest.folder
+px65 = json.load(open(os.path.join(fA, 'meta.json')))['pixel_size_um']; a65 = 100 / px65
+
+
+def mark65(f_, q0_um):
+    g_ = Grid(f_); g_.cr.clear(); q0_ = np.asarray(q0_um, float) / px65
+    g_.cr.add(q0_); g_.cr.add(q0_ + (a65, 0)); g_.cr.add(q0_ + (0, a65)); g_.save(px65)
+    d_ = json.load(open(os.path.join(f_, 'grid.json'))); d_.pop('seeded', None); d_['marks_t'] = time.time()
+    json.dump(d_, open(os.path.join(f_, 'grid.json'), 'w'))
+
+
+def lat65():
+    return json.load(open(m.sample.file))['lattice']
+
+
+import time
+mark65(fA, (30.0, 20.0))                                                                # кресты — на A
+mc.view(fB, _keys=[-1, 27, 27])                                                         # B: сетка образца — сама, подставлена
+L1 = lat65(); dB = json.load(open(os.path.join(fB, 'grid.json')))
+assert os.path.abspath(L1['src']) == os.path.abspath(fA) and dB.get('seeded') and dB.get('seed_key'), (L1.get('src'), dB.keys())
+gB = Grid(fB); SB = SN65.mosaic_to_stage(fB, np.array([gB.cr.point(0, 0), gB.cr.point(1, 0)]))
+uvB = LT65.to_uv(L1, SB); assert np.abs(uvB - np.round(uvB)).max() < 1e-3, uvB          # та же сетка, строго
+mc.view(fB, _keys=[-1, 27, 27]); assert json.load(open(os.path.join(fB, 'grid.json')))['seed_key'] == dB['seed_key']   # не меняется сама
+SN65.align(fB, (4.0, -3.0))                                                              # картинку B сдвинули
+mc.view(fB, _keys=[-1, 27, 27])
+gB = Grid(fB); SB = SN65.mosaic_to_stage(fB, np.array([gB.cr.point(0, 0)]))
+uvB = LT65.to_uv(lat65(), SB); assert np.abs(uvB - np.round(uvB)).max() < 1e-3, uvB     # сетка стоит, картинка — под ней
+assert np.allclose(lat65()['O'], L1['O'])
+time.sleep(0.05); mark65(fB, (41.0, 33.0))                                               # кресты отметили на B — сетка теперь по ним
+mc.view(fA, _keys=[-1, 27, 27])
+L2 = lat65(); dA = json.load(open(os.path.join(fA, 'grid.json')))
+assert os.path.abspath(L2['src']) == os.path.abspath(fB) and dA.get('seeded'), (L2.get('src'), dA.get('seeded'))
+gA = Grid(fA); SA = SN65.mosaic_to_stage(fA, np.array([gA.cr.point(0, 0)]))
+uvA = LT65.to_uv(L2, SA); assert np.abs(uvA - np.round(uvA)).max() < 1e-3, uvA
+m.close(); print("One grid for the sample: from the crosses marked last (any selection), the others take it as is; align moves the picture under it: OK")
+
+
+# ------------------------------------------------------------------ 66. A: двигается только выбранное выделение (вид едет вместе с ним), контур — с картинкой; карта окна микроскопа — сразу
+from microcontrol import samples as SM, project as PJ, snap as SN66
+from microcontrol.navmap import NavMap
+m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp()); m.focus(); fw, fh = m.frame_size
+SM.corner(m, 1); m.move(dx=fw); SM.corner(m, 2)
+m.goto(x=0.5 * fw, y=0.3 * fh); SM.corner(m, 1); m.move(dx=fw); SM.corner(m, 2)
+SM.persist(m); m.scan()
+fB66 = PJ.Selection(m.sample, m._regions[1]).latest.folder
+nm66 = NavMap(); g0_66 = nm66._preview(fB66)[1]['c'].copy()
+B0 = np.array(json.load(open(m.sample.file))['selections'][1]['A'], float)
+st66 = {}
+RIGHT = 65363
+mc.view(fB66, _keys=[-1, ('call', lambda st: st66.update(c0=(st['cx'], st['cy']), s=st['s'])), ord('a'), -1, RIGHT, RIGHT, -1,
+                     ('call', lambda st: st66.update(c1=(st['cx'], st['cy']), dq=list(st['al']['dq']))), 13, -1, 27])
+dq66 = np.array(st66['dq']); dc66 = np.array(st66['c1']) - np.array(st66['c0'])
+assert np.allclose(dq66, dc66) and abs(dq66[0] + 2 / st66['s']) < 1e-6, (dq66, dc66)     # вид — вместе с остальными: на экране едет только эта
+B1 = np.array(json.load(open(m.sample.file))['selections'][1]['A'], float)
+d66 = np.array(SN66.align(fB66))
+assert d66[0] > 0 and np.allclose(B1 - B0, d66, atol=1e-3), (B1 - B0, d66)                 # контур — вместе с картинкой
+assert not np.allclose(nm66._preview(fB66)[1]['c'], g0_66) or not np.allclose(nm66._preview(fB66)[1]['Mo'], 0), "map cache"
+m.close(); print("Align moves only the chosen selection (the others stay), its outline goes with it, the map takes it at once: OK")

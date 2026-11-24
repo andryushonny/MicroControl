@@ -206,6 +206,16 @@ class Selection:
                     return x
         return s[-1] if s else None
 
+    @property
+    def shown(self):
+        """Что показать: основная, если сшита; иначе самая новая сшитая (идущая сейчас съёмка ещё без картинки);
+        None — сшитых нет."""
+        has = lambda x: os.path.exists(os.path.join(x.folder, 'join', 'preview_all.jpg'))
+        mn = self.latest
+        if mn is not None and has(mn):
+            return mn
+        return next((x for x in reversed(self.scans) if has(x)), None)
+
     def view(self):
         """Открыть последнюю съёмку в просмотре."""
         if self.latest is None:
@@ -363,6 +373,31 @@ def scan_label(folder):
 
 
 _UIDS = {}
+
+
+SCAN_HEAD = ("Date", "Stitch", "Frames", "Seams, um", "Picture, um")
+
+
+def scan_table(sample_folder, reg):
+    """Съёмки выделения (старые -> новые) таблицей: ([(дата, сшивка, кадров, швы, картинка)], [папки], номер
+    основной). Основная — reg['main'], иначе самая новая."""
+    from . import quality as Q
+    rows, fs = [], []
+    for f in scans_of(sample_folder, reg.get('uid')):
+        b = os.path.basename(f)
+        md = Q.stitched_as(f) or "stitching"                 # quick / quality; ещё не сшита — очередь как раз шьёт
+        q = Q.info(f) if md == 'quality' else None
+        try:
+            nf = json.load(open(os.path.join(f, 'meta.json'), encoding='utf-8')).get('frames', '')
+        except (OSError, ValueError):
+            nf = ''
+        rows.append((f"{b[8:10]}.{b[5:7]}.{b[:4]} {b[11:13]}:{b[13:15]}:{b[15:17]}", md, nf,
+                     f"{q['seam_um'][1]:.3f}" if q and q.get('seam_um') else "-",
+                     f"{q['size_um'][0]:.1f} x {q['size_um'][1]:.1f}" if q and q.get('size_um') else "-"))
+        fs.append(f)
+    mn = reg.get('main')
+    star = next((i for i, f in enumerate(fs) if os.path.basename(f) == mn), len(fs) - 1)
+    return rows, fs, star
 
 
 def scans_of(sample_folder, uid):

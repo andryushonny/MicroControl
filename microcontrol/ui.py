@@ -505,6 +505,72 @@ def confirm_panel(img, title, lines, buttons=("Done", "Cancel"), hover=None, W=N
     return rects
 
 
+def star(img, cx, cy, r, color, fill=True):
+    """Звезда о пяти лучах (основная съёмка)."""
+    import math
+    pts = [(cx + (r if i % 2 == 0 else r * 0.45) * math.sin(math.pi * i / 5),
+            cy - (r if i % 2 == 0 else r * 0.45) * math.cos(math.pi * i / 5)) for i in range(10)]
+    pts = np.array([[int(round(x * 8)), int(round(y * 8))] for x, y in pts], np.int32)
+    if fill:
+        cv2.fillPoly(img, [pts], color, cv2.LINE_AA, shift=3)
+    else:
+        cv2.polylines(img, [pts], True, color, 1, cv2.LINE_AA, shift=3)
+
+
+def pick_panel(img, title, header, rows, star_i=None, hover=None, scroll=0, W=None, note=None, cur=None):
+    """Список посреди картинки: в каждой строке звезда (основная — жёлтая), поля по колонкам, кнопка View.
+    rows — [(поле, ...)], header — подписи колонок. -> [((x0, y0, x1, y1), ('star' | 'view' | 'row', i) | 'close'
+    | 'up' | 'down' | 'panel')] (первым — всё окно)."""
+    H, W = img.shape[0], (W or img.shape[1])
+    fs, rh, n_vis = 0.48, 28, max(3, min(len(rows), int((H - 200) / 28), 14))
+    scroll = max(0, min(scroll, len(rows) - n_vis))
+    cols = [max([size(str(h), fs)[0]] + [size(str(r[c]), fs)[0] for r in rows]) + 22 for c, h in enumerate(header)]
+    bw = size("View", fs)[0] + 22
+    pw = min(W - 40, max(sum(cols) + 44 + bw + 40, size(title, 0.62)[0] + 90, size(note or "", 0.42)[0] + 40))
+    ph = 56 + 26 + rh * n_vis + (40 if note else 16)
+    x0, y0 = int((W - pw) / 2), int((H - ph) / 2)
+    panel(img, x0, y0, x0 + pw, y0 + ph, 0.96, LINE)
+    put(img, title, x0 + 20, y0 + 34, 0.62, ACCENT, 1)
+    out = [((x0, y0, x0 + pw, y0 + ph), 'panel')]
+    cx1, cy0 = x0 + pw - 12, y0 + 12                        # закрыть
+    on = hover is not None and cx1 - 24 <= hover[0] <= cx1 and cy0 <= hover[1] <= cy0 + 24
+    cv2.rectangle(img, (cx1 - 24, cy0), (cx1, cy0 + 24), (96, 96, 104) if on else (62, 62, 70), -1)
+    put(img, "x", cx1 - 16, cy0 + 17, 0.5, TEXT, 1)
+    out.append(((cx1 - 24, cy0, cx1, cy0 + 24), 'close'))
+    xs, x_ = [], x0 + 44
+    for c in cols:
+        xs.append(x_)
+        x_ += c
+    yh = y0 + 72
+    for c, h in enumerate(header):
+        put(img, str(h), xs[c], yh, fs, DIM, 1)
+    for j in range(n_vis):
+        i = scroll + j
+        if i >= len(rows):
+            break
+        ry0 = yh + 8 + rh * j
+        rr = (x0 + 10, ry0, x0 + pw - 10, ry0 + rh - 2)
+        on = hover is not None and rr[0] <= hover[0] <= rr[2] and rr[1] <= hover[1] <= rr[3]
+        if on or i == cur:
+            cv2.rectangle(img, rr[:2], rr[2:], (70, 70, 78) if on else (56, 56, 64), -1)
+        sc = (ry0 + rh // 2)
+        star(img, x0 + 26, sc, 9, (40, 200, 255) if i == star_i else (150, 150, 156), fill=i == star_i)
+        out.append(((x0 + 14, ry0, x0 + 40, ry0 + rh - 2), ('star', i)))
+        for c, v in enumerate(rows[i]):
+            put(img, str(v), xs[c], sc + 6, fs, (40, 200, 255) if i == star_i else TEXT, 1)
+        br = (x0 + pw - 20 - bw, ry0 + 3, x0 + pw - 20, ry0 + rh - 5)
+        onb = hover is not None and br[0] <= hover[0] <= br[2] and br[1] <= hover[1] <= br[3]
+        cv2.rectangle(img, br[:2], br[2:], (96, 96, 104) if onb else (62, 62, 70), -1)
+        put(img, "View", br[0] + 11, br[3] - 6, fs, TEXT, 1)
+        out.insert(1, (br, ('view', i)))
+        out.append((rr, ('row', i)))
+    if len(rows) > n_vis:                                   # ещё строки: колесо
+        put(img, f"{scroll + 1}-{scroll + n_vis} of {len(rows)}  (wheel)", x0 + pw - 200, y0 + 34, 0.42, DIM, 1)
+    if note:
+        put(img, note, x0 + 20, y0 + ph - 16, 0.42, DIM, 1)
+    return out
+
+
 MENU_H = 30
 
 

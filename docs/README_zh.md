@@ -2,7 +2,7 @@
 
 **用 Python 控制 Optosky ATR8300 拉曼显微镜：扫描基底，把它拼接成一张图，叠加光刻网格，选出需要的方格并导出给 AutoCAD。**
 
-**作者：** A. Lyapeikov, S. Domenko · **版本：** 0.31.0 · English: [README.md](../README.md) · Русский: [README_ru.md](README_ru.md) · PDF: [中文](MicroControl_zh.pdf) · 完整技术参考：[中文](reference_zh.md)、[EN](reference_en.md)、[RU](reference_ru.md)
+**作者：** A. Lyapeikov, S. Domenko · **版本：** 0.32.0 · English: [README.md](../README.md) · Русский: [README_ru.md](README_ru.md) · PDF: [中文](MicroControl_zh.pdf) · 完整技术参考：[中文](reference_zh.md)、[EN](reference_en.md)、[RU](reference_ru.md)
 
 ![扫描查看器：方格的红色网格、选中的方格（绿色）、右侧的样品列表](img/view.jpg)
 
@@ -31,7 +31,7 @@ mc.export(folder)            # 5. 选中的方格：图片 + 以微米为单位�
 m.close()
 ```
 
-两个窗口都用 **Shift+Esc** 或窗口的 × 关闭。单按 `Esc` 只取消。**H** —— 所有按键。
+显微镜窗口用 **Shift+Esc** 或其 × 关闭；查看器用 **Esc**（未打开模式、帮助或列表时）或其 × 关闭。**H** —— 所有按键。**Ctrl+P** —— 显示 / 隐藏左侧 Settings 面板。
 
 ---
 
@@ -65,7 +65,7 @@ m.close()
 
 - 按 `C`，点击**同一行中两个相邻的十字**。程序由此得知倾斜角和方格大小，把图摆正，并在整幅图上画出红色网格。标记准确落在点击处；`Shift`+点击会吸附到十字中心，标记可以拖动。网格会立即按所有十字拟合；然后 `F` 把每一帧放到十字上（见*用于光刻的精度*）。
 - **编号：** 按 `N`，点击一个方格并输入它旁边写的编号（`12 7`）。对位于不同行、不同列的两个方格这样做 —— 每个方格就都有了真实编号。
-- **网格总是右侧菜单中所选对象的网格。** 若其拍摄中标过十字，用它自己的；否则用外围更大区域的十字（10x 中的 50x）；否则用样品晶格。地图上的红色网格、在其中新画区域的方格以及它下一次拍摄的网格都以此为准。`Shift+C` 清除十字（然后直接点击新的）；清除的十字不再被任何地方使用。
+- **整个样品只有一个网格。** 它由在任意选区上手动标记的十字构建（取最后标记的；十字标在列表中选中的选区上），只要它们不变网格就不变。其他拍摄按原样使用它；若图片有偏移，`A`（对齐）把图片移到网格下。`Shift+C` 清除十字（然后直接点击新的）。
 
 ### 4. 选择方格 —— 掩模
 
@@ -75,7 +75,7 @@ m.close()
 
 在查看器中按 `E` 或运行 `mc.export(folder)`，会在扫描文件夹中写入 `export/`：选中方格的校正 PNG（透明背景）、以微米为单位的 AutoCAD DXF 文件，以及方格编号列表。
 
-最终结果是图纸 `export/drawing.dwg`：每个选中的方格是一张独立图片（`export/squares/*.png`，严格沿网格裁剪），按微米放在其真实位置；方格轮廓和编号在单独图层上，另有一个空的 `BONDS` 图层用于绘制键合线。若已安装免费的 ODA File Converter，则直接写出 DWG；否则生成 `drawing.dxf`（在 AutoCAD 中「另存为」DWG）。请整体移动 `export/` 文件夹：DWG 中的图片始终是独立文件。进度直接显示在窗口中。
+最终结果是图纸 `export/drawing.dwg`：每个选中的方格是一张独立图片（`export/squares/*.png`，严格沿网格裁剪），按微米放在其真实位置；方格轮廓和编号在单独图层上，另有一个空的 `BONDS` 图层用于绘制键合线。若已安装免费的 ODA File Converter，则直接写出 DWG；否则生成 `drawing.dxf`（在 AutoCAD 中「另存为」DWG）。请整体移动 `export/` 文件夹：DWG 中的图片始终是独立文件。进度直接显示在窗口中。 **只有在十字已标记且所有勾选的选区都做了 quality 拼接时才生成图纸**（十字是信标，保证光刻拼合无误）；否则导出只有图片和 `mixed.png`，消息说明原因。
 
 `mc.projects()` 和 `mc.all_samples()` 打印表格：id、名称、样品、选区、拍摄、创建、修改、描述（Open 对话框中相同）。在查看器中 Open → **New window** 在单独窗口中显示另一个项目（`mc.view_window(folder)`），当前窗口保持打开。
 
@@ -245,7 +245,7 @@ T = T_0 + t\,N,
 | `Enter` | 确认 | 移动到所选选区 | 选中的单元 -> 选区（两处均被选中）；保存对齐 |
 | `Del` | 删除 | 所选 / 新建的选区（Ctrl+Z 可恢复） | 已标记 / 鼠标下的（未拍摄）；十字模式中 —— 重新标十字 |
 | `S` | 拍摄：放入队列 | 所选 / 已标记的选区（Scan area） | 鼠标下 / 已标记的（显微镜窗口的队列） |
-| `J` | 拼接 | 实时画面与拼图比对；`Shift+J` —— 所选的精确（quality）拼接（Stitch） | 手动编辑拼缝；`Shift+J` —— 就地拼接 |
+| `J` | 拼接 | 实时画面与拼图比对；`Shift+J` —— 所选的精确（quality）拼接（Stitch） | 手动编辑拼缝（quick 先做 quality 拼接）；`Shift+J` —— quality 拼接放入显微镜窗口的队列 |
 | `X` | 导出 | 所有勾选的 -> `<样品>/export/`（Export） | 同左 |
 | `O` | 物镜 | 当前物镜：下一个（装上它） | 鼠标下 / 已标记选区的物镜；`Shift+O` —— 新选区的物镜 |
 | `[` `]` | 透明度 | 地图上所选选区的图片 | 鼠标下 / 已标记的图片 |
@@ -258,7 +258,9 @@ T = T_0 + t\,N,
 | `L` · `I` · `W` · `空格` · `V` | 照明 · 激光 · 白平衡 · 拍照 · 打开查看器（独立窗口：本窗口继续工作） | ✓ | — |
 | `Tab` 或单击字段 | 步长、曝光、物镜 | ✓ | — |
 | `Ctrl+Z` · `Ctrl+Y` | 撤销 · 重做 | ✓（包括移动） | ✓ |
-| `H` · `Esc` · `Shift+Esc` | 全部按键 · 退出模式 / 取消标记 · 关闭 | ✓ | ✓ |
+| `H` · `Esc` | 全部按键 · 退出模式 / 取消标记 | ✓ | ✓；无其他打开内容时按 `Esc` —— **关闭查看器** |
+| `Shift+Esc` | 关闭 | 显微镜窗口（只能这样） | ✓ |
+| `Ctrl+P` | Settings 面板（左侧） | 显示 / 隐藏 | — |
 
 显微镜窗口的 **Settings 面板**（Settings 按钮）：Z 跟随对焦点、单向接近（回程间隙）、**Prepare**、**Distortion**（畸变）、**Zero here**（此处置零）、**Steps = frame**（步长 = 一帧）、**Check directions**（检查方向）、**Arrows X / Y**（方向键反向）、**Map 90 deg**（地图旋转）。顶部：Prepare、New area、Scan area、Stitch、Export、Settings；菜单：Open、New、Info、Scans（所选选区的历史：View、Make main）、Queue、View、Help。在地图上 Ctrl+拖动 —— 当前物镜的方框（晶体）；任务进行中按 `Esc` —— 停止。
 

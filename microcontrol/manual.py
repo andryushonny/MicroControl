@@ -43,7 +43,7 @@ from . import ui as UI
 
 WIN = "MicroControl"
 HELP = ["Same keys: one letter means one thing here and in the view (M C N P G A Y - only in the view: they say so here)",
-        "Shift+Esc: Exit (or close the window)   H: these keys   Esc: leave the mode   Ctrl+Z / Ctrl+Y: undo / redo",
+        "Shift+Esc: Exit (or close the window)   H: these keys   Esc: leave the mode   Ctrl+Z / Ctrl+Y: undo / redo   Ctrl+P: Settings panel (left)",
         "Arrows: Move by Step X / Step Y   E / Q (PgUp / PgDn): Stage up / down by Step Z (Shift: x5)",
         "Click to edit steps (X / Y: 5 um increments, Z: 1 um), exposure or objective. Enter to save",
         "O: Next objective (4x, 10x, 20x, 50x, 100x) - put it in place",
@@ -53,7 +53,8 @@ HELP = ["Same keys: one letter means one thing here and in the view (M C N P G A
         "  , / . = previous / next;  Enter = drive;  Del = delete the chosen one (Ctrl+Z brings it back)",
         "S / Scan area: Queue the scan of the chosen selection (Ctrl+click several cards: all of them); each is quick stitched in the background",
         "J: check the live picture against the stitched mosaic   Shift+J / Stitch: exact (quality) stitch of the chosen selection",
-        "X / Export: everything ticked on the cards -> <sample>/export/ (drawing, pictures, mixed.png)",
+        "X / Export: everything ticked on the cards -> <sample>/export/ (pictures, mixed.png; the drawing - when the crosses are marked and all ticked are quality)",
+        "... on a card: all scans of the selection; the star = the main one (maps, view, export)",
         "Queue (bar at the bottom, menu Queue): scans one after another, stitches on other cores; x stops a job, Stop all; the window lives",
         "V: Open the last scan in the view (crosses, squares, export); closing it brings you back here",
         "L: Light on / off   I: Laser on / off   W: White balance (aim at an empty place)   Space: Picture",
@@ -705,6 +706,7 @@ def _run(m, fullscreen=False, _keys=None):
     show_help, msg, msg_t, sharp, n = False, "Click the map to go there, drag on it for a new area. Tab: big map. H: all keys", time.monotonic(), 0.0, 0
     SM.init_areas(m)                                     # области образцов (настоящие мкм)
     car = dict(scroll=0, hits=[], confirm=None, t=0.0, multi=[], tools=[])   # карусель справа; multi — отмеченные
+    m.__dict__['_ui_car'] = car                            # тесты: где кнопки карусели
     mdr = dict(on=False)                                 # Shift + тянуть: сдвиг выделения (индекс, начало, сдвиг)
     gsel, gsel0 = {}, {}                                 # квадраты и подсетки в съёмках (сейчас / как было) — для Ctrl+Z
 
@@ -769,7 +771,20 @@ def _run(m, fullscreen=False, _keys=None):
     def in_rect(r_, x, y):
         return r_ is not None and r_[0] <= x <= r_[2] and r_[1] <= y <= r_[3]
 
+    pick = {}                                              # список съёмок выделения посреди окна («...» на карточке)
+    m.__dict__['_ui_pick'] = pick
+
     def on_mouse(ev, x, y, flags, *_):
+        if pick.get('rects'):                              # список съёмок: пока открыт — только он
+            oy_ = UI.MENU_H + UI.TOOL_H
+            hit_ = next((h_ for r_, h_ in pick['rects'][1:] if in_rect(r_, x, y - oy_)), None)
+            if ev == cv2.EVENT_MOUSEMOVE:
+                pick['hover'] = (x, y - oy_)
+            elif ev == cv2.EVENT_LBUTTONDOWN:
+                pick['click'] = hit_ if hit_ is not None else ('panel' if in_rect(pick['rects'][0][0], x, y - oy_) else 'close')
+            elif ev == cv2.EVENT_MOUSEWHEEL:
+                pick['scroll'] = max(0, pick.get('scroll', 0) - int(np.sign(wheel_delta(flags))))
+            return
         if wiz.get('rects'):                               # кнопки мастера Prepare — раньше всего остального
             hit_ = next((k2 for k2, r2 in wiz['rects'].items() if r2[0] <= x <= r2[2] and r2[1] <= y <= r2[3]), None)
             if ev == cv2.EVENT_MOUSEMOVE:
@@ -1186,7 +1201,7 @@ def _run(m, fullscreen=False, _keys=None):
             hd_ = SM.hidden(m, k)
             sh_ = shot_of(k)
             items.append(dict(title=SM.title(m, k), obj=f"{o_}x", color=SM.col(m, k), check=reg.get('export', True),
-                              chosen=k in car['multi'], thumbs=[] if hd_ else reg.get('thumbs', []), confirm=car['confirm'] == k, depth=depth,
+                              more=bool(sh_), chosen=k in car['multi'], thumbs=[] if hd_ else reg.get('thumbs', []), confirm=car['confirm'] == k, depth=depth,
                               muted=o_ != m.objective or hd_, hidden=bool(reg.get('hidden')),
                               lines=([(f"scanned {sh_}"
                                        if sh_ else "not scanned yet") +
@@ -1198,6 +1213,9 @@ def _run(m, fullscreen=False, _keys=None):
         return items
 
     MENU = ["Open", "New", "Info", "Scans", "Queue", "View", "Help"]
+    from .project import SCAN_HEAD as PICK_HEAD
+    PICK_NOTE = "Click a star (or a row): the main scan - maps, view, export. A new scan becomes the main one. Esc: close"
+
 
     def menu_img(W_):
         sm_ = m.sample
@@ -1211,6 +1229,15 @@ def _run(m, fullscreen=False, _keys=None):
         очередь (<образец>/.queue_requests.jsonl) — в очередь; состояние очереди — ему (.queue_status.json).
         -> сообщение или None."""
         out_ = None
+        vp_ = m.__dict__.get('_view_proc')
+        if vp_ is not None and vp_.poll() is not None:     # окно просмотра закрылось: с ошибкой — сказать почему
+            m.__dict__['_view_proc'] = None
+            if vp_.returncode not in (0, None):
+                try:
+                    ln_ = [l_.strip() for l_ in open(vp_.error_log, encoding='utf-8', errors='replace') if l_.strip()]
+                except (OSError, AttributeError):
+                    ln_ = []
+                out_ = "The view closed with an error: " + (ln_[-1] if ln_ else f"code {vp_.returncode}")
         sf_ = m.sample.file
         mt_ = os.path.getmtime(sf_) if os.path.exists(sf_) else 0
         if mt_ != car.get('ext_mt'):
@@ -1242,6 +1269,16 @@ def _run(m, fullscreen=False, _keys=None):
                     continue
                 if d2_.get('op') == 'scan':
                     uids_ += list(d2_.get('uids') or [])
+                elif d2_.get('op') == 'quality' and d2_.get('folder') and os.path.isdir(d2_['folder']):   # J в просмотре
+                    f2_ = d2_['folder']
+                    q2_ = m.queue
+                    if not any(j_.folder == f2_ and j_.kind in ('quality', 'stitch') for j_ in q2_.active()):
+                        from .project import scan_uid as _su
+                        r2_ = next((r_ for r_ in m._regions if r_.get('uid') == _su(f2_)), None)
+                        same_ = r2_ is not None and SM.obj(m, r2_) == m.objective
+                        q2_.quality(f2_, title="Quality stitch " + (SM.title(m, m._regions.index(r2_)) if r2_ else
+                                                                    os.path.basename(f2_)), reshoot=same_)
+                        out_ = "Quality stitch from the view queued" + ("" if same_ else " (other objective: no re-shooting)")
             if uids_:
                 from .layers import refresh_from_disk
                 refresh_from_disk(m)
@@ -1579,7 +1616,7 @@ def _run(m, fullscreen=False, _keys=None):
 
     def export_drawing():
         """Export: всё, что отмечено галочкой на карточках, — в <образец>/export/ (прежнее заменяется): чертёж для
-        AutoCAD (DXF / DWG), снимки выделений и mixed.png (снимки с наложением по слоям списка; разрешение — спросить)."""
+        AutoCAD (DXF / DWG), снимки выделений и mixed.png (снимки с наложением по слоям списка; пиксель — самого точного снимка)."""
         nonlocal msg, msg_t
         from .drawing import export_sample
         msg_t = time.monotonic()
@@ -1587,52 +1624,12 @@ def _run(m, fullscreen=False, _keys=None):
         if not ks_:
             msg = "Nothing ticked for the export: the box on a card puts it into the export"
             return
-        um_ = ask_mixed_um(ks_)
-        if um_ == 'cancel':
-            msg = "Export cancelled"
-            return
-        res = busy("Export: drawing, pictures, mixed.png", lambda: export_sample(m, ks_, mixed_um=um_))
+        res = busy("Export: drawing, pictures, mixed.png", lambda: export_sample(m, ks_))
         msg_t = time.monotonic()
         if 'e' in res and os.environ.get('MC_TEST'):
             print("Export failed:", res['e'])
-        msg = (f"Export failed: {res['e']}" if 'e' in res else
-               f"Exported {len(ks_)} selection{'s' if len(ks_) > 1 else ''} to {os.path.dirname(str(res['r']))}"
-               + ("" if str(res['r']).endswith('.dwg') else "  (DWG: install ODA File Converter)"))
-
-    def ask_mixed_um(ks_):
-        """Разрешение mixed.png: как у снимка какого объектива или своё (мкм на пиксель). -> число, None или 'cancel'."""
-        from . import dialogs as D
-        from .project import Selection as _Sel
-        px_ = {}
-        for k_ in ks_:
-            sc_ = _Sel(m.sample, m._regions[k_]).latest
-            if sc_ is None:
-                continue
-            try:
-                mt_ = json.load(open(os.path.join(sc_.folder, 'meta.json'), encoding='utf-8'))
-                o_, p_ = int(mt_.get('objective') or 0), float(mt_.get('pixel_size_um') or 0)
-                if p_ > 0:
-                    px_[o_] = min(px_.get(o_, p_), p_)
-            except Exception:
-                continue
-        if not px_:
-            return None
-        opts_ = sorted(px_.items(), key=lambda t_: t_[1])
-        rows_ = [f"as {o_}x: {p_:.4f} um / px" + ("  (the finest)" if i_ == 0 else "") for i_, (o_, p_) in enumerate(opts_)]
-        rows_.append("my own um / px ...")
-        try:
-            r_ = D.choose("mixed.png: one picture of all ticked scans, layered as the list - its pixel", rows_, 0, ("Export",))
-        except (RuntimeError, ImportError):                # нет окон (тест): как у самого точного
-            return None
-        if r_ is None:
-            return 'cancel'
-        if r_[1] is None or r_[1] < len(opts_):
-            return opts_[r_[1] or 0][1]
-        try:
-            v_ = D.ask("mixed.png", "Micrometres per pixel", f"{opts_[0][1]:.4f}")
-            return float(str(v_).replace(',', '.')) if v_ else 'cancel'
-        except (RuntimeError, ImportError, ValueError):
-            return None
+        from .drawing import export_message
+        msg = f"Export failed: {res['e']}" if 'e' in res else export_message(res['r'], len(ks_))
 
     def busy(title, fn, plan=None, expect=None, on_stop=None, bg=None):
         """Долгое дело в потоке; в окне — полоса прогресса с кнопкой Stop (Esc) и строка состояния внизу.
@@ -1996,7 +1993,44 @@ def _run(m, fullscreen=False, _keys=None):
             if live is not None:
                 live.paused = False
 
-    def scan_history(k_):
+    def pick_open(k_):
+        """Список съёмок выделения k посреди окна: звезда — основная (карты, просмотр, экспорт)."""
+        from .project import scan_table
+        rows_, fs_, st_ = scan_table(m.sample.folder, m._regions[k_])
+        if not rows_:
+            return f"{SM.title(m, k_)}: no scans yet"
+        pick.clear()
+        pick.update(k=k_, rows=rows_, folders=fs_, star=st_, cur=st_, scroll=max(0, len(rows_) - 14),
+                    title=f"Scans of {SM.title(m, k_)} (oldest first)")
+        return f"{SM.title(m, k_)}: {len(rows_)} scan{'s' if len(rows_) != 1 else ''} - the star is the main one"
+
+    def pick_do(c_):
+        """Щелчок в списке съёмок: звезда / строка — основная, View — открыть, x / мимо / Esc — закрыть."""
+        if c_ in ('close',):
+            pick.clear()
+            return None
+        if c_ == 'panel' or not isinstance(c_, tuple):
+            return None
+        what_, i_ = c_
+        k_, fs_ = pick['k'], pick['folders']
+        if not (0 <= i_ < len(fs_)) or k_ >= len(m._regions):
+            return None
+        if what_ == 'view':
+            pick.clear()
+            m._last_view, m._view_pick = fs_[i_], True
+            open_view()
+            return f"View: {os.path.basename(fs_[i_])}"
+        rg_ = m._regions[k_]
+        if i_ == len(fs_) - 1:
+            rg_.pop('main', None)                          # самая новая: основная и дальше — новая съёмка
+        else:
+            rg_['main'] = os.path.basename(fs_[i_])
+        pick['star'] = pick['cur'] = i_
+        SM.persist(m)
+        car['shot_t'] = -9
+        return f"{SM.title(m, k_)}: main scan {os.path.basename(fs_[i_])} (maps, view, export)"
+
+    def scan_history(k_, fields=False):
         """Съёмки выделения k (старые -> новые): (строки для списка, папки) или None."""
         from .project import Selection as _Sel
         from . import quality as Q
@@ -2007,7 +2041,7 @@ def _run(m, fullscreen=False, _keys=None):
         rows_, fs_ = [], []
         for x_ in scs_:
             b_ = os.path.basename(x_.folder)
-            md_ = Q.stitched_as(x_.folder) or "-"
+            md_ = Q.stitched_as(x_.folder) or "not stitched"
             q_ = Q.info(x_.folder) if md_ == 'quality' else None
             try:
                 nf_ = json.load(open(os.path.join(x_.folder, 'meta.json'), encoding='utf-8')).get('frames', '')
@@ -2016,7 +2050,8 @@ def _run(m, fullscreen=False, _keys=None):
             sm_ = f"{q_['seam_um'][1]:.3f}" if q_ and q_.get('seam_um') else "-"
             pic_ = f"{q_['size_um'][0]:.1f} x {q_['size_um'][1]:.1f}" if q_ and q_.get('size_um') else "-"
             mk_ = "  <- main" if (main_ == b_ or (not main_ and x_ is scs_[-1])) else ""
-            rows_.append(f"{b_[:17]:<17} {md_:<9} {str(nf_):>6}  {sm_:>9}  {pic_:<18}{mk_}")
+            rows_.append((f"{b_[8:10]}.{b_[5:7]}.{b_[:4]} {b_[11:13]}:{b_[13:15]}:{b_[15:17]}", md_, nf_, sm_, pic_)
+                         if fields else f"{b_[:17]:<17} {md_:<9} {str(nf_):>6}  {sm_:>9}  {pic_:<18}{mk_}")
             fs_.append(x_.folder)
         return rows_, fs_
 
@@ -2189,17 +2224,22 @@ def _run(m, fullscreen=False, _keys=None):
         if lv and os.path.isdir(lv) and P_.sample_of(lv) == m.sample.folder and getattr(m, '_view_pick', False):
             f_ = lv
             m._view_pick = False
-        elif m._sel is not None and m._sel < len(m._regions):   # выбранное выделение — его последняя съёмка
-            sc_ = P_.Selection(m.sample, m._regions[m._sel]).latest
+        elif m._sel is not None and m._sel < len(m._regions):   # выбранное выделение — его сшитая съёмка
+            sel_ = P_.Selection(m.sample, m._regions[m._sel])
+            sc_ = sel_.shown
             f_ = sc_.folder if sc_ else None
+            if f_ is None and sel_.latest is not None:
+                msg = f"Selection {m._regions[m._sel]['num']}: no stitched scan yet (the queue stitches it)"
+                return
             if f_ is None:
                 msg = (f"Selection {m._regions[m._sel]['num']} is not scanned yet: S scans it"
                        + ("" if not P_.latest_scans(m.sample.folder) else " (Scans in the menu: the others)"))
                 return
-        if f_ is None and lv and os.path.isdir(lv) and P_.sample_of(lv) == m.sample.folder:
-            f_ = lv                                        # только что сняли
-        if f_ is None:                                     # иначе — самая новая съёмка образца
-            ls = sorted(P_.latest_scans(m.sample.folder), key=os.path.basename)
+        stitched_ = lambda x_: os.path.exists(os.path.join(x_, 'join', 'preview_all.jpg'))
+        if f_ is None and lv and os.path.isdir(lv) and P_.sample_of(lv) == m.sample.folder and stitched_(lv):
+            f_ = lv                                        # только что сняли (и уже сшито)
+        if f_ is None:                                     # иначе — самая новая сшитая съёмка образца
+            ls = sorted(P_.latest_scans(m.sample.folder, stitched=True), key=os.path.basename)
             f_ = ls[-1] if ls else None
         if not f_:
             msg = "Nothing scanned in this sample yet: mark a selection (1, 2) and press S"
@@ -2207,7 +2247,7 @@ def _run(m, fullscreen=False, _keys=None):
         if keys is None and not getattr(m, '_view_inline', False):   # просмотр — своим окном, своим процессом:
             from .viewer import view_window                            # это окно живёт (очередь, камера, линейка)
             try:
-                view_window(f_)
+                m.__dict__['_view_proc'] = view_window(f_)
                 msg = (f"The view of {__import__('microcontrol.project', fromlist=['x']).scan_label(f_)} opens in its own "
                        "window; this one keeps working (the queue, the camera). Changes there come here by themselves")
             except Exception as e_:
@@ -2659,10 +2699,10 @@ def _run(m, fullscreen=False, _keys=None):
                 xb_ += bw_ + 6
                 right = max(right, xb_)
             y += LH + 2
-            lt_ = f"Light {'on' if m.light else 'off'}"   # свет и лазер: состояние и клавиши
+            lt_ = "Light on"                               # свет и лазер: подписи одинаковые, состояние — цветом
             ops.append(('t', lt_, x_l, y, FS, UI.TEXT if m.light else UI.DIM, 1))
             ops.append(('t', "L", x_l + UI.size(lt_ + "  ", FS)[0], y, FS, UI.ACCENT, 1))
-            lz_ = f"Laser {m.laser:g} mW" if m.laser else "Laser off"
+            lz_ = f"Laser on {m.laser:g} mW" if m.laser else "Laser on"
             xz_ = x_l + UI.size(lt_ + "  L      ", FS)[0]
             ops.append(('t', lz_, xz_, y, FS, (80, 80, 255) if m.laser else UI.DIM, 1 if not m.laser else 2))
             ops.append(('t', "I", xz_ + UI.size(lz_ + "  ", FS, 2)[0], y, FS, UI.ACCENT, 1))
@@ -2782,7 +2822,7 @@ def _run(m, fullscreen=False, _keys=None):
             hv_ = (hx_[0] - (W - SM.CAR_W), hx_[1]) if hx_ is not None and hx_[0] >= W - SM.CAR_W else None
             pan_, hits_, cont_ = SM.carousel(H, items, sel_, car['scroll'], title="Selections", hover=hv_,
                                              tools=car_tools())
-            car['hits'], car['content'] = hits_, cont_
+            car['hits'], car['content'], car['W'] = hits_, cont_, W
             car['scroll'] = car_clamp(car['scroll'])
             dr_ = car.get('drag')
             tg_ = car_target(dr_['y']) if dr_ is not None else None
@@ -2822,6 +2862,9 @@ def _run(m, fullscreen=False, _keys=None):
                                        W=W - SM.CAR_W, low=True)
                 oy_ = UI.MENU_H + UI.TOOL_H
                 wiz['rects'] = {k2: (r2[0], r2[1] + oy_, r2[2], r2[3] + oy_) for k2, r2 in wr_.items()}
+            if pick.get('k') is not None:                  # список съёмок выделения
+                pick['rects'] = UI.pick_panel(view, pick['title'], PICK_HEAD, pick['rows'], pick['star'], pick.get('hover'),
+                                              pick.get('scroll', 0), W=W, note=PICK_NOTE)
             cv2.imshow(WIN, np.vstack([menu_img(W), view]))
             if n == 1:                                    # окно уже на экране: значок программы (Windows)
                 set_icon(WIN)
@@ -2842,6 +2885,16 @@ def _run(m, fullscreen=False, _keys=None):
                 clicks.append(key); key = -1
         if wiz.get('click'):                              # кнопка мастера Prepare
             wiz_action(wiz.pop('click'))
+            continue
+        if pick.get('k') is not None:                     # список съёмок: щелчок, Esc; прочие клавиши — мимо
+            c_ = pick.pop('click', None)
+            if c_ is None and key in (27, 13):
+                c_ = 'close' if key == 27 else ('star', pick.get('cur', pick['star']))
+            if c_ is not None:
+                r_ = pick_do(c_)
+                if r_:
+                    msg, msg_t = r_, time.monotonic()
+            clicks.clear()
             continue
         while clicks:                                     # щелчок по полю — ввод значения; по картинке — направляющие
             c_ = clicks.pop(0)
@@ -3020,6 +3073,10 @@ def _run(m, fullscreen=False, _keys=None):
                         msg, msg_t = (f"{SM.title(m, k)} " + ("hidden on the maps (the eye shows it again)"
                                                                 if rg_.get('hidden') else "shown on the maps")), time.monotonic()
                         continue
+                    if act == 'more' and k < len(m._regions):      # «...»: все съёмки, выбрать основную
+                        car['press'] = None
+                        msg, msg_t = pick_open(k), time.monotonic()
+                        continue
                     if act == 'obj' and k < len(m._regions):       # плашка объектива: следующий (пока не снято)
                         msg, msg_t = cycle_objective(k), time.monotonic()
                         continue
@@ -3089,6 +3146,11 @@ def _run(m, fullscreen=False, _keys=None):
                     m._keepalive()           # простой: запрос «на связи», чтобы Windows не усыпляла USB
             except MicroControlError as e:
                 msg, msg_t = str(e), time.monotonic()
+            continue
+        if key == 16 or (key > 0 and (key & 0xFF) in (ord('p'), ord('P')) and (key >> 16) & 0x04):   # Ctrl+P:
+            m._panel_hidden = not getattr(m, '_panel_hidden', False)                                  # левая панель
+            msg, msg_t = ("" if not m._panel_hidden else "Settings panel hidden: Ctrl+P or the arrow on the left "
+                          "shows it"), time.monotonic()
             continue
         if exit_key(key):                                 # Shift+Esc / Ctrl+Esc — выйти
             q_ = m.__dict__.get('_queue')
@@ -3229,7 +3291,7 @@ def _run(m, fullscreen=False, _keys=None):
                 L.event('MAN-007', msg + ".")
             elif ch == 'p':                                # левая панель: спрятать / показать
                 m._panel_hidden = not getattr(m, '_panel_hidden', False)
-                msg = "Panel hidden: P or the button shows it" if m._panel_hidden else ""
+                msg = "Panel hidden: Ctrl+P or the arrow on the left shows it" if m._panel_hidden else ""
             elif ch == 't':                                # повернуть картинку камеры на 180° (помнится для прибора)
                 m.turn_180 = not m.turn_180
                 m._map_win = None

@@ -1889,6 +1889,7 @@ class Microscope:
                 extra.update(parent_uid=self._regions[pk]['uid'], parent_selection=self._regions[pk]['num'],
                              parent_objective=self._regions[pk].get('obj'))
             folder = P_.scan_folder(pf, reg, name)
+            reg.pop('main', None)                              # новая съёмка — основная (звезда переходит к ней)
             keep = None
             if reg.get('shape') and mode_ != 'quality':        # не прямоугольник: только кадры, задевающие контур
                 from .layers import touches_frame

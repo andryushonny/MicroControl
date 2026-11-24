@@ -653,8 +653,12 @@ def _in_numbers(L, S):
 
 
 def lattice_in(sample, regs, r, self_too=False):
-    """Решётка, в которой думает человек, выбрав в меню выделение r: своя разметка крестов r (self_too) или
-    ближайшего родителя, где кресты отмечены; нет нигде — решётка образца. В номерах решётки образца."""
+    """Решётка выделения r — одна на весь образец (по крестам, отмеченным последними на любом выделении)."""
+    return sample.data.get('lattice') if sample is not None else None
+
+
+def _lattice_in_own(sample, regs, r, self_too=False):
+    """(Прежнее: своя разметка крестов r или родителя.) Не используется: сетка образца общая."""
     S = sample.data.get('lattice') if sample is not None else None
     by = {x.get('uid'): x for x in regs}
     cur = r if self_too else (by.get(r.get('parent')) if r is not None else None)
@@ -725,9 +729,9 @@ def update_lattice(m):
         if not g.ready() or getattr(g, 'seeded', False) or d.get('seeded'):
             continue
         L = LT.from_grid(f, g)
-        key_ = (L['numbered'], -obj_of(m, r), float(d.get('marks_t') or 0)) if L else None
-        if L and (best is None or key_ > best[1]):           # с номерами; затем — меньший объектив (поле шире: наклон
-            best = (L, key_)                                 # и шаг точнее на весь образец); затем — отмеченная последней
+        key_ = (float(d.get('marks_t') or 0), L['numbered']) if L else None
+        if L and (best is None or key_ > best[1]):           # сетка образца одна: по крестам, отмеченным последними
+            best = (L, key_)                                 # (на любом выделении); другие съёмки берут её
     old = m.sample.data.get('lattice')
 
     def alive(L_):                                      # съёмка, по которой решётка, ещё размечена
@@ -741,15 +745,39 @@ def update_lattice(m):
             m.sample.save()
             return True
         return False
-    if old and not old.get('stage') and old.get('numbered') and not best[0]['numbered'] and old.get('src') != best[0].get('src') \
-            and alive(old):
-        return False                                    # номера другой съёмки остаются; своя сетка заменяет свою
+    if old and not old.get('stage') and old.get('numbered') and not best[0]['numbered']:
+        best = (_in_numbers(best[0], old), best[1])     # новые кресты — номера литографии прежние
+        best[0].pop('own', None)
+        best[0]['src'] = best[0].get('src') or old.get('src')
     if old is None or any(not np.allclose(old[k], best[0][k], atol=1e-3) for k in ('O', 'e1', 'e2')) \
             or old.get('numbered') != best[0]['numbered']:
         m.sample.data['lattice'] = best[0]
         m.sample.save()
         return True
     return False
+
+
+def update_lattice_of(sample):
+    """update_lattice без окна микроскопа (просмотр): по образцу с диска. True, если решётка изменилась."""
+    import types
+    sh = types.SimpleNamespace(sample=sample, _sample=sample, _regions=sample.data.get('selections', []))
+    try:
+        return update_lattice(sh)
+    except Exception:
+        return False
+
+
+def lattice_key(L, folder=None):
+    """Отпечаток решётки (и совмещения съёмки folder): по нему подставленная сетка знает, что устарела."""
+    if not L:
+        return None
+    k = [round(float(v), 3) for kk in ('O', 'e1', 'e2') for v in L.get(kk, [])] + [bool(L.get('numbered'))]
+    if folder:
+        try:
+            k.append(round(os.path.getmtime(os.path.join(folder, 'align.json')), 2))
+        except OSError:
+            k.append(0)
+    return k
 
 
 def obj_of(m, r):

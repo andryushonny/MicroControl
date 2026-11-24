@@ -11,6 +11,14 @@ import cv2
 _FONT = cv2.FONT_HERSHEY_SIMPLEX
 
 
+def _mt(p):
+    """Время изменения файла или 0."""
+    try:
+        return os.path.getmtime(p)
+    except OSError:
+        return 0
+
+
 class NavMap:
     def __init__(self):
         self.c = None                     # центр вида, настоящие мкм
@@ -62,7 +70,11 @@ class NavMap:
         jp = os.path.join(folder, 'join', 'preview_all.jpg')
         if not os.path.exists(jp):
             return None
-        mt = os.path.getmtime(jp)
+        ap = os.path.join(folder, 'align.json')              # совмещение (A в просмотре) двигает картинку
+        try:
+            mt = (os.path.getmtime(jp), os.path.getmtime(ap) if os.path.exists(ap) else 0)
+        except OSError:
+            return None
         if folder in self._prev and self._prev[folder][0] == mt:
             return self._prev[folder][1:]
         from .snap import geometry
@@ -96,8 +108,8 @@ class NavMap:
         A = self.R @ Mi / k / self.s                        # пиксели превью -> пиксели карты
         t = self.R @ ((-off - self.c) / self.s) + (w / 2, h / 2)
         M = np.c_[A, t]
-        pic = cv2.warpAffine(img, M, (w, h), flags=cv2.INTER_LINEAR)
-        msk = cv2.warpAffine(ok, M, (w, h), flags=cv2.INTER_NEAREST) > 0
+        from .util import warp_clean                        # дробный сдвиг: без чёрной каймы на краях кадров
+        pic, msk = warp_clean(img, M, (w, h), alpha=ok)
         if clip:                                            # только внутри контура выделения: лишнее (кадры за краем,
             cm = np.zeros((h, w), np.uint8)                 # до шага мотора) не путает
             cv2.fillPoly(cm, [np.int32(np.round(self.to_px(np.asarray(r_, float)))) for r_ in clip], 1, cv2.LINE_8)
@@ -115,8 +127,8 @@ class NavMap:
         ck_ = tuple((f, tuple(round(float(v), 2) for r_ in clip.get(f, []) for p_ in r_ for v in p_)) for f in scans)
         alpha = alpha or {}
         key = (w, h, tuple(np.round(self.c, 3)), round(self.s, 6), self.turn, ck_, tuple(sorted(alpha.items())),
-               tuple((f, os.path.getmtime(os.path.join(f, 'join', 'preview_all.jpg'))
-                      if os.path.exists(os.path.join(f, 'join', 'preview_all.jpg')) else 0) for f in scans))
+               tuple((f, _mt(os.path.join(f, 'join', 'preview_all.jpg')), _mt(os.path.join(f, 'align.json')))
+                     for f in scans))
         if key != self._key:
             canvas = np.full((h, w, 3), 24, np.uint8)
             step = 10 ** np.floor(np.log10(max(1e-3, self.s * 80)))          # сетка мкм — для ориентира

@@ -357,6 +357,12 @@ def area_at(m, x, y, any_objective=False):
     from .layers import contains
     hits = [k for k, rg in enumerate(m._regions) if rg.get('kind') != 'group' and contains(m, rg, x, y)]
     same = [k for k in hits if obj(m, m._regions[k]) == m.objective]
+    sel_ = getattr(m, '_sel', None)
+    if sel_ in same:                                       # перекрываются: выбранное справа — первым,
+        return sel_
+    if same:                                               # дальше — по порядку списка (верхний слой)
+        rk_ = {k: i for i, k in enumerate(order(m))}
+        same.sort(key=lambda k: rk_.get(k, 1e9))
     if same or not any_objective:
         return same[0] if same else None
     return max(hits, key=lambda k: obj(m, m._regions[k])) if hits else None
@@ -410,20 +416,27 @@ def corner(m, which, img=None):
 
 
 def add_point(m):
-    """Точка фокуса (Z здесь): области под столиком, иначе новой, иначе выбранной. Возвращает сообщение."""
+    """Точка фокуса (Z здесь): новой (угол 1 уже есть), иначе ВЫБРАННОЙ справа (её объектив должен стоять),
+    иначе той, что под столиком. Возвращает сообщение."""
     from .errors import MicroControlError
     init_areas(m)
     rp, p = m.real_position, m.position
-    k = area_at(m, rp.x, rp.y)                             # только выделения текущего объектива: Z свой у каждого
-    if k is not None:
-        m._regions[k]['pts'].append(dict(x=rp.x, y=rp.y, z=rp.z))
-    elif m._pending:
+    k = None
+    sel_ = m._sel if m._sel is not None and m._sel < len(m._regions) and \
+        m._regions[m._sel].get('kind') not in ('group', 'draft') else None
+    if m._pending:
         m._pending['pts'].append(dict(x=rp.x, y=rp.y, z=rp.z))
-    elif m._sel is not None and obj(m, m._regions[m._sel]) == m.objective:
-        k = m._sel
+    elif sel_ is not None:                                 # выбранная — ей (выделения перекрываются: не по месту)
+        if obj(m, m._regions[sel_]) != m.objective:
+            raise MicroControlError('E701', f"Selection {num(m, sel_)} is for {obj(m, m._regions[sel_])}x, the objective "
+                                            f"is {m.objective}x: its focus points need its objective (O)")
+        k = sel_
         m._regions[k]['pts'].append(dict(x=rp.x, y=rp.y, z=rp.z))
     else:
-        raise MicroControlError('E701', f"Mark a selection with {m.objective}x first: keys 1 and 2")
+        k = area_at(m, rp.x, rp.y)                         # ничего не выбрано — та, что под столиком
+        if k is None:
+            raise MicroControlError('E701', f"Choose a selection (its card) or mark one with {m.objective}x: keys 1 and 2")
+        m._regions[k]['pts'].append(dict(x=rp.x, y=rp.y, z=rp.z))
     fpn = len(numbered(m)) if k is None else [n_ for n_, kk, _p in numbered(m) if kk == k][-1]
     persist(m)
     who = f"Selection {num(m, k if k is not None else len(m._regions))}"

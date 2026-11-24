@@ -460,7 +460,7 @@ def all_scans(sample_folder):
     return [s for s in sorted(glob.glob(os.path.join(sample_folder, 'scans', '*'))) if is_scan(s)]
 
 
-def latest_scans(sample_folder):
+def latest_scans(sample_folder, stitched=False):
     """Основная (Make main) или последняя съёмка каждого выделения из sample.json — в порядке списка (сверху вниз:
     верхний слой первым). Удалённые выделения не показываются (папки остаются: Ctrl+Z вернёт)."""
     sj = os.path.join(sample_folder, 'sample.json')
@@ -479,6 +479,11 @@ def latest_scans(sample_folder):
             continue
         mn = r.get('main')
         pick = [f for f in v if os.path.basename(f) == mn] if mn else []
+        if stitched:                                       # показать: основная или самая новая СШИТАЯ (есть картинка)
+            has = lambda f: os.path.exists(os.path.join(f, 'join', 'preview_all.jpg'))
+            pick = [f for f in pick if has(f)] or [f for f in reversed(v) if has(f)][:1]
+            if not pick:
+                continue
         out.append(pick[0] if pick else v[-1])
     return out
 

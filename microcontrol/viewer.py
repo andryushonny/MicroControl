@@ -297,7 +297,10 @@ def _view(folder, fullscreen=False, _keys=None):
         cur = _view_one(cur, fullscreen, keys, car)
     if not fullscreen:
         window_size(WIN, remember=True)                                    # запомнить размер для следующего окна
-    cv2.destroyWindow(WIN)
+    try:                                                   # окно уже закрыли крестиком — ничего
+        cv2.destroyWindow(WIN)
+    except cv2.error:
+        pass
     cv2.waitKey(1)
 
 
@@ -2568,7 +2571,7 @@ def _view_one(folder, fullscreen, keys, car):
         from .snap import mosaic_to_stage, stage_to_mosaic, geometry
         from .layers import from_json
         my_obj = sc.st.meta.get('objective') or 0
-        scans_ = [f_ for f_ in P2_.latest_scans(smp.folder) if os.path.abspath(f_) != os.path.abspath(folder)]
+        scans_ = [f_ for f_ in P2_.latest_scans(smp.folder, stitched=True) if os.path.abspath(f_) != os.path.abspath(folder)]
         ap_ = os.path.join(folder, 'align.json')
         oth_ = car.get('others', True)
         me_uid_ = sc.st.meta.get('sample_uid')

@@ -1293,6 +1293,11 @@ def _run(m, fullscreen=False, _keys=None):
             sc_ = Selection(m.sample, rg_).latest
             if sc_ and os.path.exists(os.path.join(sc_.folder, 'join', 'preview_all.jpg')):
                 out.append((sc_.folder, k_))
+            elif sc_:                                      # последняя ещё не сшита — показать прежнюю сшитую
+                ok_ = [x_.folder for x_ in reversed(Selection(m.sample, rg_).scans)
+                       if os.path.exists(os.path.join(x_.folder, 'join', 'preview_all.jpg'))]
+                if ok_:
+                    out.append((ok_[0], k_))
         return out
 
     def shot_of(k):
@@ -3351,7 +3356,10 @@ def _run(m, fullscreen=False, _keys=None):
     SM.persist(m)
     if not fullscreen:
         window_size(WIN, remember=True)                                  # запомнить размер для следующего окна
-    cv2.destroyWindow(WIN)
+    try:                                                   # окно уже закрыли крестиком — ничего
+        cv2.destroyWindow(WIN)
+    except cv2.error:
+        pass
     cv2.waitKey(1)
     regs = m._regions
     real_ = [k for k, r in enumerate(regs) if r.get('kind') != 'group']

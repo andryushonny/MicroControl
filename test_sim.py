@@ -2270,3 +2270,22 @@ assert st62['q'] == ['fromview'] and not os.path.exists(os.path.join(m.sample.fo
 assert 'Queue' in st62['stq']['summary'], st62                              # состояние очереди — просмотру
 assert m.queue.jobs[0].state == 'done'
 m.close(); print("The view as its own process: selections, scans into the queue and the queue state go through the sample files: OK")
+
+
+# ------------------------------------------------------------------ 63. K — точка фокуса выбранному выделению, даже если под столиком лежит и другое (перекрываются)
+from microcontrol import samples as SM
+m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp()); m.focus(); fw, fh = m.frame_size
+SM.corner(m, 1); m.move(dx=3 * fw); m.move(dy=2 * fh); SM.corner(m, 2)                       # A
+m.goto(x=fw, y=fh / 2); SM.corner(m, 1); m.move(dx=2 * fw); m.move(dy=fh); SM.corner(m, 2)  # B поверх A
+kA = next(k for k, r in enumerate(m._regions) if r['num'] == 1); kB = 1 - kA
+nA, nB = len(m._regions[kA]['pts']), len(m._regions[kB]['pts'])
+m._sel = kA; m.goto(x=1.5 * fw, y=fh); print(SM.add_point(m))
+assert (len(m._regions[kA]['pts']), len(m._regions[kB]['pts'])) == (nA + 1, nB)
+m._sel = kB; SM.add_point(m)
+assert (len(m._regions[kA]['pts']), len(m._regions[kB]['pts'])) == (nA + 1, nB + 1)
+m.objective = 50
+try:
+    SM.add_point(m); raise AssertionError("a 10x focus point taken with 50x")
+except mc.MicroControlError as e:
+    assert 'objective' in str(e), e
+m.close(); print("K: the focus point goes to the chosen selection (overlapping ones too), only with its objective: OK")

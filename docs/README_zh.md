@@ -153,11 +153,14 @@ m.info()          # 时间花在哪里：每个操作都计时，耗时最长的
 | **查看器窗口** | 网格、编号、选择方格、导出 | `mc.view(folder)`：鼠标和按键 |
 | **G 代码** | 移动和拍照的程序，类似 3D 打印机 | `m.gcode("G0 X500 Y200\nM240")`；`m.plan()` 生成扫描程序，可以修改 |
 | **命令行** | 在另一个窗口中检查和紧急停止 | `python -m microcontrol probe` · `status` · `stop` |
+| **仪器在另一台电脑上** | 显微镜旁的旧电脑为其服务，Jupyter 在高性能电脑上运行 | 那边 `python -m microcontrol serve` · 这边 `mc.Microscope('net://密钥@192.168.50.2', objective=10)` |
 | **AI 智能体** | 本地语言模型通过工具工作，每个操作由操作员批准 | `mc.agent.chat(m, model='qwen3:8b')`、MCP 服务器 |
 
 参数是带范围检查的普通属性：`m.settings` 列出全部参数，`m.photo_pause = 0.5` 修改一个，超出范围的值会被拒绝并给出允许范围。`mc.help()` 打印简要说明。
 
 **紧急停止：** 在任意控制台运行 `python -m microcontrol stop`（或创建文件 `~/.microcontrol/STOP`）：正在运行的程序会发送「照明 0」和「激光 0」，关闭端口并停止。 如果程序崩溃或被杀而未关闭仪器，独立的看守进程会自行关闭激光、电机、照明和制冷。
+
+**仪器在另一台电脑上。** 在连接显微镜和相机的电脑上运行：`python -m microcontrol serve`（自动找到控制器、打开相机，并打印带密钥的地址）。在高性能电脑上：`m = mc.Microscope('net://密钥@192.168.50.2', objective=10)` —— 密钥会被记住，下次只需 `net://192.168.50.2`；其余一切与仪器就在旁边时相同，计算在本机进行。用以太网线直连并设置固定地址，或接同一路由器；Wi-Fi 也可以（此时帧以 JPEG 95 传输）。安全保障留在仪器端：10 s 没有程序的消息，或连接未经 `m.close()` 就断开 —— 服务器关闭激光、电机、照明和制冷；`python -m microcontrol stop net://192.168.50.2` 可在任何地方停止。通过互联网 —— 只能经由 VPN（Tailscale、WireGuard）。
 
 ---
 

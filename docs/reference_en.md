@@ -62,6 +62,7 @@ Modules:
 | `device` | instrument memory: home and last position |
 | `control` | exclusive access, emergency stop |
 | `guard` | crash guard: switches the instrument off if the program dies |
+| `remote` | server at the instrument: the program on another computer (net://) |
 | `sim` | instrument simulator |
 | `probe` | controller link check |
 
@@ -864,6 +865,22 @@ The list of such processes without stopping them: `python -m microcontrol holder
 
 Limitation: the controller has no "stop" command. The part of a move already sent (at most 1 mm) will be executed. The last resort is the instrument power switch.
 
+**Instrument on another computer** (`remote.py`). The PC next to the microscope (the controller on its COM port, the camera on USB) runs a thin server, the program runs on a fast PC:
+```
+python -m microcontrol serve        # at the instrument: --port COM5|auto|sim, --listen 0.0.0.0:5150, --no-camera, --dead 10
+```
+```python
+m = mc.Microscope('net://KEY@192.168.50.2', objective=10)    # on the fast PC; the key is printed by the server
+```
+- **Exchange.** Every controller command is one transaction: the frame goes to the server, it writes it to the port and returns the reply (one network round trip; the program keeps its 60 ms pause between commands anyway, so a cable adds nothing noticeable, the internet adds 30–80 ms per command). Camera frames go on their own connection, so they do not hold up the commands. The kind of frame is chosen by a measurement on connection: from 90 MB/s (gigabit cable) — uncompressed (the old PC does not encode 5 Mpx), from 25 MB/s — PNG (lossless), slower — JPEG 95; `MC_NET_CODEC=raw|png|jpg95` sets it.
+- **Safety at the instrument.** The program sends "alive" every second (from a thread, also while it computes). Without a word for `--dead` seconds (default 10), or when the connection breaks without `m.close()`, the server switches off the laser, the X, Y motors, the light and the cooling (if it was on) and drops the program. If the server itself dies, its guard switches the instrument off. `python -m microcontrol stop net://ADDRESS` (no key needed) — the same from any computer; `python -m microcontrol status net://ADDRESS` — what is on, who is connected, the last switch-off and its reason. The server passes only the allowed commands (`protocol.ALLOWED`), as the program itself.
+- **Connection lost.** The program reconnects by itself (3 attempts). Every command has a number, and the server remembers the last one done with its reply: a command on which the connection broke is known exactly — done (its reply is taken) or not delivered (sent again; the motors are switched on again first). So a move is never "maybe done". If the server had switched the instrument off meanwhile, the light comes back, the laser stays off (a warning; set it again by hand).
+- **One owner.** A second program is refused (`E106`) while the first one is alive.
+- **The key.** It is created on the first start (`~/.microcontrol/server_token` on the server). The program gives it once (`net://KEY@address` or `MC_TOKEN`) and remembers it (`~/.microcontrol/net_tokens.json`). The key itself never goes over the network (HMAC of a random challenge); the data are not encrypted — over the internet use only a VPN (Tailscale, ZeroTier, WireGuard), never an open port.
+- **Instrument memory** (stage position, home, the last frame) lives on the server, so programs on any computer — and a program run on the old PC itself — see the same position; the program keeps a copy and sends every change at once.
+- **Connection.** A direct Ethernet cable (any cable; fixed addresses, e.g. 192.168.50.1 and 192.168.50.2) or one router; a monoblock without an Ethernet port — a USB 3 gigabit adapter. Wi-Fi works, frames then go as JPEG. On the first start Windows asks whether Python may accept connections — allow it for private networks (or open TCP 5150 in the firewall).
+- `serve --port sim` — the server on the simulator, to try everything without the instrument.
+
 ---
 
 ## 18. Simulator
@@ -1051,6 +1068,8 @@ Error texts are in English, with a code. List: `mc.ERRORS`.
 |---|---|
 | E101–E108 | connection: port not found, busy, not an ATR8300, closed, unknown parameter, instrument held by another program, wrong reply, the port did not open |
 | E110 | emergency stop |
+| E111 | wrong or missing key for the microscope server |
+| E112 | the microscope server does not answer |
 | E201 | step too large |
 | E202 | target outside the allowed travel |
 | E203 | above the Z ceiling (risk of hitting the objective) |

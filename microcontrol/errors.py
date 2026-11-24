@@ -10,6 +10,8 @@ CODES = {
     'E107': "The device does not answer like an ATR8300",
     'E108': "Port does not open",
     'E110': "Emergency stop",
+    'E111': "Wrong or missing key for the microscope server",
+    'E112': "The microscope server does not answer",
     'E201': "Step too large",
     'E202': "Target outside the allowed travel",
     'E203': "Z above the ceiling (objective collision risk)",

@@ -153,11 +153,14 @@ The same microscope can be driven in six ways; they can be mixed in one session.
 | **Viewer window** | grid, numbers, choosing squares, export | `mc.view(folder)`: mouse and keys |
 | **G-code** | programs of moves and pictures, like a 3D printer | `m.gcode("G0 X500 Y200\nM240")`; `m.plan()` writes the scan program, you can edit it |
 | **Command line** | checks and emergency stop from another window | `python -m microcontrol probe` · `status` · `stop` |
+| **Instrument on another computer** | the old PC next to the microscope serves it, Jupyter runs on a fast PC | `python -m microcontrol serve` there · `mc.Microscope('net://KEY@192.168.50.2', objective=10)` here |
 | **AI agent** | a local language model works through tools, the operator allows each action | `mc.agent.chat(m, model='qwen3:8b')`, MCP server |
 
 Settings are ordinary properties with checked ranges: `m.settings` lists all of them, `m.photo_pause = 0.5` changes one, a value out of range is refused with the allowed range. `mc.help()` prints a short guide.
 
 **Emergency stop:** `python -m microcontrol stop` in any console (or the file `~/.microcontrol/STOP`): a running program sends "light 0" and "laser 0", closes the port and stops. If the program crashes or is killed without closing the instrument, a separate guard process switches the laser, motors, light and cooling off by itself.
+
+**Instrument on another computer.** On the PC the microscope and camera are plugged into: `python -m microcontrol serve` (it finds the controller, opens the camera and prints the address with the key). On the fast PC: `m = mc.Microscope('net://KEY@192.168.50.2', objective=10)` — the key is remembered, next time `net://192.168.50.2` is enough; everything else works as with the instrument next to you, the computing is done here. A direct Ethernet cable with fixed addresses or one router; Wi-Fi works too (frames then go as JPEG 95). Safety stays at the instrument: without a word from the program for 10 s, or when the connection breaks without `m.close()`, the server switches the laser, motors, light and cooling off; `python -m microcontrol stop net://192.168.50.2` stops it from anywhere. Over the internet — only through a VPN (Tailscale, WireGuard).
 
 ---
 

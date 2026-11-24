@@ -288,6 +288,7 @@ class Microscope:
         object.__setattr__(self, '_cfg', {})
         self._lock = None
         self._guard = None                     # сторож: выключит прибор, если программа вылетит (guard.py)
+        self._link = None                      # net://: связь с сервером у прибора (remote.py)
         self.port = port
         self.folder = os.path.abspath(folder)
         self.dirs = {d: os.path.join(self.folder, d) for d in ('logs', 'photos', 'scans', 'references')}
@@ -327,7 +328,10 @@ class Microscope:
                          one_side=False, overshoot=10,
                          log_bytes=True)
         self._open_port(port, force)
-        if not sim and os.environ.get('MC_GUARD', '1') != '0':
+        if self._link is not None and self._link.info.get('sim'):    # сервер на симуляторе: паузы как у симулятора
+            self._fast = True
+            self._cfg.update(move_pause=0.0, photo_pause=0.0, light_pause=0.0)
+        if not sim and self._link is None and os.environ.get('MC_GUARD', '1') != '0':   # по сети сторож — у сервера
             from . import guard as _G
             self._guard = _G.start(self.port, cooling, self.dirs['logs'])
             if self._guard is None:
@@ -337,10 +341,14 @@ class Microscope:
             self._handshake()
             _step_msg(f"  Controller   {self.device['Model']}, serial {self.device['Serial']}, type {self.device['Type']}")
             mem_dir = os.path.join(self.folder, '.microcontrol', 'devices') if sim else None
-            self._mem = DeviceMemory(*self._ident, folder=mem_dir)
+            if self._link is not None:                 # по сети: память прибора — на сервере (общая для всех)
+                from .remote import remote_memory
+                self._mem = self._link.mem = remote_memory(self._link, *self._ident)
+            else:
+                self._mem = DeviceMemory(*self._ident, folder=mem_dir)
             restored = self._restore()
             orient = dict(self._mem.data.get('orientation', {}))       # ориентация этого прибора (помнится)
-            if not sim:
+            if not sim and not (self._link is not None and self._link.info.get('sim')):
                 orient.setdefault('swap_xy', True)     # ATR8300: камера повёрнута на 90° к осям столика (проверено)
                 orient.setdefault('map_flip_x', True)  # ATR8300: так мини-карта совпадает с положением на подложке
                 orient.setdefault('map_flip_y', True)  # (по словам пользователя); [ и ] в ручном режиме — поменять
@@ -357,6 +365,9 @@ class Microscope:
                 if self._world is not None:
                     from .sim import SimCamera
                     self.cam = SimCamera(self._world)
+                elif self._link is not None:
+                    from .remote import RemoteCamera
+                    self.cam = RemoteCamera(self._link)
                 else:
                     from .camera import MVCamera
                     _step_msg("  Camera       opening ...")
@@ -625,6 +636,23 @@ class Microscope:
                            f"Calibration block {len(info['GET_CALIB'])} bytes.")
 
     def _open_port(self, port, force):
+        if str(port).startswith('net://'):          # прибор на другом компьютере: python -m microcontrol serve там
+            from .remote import Link, RemoteSerial
+            self._take_lock(port.split('@')[-1])
+            _step_msg(f"  Server       {port.split('@')[-1]} connecting ...")
+            self._link = Link(port)
+            self._ser = RemoteSerial(self._link)
+            self.port = 'net://' + self._link.key
+            lo = self._link.info.get('last_off')
+            L.event('CON-001', f"Server {self._link.key}: controller {self._link.info.get('port')}"
+                               f"{' (simulator)' if self._link.info.get('sim') else ''}, camera "
+                               f"{(self._link.info.get('camera') or {}).get('model', 'none')}, frames "
+                               f"{self._link.codec_now}" + (f" ({self._link.mbs:.0f} MB/s)" if self._link.mbs else "")
+                               + f", safe off after {self._link.info.get('dead_s')} s without this program."
+                               + (f" Last safe off: {lo['reason']}." if lo else ""))
+            _step_msg(f"  Server       {self._link.key}: controller {self._link.info.get('port')}, frames "
+                      f"{self._link.codec_now}" + (f" ({self._link.mbs:.0f} MB/s)" if self._link.mbs else ""))
+            return
         if port == 'sim':
             self._take_lock('sim')
             from .sim import SimWorld, SimPort
@@ -801,6 +829,19 @@ class Microscope:
                 raise CommError('E307', f"{P.NAMES.get(cmd, hex(cmd))}: {e}") from None
             self._reopen(e)
             axis = {c: a for a, c in P.MOTOR.items()}.get(cmd)
+            if self._link is not None and isinstance(e, ConnectionError):   # по сети сервер знает, дошла ли команда
+                got = self._link.pending_result()
+                if got:                                # выполнена: её ответ
+                    L.event('CON-006', f"{P.NAMES.get(cmd, hex(cmd))}: done before the connection was lost.")
+                    if got[4] != cmd:
+                        raise CommError('E304', f"Sent 0x{cmd:02X}, got 0x{got[4]:02X}.")
+                    return bytes(got[5:-1])
+                if got is False:                       # не дошла до контроллера: повторить (моторы — заново)
+                    L.event('CON-006', f"{P.NAMES.get(cmd, hex(cmd))}: did not reach the controller, sent again.")
+                    if axis and not self._motors_on:
+                        self._raw1(P.TURN_MOTOR, b"\x01")
+                        self._motors_on = True
+                    return self._raw(cmd, data, timeout, _retry=False)
             if axis:                                   # движение могло выполниться, а могло и нет — не повторяем
                 self._uncertain.add(axis)
                 raise CommError('E307', f"The connection was lost during a move on {axis.upper()} and restored. "
@@ -810,6 +851,8 @@ class Microscope:
 
     def _reopen(self, why):
         """Порт пропал: закрыть и открыть заново (до 3 попыток), восстановить свет и охлаждение."""
+        if self._link is not None:
+            return self._relink(why)
         L.event('CON-006', f"Connection lost ({why}). Reopening {self.port}.", 30)
         try:
             self._ser.close()
@@ -835,9 +878,44 @@ class Microscope:
         except Exception:
             pass
 
+    def _relink(self, why):
+        """net://: ошибка прибора — связь цела, ничего не делать; обрыв связи — подключиться заново. Если сервер успел
+        выключить прибор (не было вестей), лазер, свет и моторы выключены: свет — обратно, лазер — только руками."""
+        if not isinstance(why, ConnectionError):
+            return
+        L.event('CON-006', f"Connection to the server lost ({why}). Reconnecting {self.port}.", 30)
+        last = why
+        for attempt in range(3):
+            time.sleep(1.0)
+            try:
+                reset = self._link.reconnect()
+                break
+            except Exception as e:
+                last = e
+        else:
+            raise CommError('E307', f"Could not reconnect to the server {self.port} ({last}). The server has switched "
+                                    "the laser, motors and light off. Check the network, then reconnect.") from None
+        self._motors_on = False
+        if reset:
+            was = self._cfg.get('laser', 0)
+            self._cfg['laser'] = 0
+            L.event('CON-006', f"Reconnected. The server had switched off the laser, motors and light "
+                               f"({self._link.info['last_off']['reason']})"
+                               + (f"; the laser stays off (was {was} mW): set it again by hand." if was else "."), 30)
+            warnings.warn("The connection to the microscope server was lost and the server switched the laser, "
+                          "motors and light off. Reconnected; the light is back, the laser stays off.")
+        else:
+            L.event('CON-006', f"Reconnected to {self.port}.")
+        try:
+            self._raw1(P.LIGHT, int(self._cfg.get('light', 0)).to_bytes(2, 'big'))
+            if self._cooling:
+                self._raw1(P.SET_TEC, P.tec_data(P.COOL_C))
+        except Exception:
+            pass
+
     def _keepalive(self, every=2.0):
         """Простой без обмена: безобидный запрос на чтение, чтобы Windows не усыпляла USB-порт."""
-        if self._ser is None or self._world is not None or time.monotonic() - self._last < every:
+        if self._ser is None or self._world is not None or self._link is not None or time.monotonic() - self._last < every:
             return
         self._quiet = True                             # не засорять журнал запросами «на связи»
         try:
@@ -850,6 +928,18 @@ class Microscope:
         if wait > 0:
             time.sleep(wait)
         frame = P.pack(cmd, data)
+        if self._link is not None:                    # по сети: кадр туда, ответ обратно — одним кругом
+            try:
+                if not self._quiet:
+                    L.debug('HW-TX', f"{P.NAMES[cmd]:<10} {frame.hex(' ').upper()}")
+                rcmd, rdata, raw = self._ser.transact(frame, timeout or REPLY_TIMEOUT_S)
+                if not self._quiet:
+                    L.debug('HW-RX', f"{P.NAMES[cmd]:<10} {raw.hex(' ').upper()}")
+            finally:
+                self._last = time.monotonic()
+            if rcmd != cmd:
+                raise CommError('E304', f"Sent 0x{cmd:02X}, got 0x{rcmd:02X}.")
+            return rdata
         try:
             self._ser.reset_input_buffer()
             import serial

@@ -2416,3 +2416,104 @@ pr = subprocess.run([sys.executable, '-c', f"import sys, runpy; sys.argv=['g', '
 assert pr.stdout.split() == ['False', 'False'], (pr.stdout, pr.stderr[-500:])
 print(f"Crash guard: after os._exit, SIGKILL and an unhandled error the laser, motors, light and cooling are switched "
       f"off ({len(want)} commands), a normal close leaves the guard silent; the guard loads no OpenCV/numpy: OK")
+
+
+# ------------------------------------------------------------------ 56. Сервер у прибора (net://): ключ, один хозяин, команды и кадры по сети, скан и сшивка, память у сервера; нет вестей / вылет / stop по сети — сервер выключает прибор; обрыв посреди движения — сервер знает, дошло ли
+import socket as _so, warnings as _wn
+from microcontrol import remote as RM
+from microcontrol.errors import SafetyError as _SE
+_s = _so.socket(); _s.bind(('127.0.0.1', 0)); P56 = _s.getsockname()[1]; _s.close()
+hs_ = tempfile.mkdtemp()                                          # «старый компьютер»: свой дом
+root56 = os.path.dirname(os.path.dirname(os.path.abspath(mc.__file__)))
+srv = subprocess.Popen([sys.executable, '-m', 'microcontrol', 'serve', '--port', 'sim', '--listen', f'127.0.0.1:{P56}',
+                        '--dead', '2'], env=dict(os.environ, HOME=hs_, USERPROFILE=hs_, PYTHONPATH=root56),
+                       stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+t_ = time.time()
+while not os.path.exists(os.path.join(hs_, '.microcontrol', 'server_token')) and time.time() - t_ < 30:
+    time.sleep(0.1)
+time.sleep(1.0)
+TOK = open(os.path.join(hs_, '.microcontrol', 'server_token')).read().strip()
+U = f'net://127.0.0.1:{P56}'
+try:
+    for bad_ in (f'net://wrong@127.0.0.1:{P56}', U):                  # чужой ключ; ключа нет (ещё не запомнен)
+        try:
+            mc.Microscope(bad_, objective=10, folder=tempfile.mkdtemp()); raise AssertionError(bad_)
+        except _SE as e:
+            assert e.code == 'E111', e
+    m = mc.Microscope(f'net://{TOK}@127.0.0.1:{P56}', objective=10, folder=tempfile.mkdtemp())
+    assert m.port == U and m._link.codec_now in ('raw', 'png') and m.cam.grab().shape == (480, 640, 3)
+    for c_ in ('raw', 'png', 'jpg95'):                             # все три вида кадров
+        m._link.codec_now = c_
+        g_ = m.cam.grab(); assert g_.shape == (480, 640, 3) and g_.dtype == np.uint8 and g_.std() > 5, c_
+    m._link.codec_now = 'raw'
+    import microcontrol.manual as M56
+    M56.run(m, fullscreen=False, _keys=[-1, ord('d'), -1, -1])     # ручной режим по сети: шаг клавишей
+    try:
+        mc.Microscope(U, objective=10, folder=tempfile.mkdtemp()); raise AssertionError('second owner')   # ключ запомнен
+    except _SE as e:
+        assert e.code == 'E106', e
+    m.light = 3
+    m.focus()
+    fw, fh = m.frame_size
+    m.area = mc.Area(0, 0, 3 * fw, 2 * fh)
+    f_ = m.scan(name='net')                                        # скан и сшивка — как с прибором рядом
+    info_ = mc.stitch(f_, verbose=False)
+    assert os.path.exists(os.path.join(f_, 'join', 'preview_all.jpg'))
+    st_ = RM.status(U)['state']; assert st_['light'] == 3 and st_['motors'], st_
+    m.set_home()
+    m.move(dx=300, dy=-200)
+    m._link._paused = True; time.sleep(3.5); m._link._paused = False    # «сеть зависла»: сервер выключил прибор
+    st_ = RM.status(U); assert st_['state'] == dict(laser=0, light=0, motors=False, cooling=False) and \
+        'no word' in st_['last_off']['reason'], st_
+    with _wn.catch_warnings(record=True) as W_:
+        _wn.simplefilter('always')
+        m.move(dx=50)                                              # команда не дошла: повторена, положение точное
+    assert any('switched the laser' in str(w_.message) for w_ in W_), [str(w_.message) for w_ in W_]
+    assert not m._uncertain and abs(m._p['x'] * m.motor_step - (300 + 50)) <= m.motor_step, (m._uncertain, m._p)
+    p_ = dict(m._p)
+    assert RM.status(U)['state']['light'] == 3                    # свет вернулся, лазер — нет
+    # команда выполнена, связь оборвалась до ответа: сервер отдаёт её ответ после переподключения
+    seq0 = m._link.seq
+    m._link.pending = None
+    raw_ = m._link.transact(mc.protocol.pack(mc.protocol.GET_DEVICE_TYPE), 1.0)[2]
+    m._link.pending = m._link.seq
+    m._link.reconnect()
+    assert m._link.pending_result() == raw_
+    m._link.pending = m._link.seq + 1                             # не дошедшая
+    m._link.reconnect()
+    assert m._link.pending_result() is False
+    m.close()
+    st_ = RM.status(U); assert st_['owner'] is None and st_['state']['light'] == 0 and st_['state']['laser'] == 0, st_
+    # память прибора — у сервера: другая программа (другая папка, другой «компьютер») знает положение
+    hc2 = tempfile.mkdtemp()
+    code_ = f"""
+import os, microcontrol as mc
+m = mc.Microscope('net://{TOK}@127.0.0.1:{P56}', objective=10, folder={tempfile.mkdtemp()!r})
+print('POS', dict(m._p), flush=True)
+m.light = 2
+os._exit(1)                                                            # вылет без close()
+"""
+    pr_ = subprocess.run([sys.executable, '-c', code_], env=dict(os.environ, HOME=hc2, USERPROFILE=hc2, PYTHONPATH=root56),
+                         capture_output=True, text=True, timeout=60)
+    pos_ = eval(next(l_ for l_ in pr_.stdout.splitlines() if l_.startswith('POS'))[4:])
+    assert pos_ == p_, (pos_, p_, pr_.stdout[-500:], pr_.stderr[-500:])
+    time.sleep(0.5)
+    st_ = RM.status(U); assert st_['owner'] is None and st_['state']['light'] == 0 and \
+        'lost' in st_['last_off']['reason'], st_
+    # аварийная остановка по сети (без ключа) отключает программу
+    m = mc.Microscope(U, objective=10, folder=tempfile.mkdtemp())
+    m.light = 4
+    out_ = subprocess.run([sys.executable, '-m', 'microcontrol', 'stop', U], env=dict(os.environ, HOME=tempfile.mkdtemp(),
+                          PYTHONPATH=root56), capture_output=True, text=True, timeout=30).stdout
+    assert 'laser, motors, light off' in out_ and 'disconnected' in out_, out_
+    st_ = RM.status(U); assert st_['owner'] is None and st_['state']['light'] == 0 and 'stop' in st_['last_off']['reason']
+    m._link.close(bye=False)
+finally:
+    srv.terminate()
+    try:
+        so_ = srv.communicate(timeout=10)[0]
+    except Exception:
+        srv.kill(); so_ = ''
+print("Server at the instrument: key (wrong / none refused), one owner, commands and frames over the network (PNG), "
+      "scan and stitch, memory on the server; no word / crash / remote stop -> the server switches off; a lost move "
+      "is known done or not and repeated exactly: OK")

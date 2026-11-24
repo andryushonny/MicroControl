@@ -21,7 +21,8 @@ STOP_FILE = os.path.join(DIR, "STOP")
 
 
 def _lock_path(port):
-    return os.path.join(DIR, f"control_{str(port).replace(os.sep, '_').replace(':', '')}.lock")
+    import re
+    return os.path.join(DIR, f"control_{re.sub(r'[^A-Za-z0-9._-]+', '_', str(port).replace(':', ''))}.lock")
 
 
 class ControlLock:

@@ -2,7 +2,7 @@
 
 **用 Python 控制 Optosky ATR8300 拉曼显微镜：扫描基底，把它拼接成一张图，叠加光刻网格，选出需要的方格并导出给 AutoCAD。**
 
-**作者：** A. Lyapeikov, S. Domenko · **版本：** 0.33.1 · English: [README.md](../README.md) · Русский: [README_ru.md](README_ru.md) · PDF: [中文](MicroControl_zh.pdf) · 完整技术参考：[中文](reference_zh.md)、[EN](reference_en.md)、[RU](reference_ru.md)
+**作者：** A. Lyapeikov, S. Domenko · **版本：** 0.34.0 · English: [README.md](../README.md) · Русский: [README_ru.md](README_ru.md) · PDF: [中文](MicroControl_zh.pdf) · 完整技术参考：[中文](reference_zh.md)、[EN](reference_en.md)、[RU](reference_ru.md)
 
 ![总览：带样品网格的 10x 拍摄、方格编号、草稿、其中的 50x 与 100x](img/view.jpg)
 
@@ -53,7 +53,7 @@ m.close()
 - **对焦点：** 每个角点的高度 $Z$ 会被记录；`K` 添加更多对焦点。扫描时每帧根据这些点得到自己的 $Z$，因此倾斜的样品也保持清晰。勾选「Z follows the focus points」后，方向键移动也会跟随这些点。
 - **多个选区、图层：** 依次设置（`1`、`2`，再 `1`、`2`）。同一物镜的选区不能重叠，但高倍物镜的选区可以位于低倍物镜的选区之内（见下文*图层*）。右侧列表按嵌套显示：点击 —— 选择，**Go** —— 移动过去，**x** —— 删除。
 - **标尺：** 按 `R`，再点击两点 —— 显示以 µm 为单位的距离（两次点击之间可以移动载物台）。
-- **撤销：** `Ctrl+Z` 撤销任何一步（选区、对焦点、移动 —— 载物台开回原处），`Ctrl+Y` 恢复。
+- **撤销：** `Ctrl+Z` 撤销任一窗口中的任何操作（选区、物镜、勾选、顺序、对焦点、照明、步长、透明度、对齐、十字和单元、移动 —— 载物台会移回），最多 1000 步；`Ctrl+Y` 重做。
 
 `m.scan()` 以 30 % 的重叠（50x、100x 为 35 %）逐帧拍摄每个区域，并把各帧保存到新文件夹（每个选区一个子文件夹）；再次运行 `m.scan(name='test')` 会写入同一个文件夹。删除一个选区时，其他选区的编号和颜色不变。只拍摄当前物镜的选区。开始前会给出预计时间；该估计会从你这台显微镜以往的扫描中学习。`mc.stitch(folder)` 根据重叠部分测出每帧的真实位置，并把它们拼接成一张无缝的图。
 

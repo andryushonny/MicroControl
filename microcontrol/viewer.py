@@ -532,6 +532,7 @@ def _view_one(folder, fullscreen, keys, car):
                 sc.st.close()
             dst = SM.remove_sample(f)
             car['hist'].push(f"remove Selection {SM.sample_index(dst)}", None, None, kind='remove', src=f, dst=dst)
+            st['acted'] = False                             # это действие уже в истории
             rest = [s_ for s_ in subs if s_ != f]
             st['msg'] = f"Selection {SM.sample_index(dst)} removed to {dst} (Ctrl+Z: bring it back)"
             st['switch'] = (folder if f != folder else (rest[min(k, len(rest) - 1)] if rest else False))
@@ -1115,6 +1116,9 @@ def _view_one(folder, fullscreen, keys, car):
             (f"; {out_} outside this scan's selection - not taken" if out_ else "")
 
     def mouse(ev, x, y, flags, _=None):
+        if ev in (cv2.EVENT_LBUTTONDOWN, cv2.EVENT_LBUTTONUP, cv2.EVENT_RBUTTONDOWN, cv2.EVENT_RBUTTONUP,
+                  cv2.EVENT_LBUTTONDBLCLK):
+            st['acted'] = True                              # своё действие: что поменялось на диске — в историю
         if st.get('pick') and st['pick'].get('rects'):     # список съёмок: пока открыт — только он
             pk_ = st['pick']
             in_ = lambda r_: r_[0] <= x <= r_[2] and r_[1] <= y <= r_[3]
@@ -2284,7 +2288,7 @@ def _view_one(folder, fullscreen, keys, car):
         from .mask import Grid as _G
         g2_ = _G(folder)
         g.selected = set(g2_.selected)
-        h_last[:] = [g_sig(), g_snap()]
+        h_last[:2] = [g_sig(), g_snap()]
 
     def brush_commit():
         """Enter: выбранные клетки -> новое выделение (каждая фигура — своё), с объективом для новых (Shift+G) или
@@ -2314,7 +2318,9 @@ def _view_one(folder, fullscreen, keys, car):
         sh_._sample.data['focus'] = u_                      # окно микроскопа выберет его же
         PJ_.save_regions(sh_)
         sh_._sample.save()
+        hb_ = list(h_last[:2])
         regrid()
+        h_last[:2] = hb_                                    # клетки ушли в выделение — одним шагом Ctrl+Z с ним
         car['focus'] = u_
         st['_so_key'] = st['_sg_key'] = None
         st['car_dirty'] = True
@@ -2485,6 +2491,60 @@ def _view_one(folder, fullscreen, keys, car):
         t_ = (st['msg'] or "change").split(":")[0].split("(")[0].strip()
         return t_[:60]
 
+    def d_files():
+        """Файлы образца, которые меняет просмотр: sample.json (выделения, порядок, объективы, галочки, решётка,
+        основная), view.json (прозрачность), align.json съёмок (совмещение)."""
+        if smp is None:
+            return []
+        import glob as _gl
+        return [smp.file, os.path.join(smp.folder, 'view.json'), os.path.join(folder, 'grid.json')] + sorted(
+            _gl.glob(os.path.join(smp.folder, 'scans', '*', 'align.json')))
+
+    def d_snap():
+        """Содержимое этих файлов: {путь: текст или None}."""
+        out_ = {}
+        for p_ in d_files():
+            try:
+                out_[p_] = open(p_, encoding='utf-8').read()
+            except OSError:
+                out_[p_] = None
+        return out_
+
+    def d_mt():
+        return tuple((p_, _mt(p_)) for p_ in d_files())
+
+    def d_restore(t_):
+        """Вернуть файлы образца как были (нет файла — удалить)."""
+        al_ = False
+        for p_ in set(t_) | {p2_ for p2_ in d_files() if p2_.endswith('align.json')}:
+            want_ = t_.get(p_)
+            try:
+                now_ = open(p_, encoding='utf-8').read()
+            except OSError:
+                now_ = None
+            if want_ == now_:
+                continue
+            al_ = al_ or p_.endswith('align.json')
+            if want_ is None:
+                try:
+                    os.remove(p_)
+                except OSError:
+                    pass
+            else:
+                tmp_ = p_ + '.tmp'
+                with open(tmp_, 'w', encoding='utf-8') as f_:
+                    f_.write(want_)
+                os.replace(tmp_, p_)
+        if smp is not None:
+            try:
+                smp.data = json.load(open(smp.file, encoding='utf-8'))
+            except (OSError, ValueError):
+                pass
+        st['_so_key'] = st['_sg_key'] = st['_fl_key'] = None
+        st.pop('_lat', None)
+        st['car_dirty'] = st['dirty'] = True
+        return al_
+
     def h_apply(e_, back):
         """Откатить (back) или повторить действие e_. Разметка другого выделения — открыть его."""
         if e_.get('kind') == 'remove':
@@ -2498,6 +2558,10 @@ def _view_one(folder, fullscreen, keys, car):
             st['switch'] = e_['src'] if back else (folder if os.path.abspath(e_['src']) != os.path.abspath(folder) else False)
             return
         t_ = e_['before'] if back else e_['after']
+        if 'g' in t_:                                       # разметка + файлы образца
+            if t_.get('d') is not None and d_restore(t_['d']):   # совмещение поменялось — открыть заново
+                st['switch'] = folder if os.path.abspath(e_['folder']) == os.path.abspath(folder) else e_['folder']
+            t_ = t_['g']
         if os.path.abspath(e_['folder']) != os.path.abspath(folder):     # разметка другого выделения
             gg = Grid(e_['folder'])
             gg.__dict__.update(copy.deepcopy({k_: v_ for k_, v_ in t_.items() if k_ != 'folder'}))
@@ -3011,7 +3075,8 @@ def _view_one(folder, fullscreen, keys, car):
         st['_so_key'], st['_so'] = key_, out_
         return out_
 
-    h_last = [g_sig(), g_snap()]
+    h_last = [g_sig(), g_snap(), d_snap(), d_mt()]
+
     def mouse_cb(ev, x, y, flags, _=None):                 # окно: сверху меню, ниже — картинка и список
         if y < UI.MENU_H and st['down'] is None:
             menu['hover'] = x if ev == cv2.EVENT_MOUSEMOVE else menu['hover']
@@ -3028,13 +3093,21 @@ def _view_one(folder, fullscreen, keys, car):
     while True:
         if st['down'] is None and st.get('lab') is None:
             sg_ = g_sig()
-            if sg_ != h_last[0]:                            # что-то сделано: в историю
+            dm_ = d_mt()
+            dch_ = dm_ != h_last[3]
+            if dch_ and not st.get('acted'):                # файлы образца поменяло окно микроскопа — не шаг здесь
+                h_last[2], h_last[3] = d_snap(), dm_
+                dch_ = False
+            if sg_ != h_last[0] or dch_:                    # что-то сделано: в историю (разметка и файлы образца)
                 new_ = g_snap()
+                dn_ = d_snap()
                 sel_changed_ = sg_[2] != h_last[0][2]
-                hist.push(g_label(), h_last[1], new_, folder=folder, px=px_um)
-                h_last[:] = [sg_, new_]
+                if sg_ != h_last[0] or dn_ != h_last[2]:
+                    hist.push(g_label(), dict(g=h_last[1], d=h_last[2]), dict(g=new_, d=dn_), folder=folder, px=px_um)
+                h_last[:] = [sg_, new_, dn_, dm_]
                 if sel_changed_:                            # клетки выбраны — «Selection (new)» в списке; Enter — сделать
                     st['car_dirty'] = True
+            st['acted'] = False
         if _t.monotonic() - st.get('_sync_t', 0) > 0.5:  # окно микроскопа поменяло образец или кисть —
             st['_sync_t'] = _t.monotonic()                 # показать то же, что и там
             if smp is not None:                            # очередь окна микроскопа идёт: строка внизу — живая
@@ -3061,7 +3134,7 @@ def _view_one(folder, fullscreen, keys, car):
                     g2_ = Grid(folder)
                     if g2_.selected != g.selected:           # кисть поменяли там (удалили черновик и т. п.)
                         g.selected = set(g2_.selected)
-                        h_last[:] = [g_sig(), g_snap()]      # это не своё действие: не в историю
+                        h_last[:2] = [g_sig(), g_snap()]     # это не своё действие: не в историю
                         st['dirty'] = True
                 except Exception:
                     pass
@@ -3097,6 +3170,8 @@ def _view_one(folder, fullscreen, keys, car):
             show(np.hstack([with_prof(st['scene']), carousel_img()]))
             st['car_dirty'] = st['prof_dirty'] = False
         key = next(keys, EXIT) if keys is not None else cv2.waitKeyEx(8 if st['down'] else 20)
+        if key != -1:
+            st['acted'] = True
         if key != -1:
             st.pop('ruler_only', None)                     # клавиша могла поменять картинку: слои — заново
         if keys is not None:
@@ -3162,7 +3237,7 @@ def _view_one(folder, fullscreen, keys, car):
                 st['msg'] = "Nothing to undo" if ud_ == 'undo' else "Nothing to redo"
             else:
                 h_apply(e_, ud_ == 'undo')
-                h_last[:] = [g_sig(), g_snap()]
+                h_last[:] = [g_sig(), g_snap(), d_snap(), d_mt()]
                 st['msg'] = (f"Undone: {e_['label']}  (Ctrl+Y: redo, {len(hist)} more)" if ud_ == 'undo' else
                              f"Redone: {e_['label']}")
             st['dirty'] = True

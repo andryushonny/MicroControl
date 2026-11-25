@@ -2410,3 +2410,29 @@ nm66.c = np.array(SN66.mosaic_to_stage(fB66, [[200, 150]])[0], float)
 nm66._warp(cv66, fB66)                                                      # картинка на карте есть (уровни пирамиды — на пиксель)
 assert (cv66 != 24).any(axis=2).mean() > 0.2, (cv66 != 24).any(axis=2).mean()
 m.close(); print("Align moves only the chosen selection (the others stay), its outline goes with it, the map takes it at once: OK")
+
+
+# ------------------------------------------------------------------ 67. Ctrl+Z — всё: в просмотре прозрачность, совмещение (и контур), объектив; в окне микроскопа свет, шаги, повороты
+import microcontrol.manual as M
+from microcontrol import samples as SM, project as PJ, snap as SN67
+m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp()); m.focus(); fw, fh = m.frame_size
+SM.corner(m, 1); m.move(dx=fw); SM.corner(m, 2)
+m.goto(x=0.5 * fw, y=0.3 * fh); SM.corner(m, 1); m.move(dx=fw); SM.corner(m, 2)
+SM.persist(m); m.scan()
+fB67 = PJ.Selection(m.sample, m._regions[1]).latest.folder
+vj67 = os.path.join(m.sample.folder, 'view.json')
+alpha67 = lambda: (json.load(open(vj67)) if os.path.exists(vj67) else {}).get('alpha', {})
+A0 = json.load(open(m.sample.file))['selections'][1]['A']
+st67 = {}
+CZ, RIGHT = 26, 65363
+mc.view(fB67, _keys=[-1, ord('['), -1, ('call', lambda st: st67.update(a1=dict(alpha67()))), CZ, -1,
+                     ('call', lambda st: st67.update(a2=dict(alpha67()))),
+                     ord('a'), -1, RIGHT, RIGHT, -1, 13, -1, ('call', lambda st: st67.update(al=os.path.exists(os.path.join(fB67, 'align.json')))),
+                     CZ, -1, -1, 27, 27])
+assert st67['a1'] and not st67['a2'], st67                                   # [ — прозрачнее; Ctrl+Z — как было
+assert st67['al'] and not os.path.exists(os.path.join(fB67, 'align.json')), st67   # совмещение отменено
+assert json.load(open(m.sample.file))['selections'][1]['A'] == A0              # и контур на месте
+lt0 = m.light
+M.run(m, fullscreen=False, _keys=[-1, ord('l'), -1, ord('\\'), -1, -1, CZ, -1, CZ, -1, -1, 27])
+assert m.light == lt0 and int(m.map_turn) == 0, (m.light, m.map_turn)          # свет и поворот карты — назад
+m.close(); print("Ctrl+Z undoes everything: transparency, align with its outline, light, map turn: OK")

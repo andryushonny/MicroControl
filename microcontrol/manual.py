@@ -2381,14 +2381,23 @@ def _run(m, fullscreen=False, _keys=None):
     # история (Ctrl+Z / Ctrl+Y): после каждого действия — сравнить состояние с прежним
     hist = m.__dict__.setdefault('_history', History())
 
+    H_FLAGS = ('turn_180', 'arrows_flip_x', 'arrows_flip_y', 'map_turn', 'one_side', '_use_fp')
+
+    def h_misc():
+        """Остальное, что меняют руками: свет, лазер, шаги, повороты и стрелки, подъезд, точки фокуса, прозрачность
+        картинок, решётка образца."""
+        return dict(light=m.light, laser=m.laser, steps=dict(steps), flags={k_: getattr(m, k_, None) for k_ in H_FLAGS},
+                    alpha=map_alpha(), lattice=copy.deepcopy(m.sample.data.get('lattice')))
+
     def h_sig():
         strip = lambda r: None if r is None else {k_: v_ for k_, v_ in r.items() if k_ != 'thumbs'}
         return json.dumps([[strip(r) for r in m._regions], strip(m._pending), m._sel, getattr(m, '_area_seq', 0),
-                           m._p, m.objective, m._off, gsel], sort_keys=True, default=str)
+                           m._p, m.objective, m._off, gsel, h_misc()], sort_keys=True, default=str)
 
     def h_snap():
         return dict(regions=copy.deepcopy(m._regions), pending=copy.deepcopy(m._pending), sel=m._sel,
-                    seq=getattr(m, '_area_seq', 0), p=dict(m._p), obj=m.objective, off=dict(m._off), gs=copy.deepcopy(gsel))
+                    seq=getattr(m, '_area_seq', 0), p=dict(m._p), obj=m.objective, off=dict(m._off), gs=copy.deepcopy(gsel),
+                    misc=h_misc())
 
     def h_label(a_, b_):
         if a_['p'] != b_['p'] and json.dumps(a_['regions'], default=str) == json.dumps(b_['regions'], default=str):
@@ -2397,6 +2406,25 @@ def _run(m, fullscreen=False, _keys=None):
                    f"Z {b_['p']['z'] * s_ - b_['off']['z']:.0f} um"
         if a_['obj'] != b_['obj']:
             return f"objective {a_['obj']}x -> {b_['obj']}x"
+        ma_, mb_ = a_.get('misc') or {}, b_.get('misc') or {}
+        if json.dumps(a_['regions'], default=str) == json.dumps(b_['regions'], default=str) and ma_ != mb_:
+            if ma_.get('light') != mb_.get('light'):
+                return f"light {ma_.get('light')} -> {mb_.get('light')}"
+            if ma_.get('laser') != mb_.get('laser'):
+                return f"laser {ma_.get('laser')} -> {mb_.get('laser')} mW"
+            if ma_.get('steps') != mb_.get('steps'):
+                return "steps " + ", ".join(f"{a2_.upper()} {mb_['steps'][a2_]:g}" for a2_ in mb_['steps']
+                                           if ma_['steps'].get(a2_) != mb_['steps'][a2_]) + " um"
+            if ma_.get('alpha') != mb_.get('alpha'):
+                return "transparency of pictures"
+            if ma_.get('lattice') != mb_.get('lattice'):
+                return "grid of the sample"
+            for k_ in H_FLAGS:
+                if (ma_.get('flags') or {}).get(k_) != (mb_.get('flags') or {}).get(k_):
+                    return f"{k_.strip('_').replace('_', ' ')} -> {(mb_.get('flags') or {}).get(k_)}"
+        if a_['sel'] != b_['sel'] and json.dumps(a_['regions'], default=str) == json.dumps(b_['regions'], default=str):
+            return (f"chose Selection {m._regions[b_['sel']]['num']}" if b_['sel'] is not None and b_['sel'] < len(m._regions)
+                    else "chose nothing")
         return (msg or "change").split(":")[0][:60]
 
     def h_restore(t):
@@ -2418,6 +2446,33 @@ def _run(m, fullscreen=False, _keys=None):
             d0 = default_steps(m)
             steps['x'], steps['y'] = d0['x'], d0['y']
         m._off.update(t['off'])
+        mi_ = t.get('misc')
+        if mi_:
+            if mi_['light'] != m.light:
+                m.light = mi_['light']
+            if mi_['laser'] != m.laser:                     # лазер отмена только гасит: включить — клавишей I
+                if not mi_['laser']:
+                    m.laser = 0
+            steps.update(mi_['steps'])
+            for k_, v_ in (mi_.get('flags') or {}).items():
+                if v_ is not None and getattr(m, k_, None) != v_:
+                    setattr(m, k_, v_)
+            if mi_.get('alpha') != map_alpha():
+                p_ = os.path.join(m.sample.folder, 'view.json')
+                try:
+                    d_ = json.load(open(p_, encoding='utf-8'))
+                except (OSError, ValueError):
+                    d_ = {}
+                d_['alpha'] = mi_.get('alpha') or {}
+                with open(p_, 'w', encoding='utf-8') as f_:
+                    json.dump(d_, f_, indent=1)
+            if mi_.get('lattice') != m.sample.data.get('lattice'):
+                if mi_.get('lattice') is None:
+                    m.sample.data.pop('lattice', None)
+                else:
+                    m.sample.data['lattice'] = copy.deepcopy(mi_['lattice'])
+                m.sample.save()
+            m._map_win = None
         if t['p'] != m._p:
             s_ = m.motor_step
             tgt = {a_: t['p'][a_] * s_ - m._off[a_] for a_ in 'xyz'}
@@ -2445,7 +2500,8 @@ def _run(m, fullscreen=False, _keys=None):
             refresh_gs()
             sg_ = h_sig()
             new_ = h_snap()
-            hist.push(h_label(h_last[1], new_), h_last[1], new_)
+            if not qbusy() and not m.__dict__.pop('_h_ext', False):   # прибор водит очередь / пришло извне — не шаг
+                hist.push(h_label(h_last[1], new_), h_last[1], new_)
             h_last = (sg_, new_)
         if time.monotonic() - car.get('sync_t', 0) > 1.0:   # кисть в просмотре -> выделения (раз в секунду)
             car['sync_t'] = time.monotonic()
@@ -2479,12 +2535,16 @@ def _run(m, fullscreen=False, _keys=None):
                 msg_x_ = external_sync()
                 if msg_x_:
                     msg, msg_t = msg_x_, time.monotonic()
+                if h_sig() != h_last[0]:                   # поменяло окно просмотра — шаг его истории, не этой
+                    refresh_gs()
+                    h_last = (h_sig(), h_snap())
             except Exception as e_:
                 L.debug('MAN-022', f"External sync skipped: {e_}")
         qq_ = m.__dict__.get('_queue')
         if qq_ is not None:                                # закончилось в очереди: сообщение, карты заново
             for txt_, j_ in qq_.pop_events():
                 msg, msg_t = txt_, time.monotonic()
+                m.__dict__['_h_ext'] = True                # итог работы очереди — не шаг Ctrl+Z
                 if j_.folder and j_.state == 'done':
                     m._last_view = j_.folder
                 m._map_win = None

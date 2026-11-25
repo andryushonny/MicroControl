@@ -2,7 +2,7 @@
 
 **Python control of the Optosky ATR8300 Raman microscope: scan a substrate, stitch one picture of it, put the lithography grid on it, choose the squares you need and export them for AutoCAD.**
 
-**Authors:** A. Lyapeikov, S. Domenko · **Version:** 0.33.1 · Русский: [docs/README_ru.md](docs/README_ru.md) · 中文: [docs/README_zh.md](docs/README_zh.md) · PDF: [EN](docs/MicroControl_en.pdf), [RU](docs/MicroControl_ru.pdf), [中文](docs/MicroControl_zh.pdf) · Full technical reference: [EN](docs/reference_en.md), [RU](docs/reference_ru.md), [中文](docs/reference_zh.md)
+**Authors:** A. Lyapeikov, S. Domenko · **Version:** 0.34.0 · Русский: [docs/README_ru.md](docs/README_ru.md) · 中文: [docs/README_zh.md](docs/README_zh.md) · PDF: [EN](docs/MicroControl_en.pdf), [RU](docs/MicroControl_ru.pdf), [中文](docs/MicroControl_zh.pdf) · Full technical reference: [EN](docs/reference_en.md), [RU](docs/reference_ru.md), [中文](docs/reference_zh.md)
 
 ![Overview: the 10x scan with the grid of the sample, numbered squares, a draft, 50x and 100x inside](docs/img/view.jpg)
 
@@ -53,7 +53,7 @@ The microscope window closes with **Shift+Esc** or its ×; the view — with **E
 - **Focus points:** the height $Z$ at each corner is remembered; `K` adds more points. During the scan every frame gets its own $Z$ from these points, so a tilted sample stays sharp. With the checkbox "Z follows the focus points" the arrows also follow them.
 - **Several selections, layers:** set them one after another (`1`, `2`, then `1`, `2` again). Selections of one objective do not overlap, but a selection of a higher objective may lie inside one of a lower objective (see *Layers* below). The list on the right shows them nested: click — choose, **Go** — drive to it, **x** — delete.
 - **Ruler:** `R`, then click two points — the distance in µm (the stage may move between the clicks).
-- **Undo:** `Ctrl+Z` undoes any step (a selection, a focus point, a move — the stage drives back), `Ctrl+Y` redoes it.
+- **Undo:** `Ctrl+Z` undoes any action in either window (selections, objective, ticks, order, focus points, light, steps, transparency, align, crosses and cells, a move — the stage drives back), up to 1000 steps; `Ctrl+Y` redoes it.
 
 `m.scan()` shoots every area frame by frame with 30 % overlap (35 % at 50x, 100x) and saves the frames into a new folder (one sub-folder per selection); `m.scan(name='test')` again writes into the same folder. Selections keep their numbers and colours when one is deleted. Only the selections of the objective in place are shot. It prints the expected time; this estimate learns from the previous scans of your microscope. `mc.stitch(folder)` measures from the overlaps where each frame really is and joins them into one seamless picture.
 

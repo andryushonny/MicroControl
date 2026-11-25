@@ -1400,16 +1400,16 @@ cv2.getWindowImageRect = lambda w: (0, 0, 1280, 900)
 m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp()); m.focus(); m.goto(x=150, y=150); m.exposure = 8.0
 hits = UI_.tool_bar(1280, M.STEPS, 0, M.BUTTONS)[1]
 bx = lambda name: next((a + b) / 2 for a, b, t in hits if t == ('button', name))
-ks = [-1, ('tbar', bx("Prepare")), -1] + [('wiz', 'Done'), -1] * 5 + [('wiz', 'Skip'), -1]
+ks = [-1, ('tbar', bx("Prepare")), -1] + [('wiz', 'Done'), -1] * 2 + [('wiz', 'Skip'), -1]
 ks += [('tbar', bx("Prepare")), -1, ('wiz', 'Keep'), -1, 27, 27]
 M.run(m, fullscreen=False, _keys=ks)
 rec = m._mem.data['prepared']['10']
-assert rec['done'] == ['lamp', 'kohler', 'dark', 'flat', 'detail'] and m.exposure > 15, rec   # дисторсию пропустили
-assert {'dark_10x', 'empty_10x'} <= set(m.references)
+assert rec['done'] == ['flat', 'detail'] and m.exposure > 15, rec          # три шага; дисторсию пропустили
+assert {'empty_10x'} <= set(m.references)
 fw, fh = m.frame_size; m.area = mc.Area(0, 0, 3 * fw, 2 * fh); f = m.scan(); r = mc.stitch(f, verbose=False); m.close()
-assert {'flatfield.npy', 'dark.npy'} <= set(os.listdir(os.path.join(f, 'join'))), os.listdir(os.path.join(f, 'join'))
-print("Prepare step by step: lamp, even light, dark frame, flat field + exposure, focus + settling; saved, Keep next time; "
-      "the flat field and the dark frame go into the stitch: OK")
+assert {'flatfield.npy'} <= set(os.listdir(os.path.join(f, 'join'))), os.listdir(os.path.join(f, 'join'))
+print("Prepare in 3 steps: flat field + exposure + white balance, focus + settling, distortion; saved, Keep next time; "
+      "the flat field goes into the stitch: OK")
 
 # ------------------------------------------------------------------ 47. Профили креста (P в просмотре): ширина плеча по краям R, G, B; крест под мышью — самая крупная «+», не пылинка
 from microcontrol.mask import cross_profiles, snap_cross, meas_gray

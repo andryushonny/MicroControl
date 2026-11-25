@@ -372,25 +372,7 @@ STEP_HELP = [
     "Step 3: put 50x or 100x, choose an area on the right and press Scan area",
     "Step 4: tick the areas on their cards, press Export (X): drawing for AutoCAD, pictures and mixed.png in <sample>/export/"]
 BUTTONS = ["Prepare", "New area", "Scan area", "Stitch", "Export", "Settings"]
-PREP_STEPS = [                                        # мастер Prepare: шаг, что сделать руками, что делает программа
-    ('lamp', "Lamp and room", [
-        "Light on (L) for at least 20 minutes before a large scan: the lamp and the stage warm up and stop drifting.",
-        "Room light off or curtains closed, nobody leaning on the table.",
-        "Done: the program checks for 3 s that the brightness does not change.",
-        "How often: every session."]),
-    ('kohler', "Even light (Koehler)", [
-        "Close the field diaphragm of the illuminator until its edge is seen, make the edge sharp and centred, then open it "
-        "just past the edge of the picture.",
-        "Aperture diaphragm: from fully open close it until the cross edges get more contrast, before the picture darkens "
-        "(about 70-80 %).",
-        "No diaphragms on the illuminator: just press Done.",
-        "How often: every session and after changing the objective."]),
-    ('dark', "Dark frame", [
-        "Keep the objective over the sample; switch off the room light or cover the stage so no outside light gets in.",
-        "Done: the microscope light goes off by itself, 16 pictures are averaged (the camera's own signal and hot "
-        "pixels), the light goes back on.",
-        "How often: once per objective (it depends on the exposure), again when the exposure changes a lot or after "
-        "a month."]),
+PREP_STEPS = [                                        # мастер Prepare: три шага (свет, тёмный кадр — не нужны)
     ('flat', "Flat field, white balance, exposure", [
         "Drive (arrows, map) to a clean EMPTY place of the substrate: no crosses, flakes or dust. Focus on it (F).",
         "Done: exposure is set (brightest ~80 %, no overexposure), white balance, then the stage visits 5 places a "
@@ -1805,7 +1787,7 @@ def _run(m, fullscreen=False, _keys=None):
                 pass
             wiz.clear()
             msg, msg_t = (f"Kept the preparation of {old_.get('time')}: exposure {m.exposure:g} ms, "
-                          f"pause {m.move_pause:g} s, dark frame and flat field as saved"), time.monotonic()
+                          f"pause {m.move_pause:g} s, flat field as saved"), time.monotonic()
             return
         if name == "Overwrite":
             wiz.update(i=0, log=[], done=[])

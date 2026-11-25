@@ -15,7 +15,7 @@ class SimWorld:
     Образец рисуется в микрометрах, поэтому при смене объектива масштаб честный.
     Лазер — пятно в центре кадра: размер зависит от объектива и расфокуса, яркость — от мощности.
     От мощности burn_mw в фокусе на образце остаётся тёмный след (как настоящий ожог)."""
-    def __init__(self, seed=0, pitch=100.0, cross=16.0, line=2.0, burn_mw=20.0, turn_deg=10.0, field=58, field0=-8):
+    def __init__(self, seed=0, pitch=100.0, cross=16.0, line=2.0, burn_mw=20.0, turn_deg=10.0, field=500, field0=-250):
         rng = np.random.default_rng(seed)
         self.pitch, self.cross, self.line, self.burn_mw = pitch, cross, line, burn_mw
         self.field, self.field0, self.seed = field, field0, seed    # поле крестов: узлы field0 … field0 + field - 1

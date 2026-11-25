@@ -27,7 +27,7 @@ import time
 import os
 import copy
 import json
-import cv2
+from .text import cv2                                     # cv2 со шрифтом JetBrains Mono
 import numpy as np
 from . import log as L
 from .errors import MicroControlError
@@ -1709,19 +1709,23 @@ def _run(m, fullscreen=False, _keys=None):
         bh_ = UI.size("Xg", fs_)[1] + 20
 
         def frame(stt):
+            v0_ = lay.get('view0') if lay.get('view0') is not None else view   # раскладка по умолчанию
             pic = bg() if bg is not None else None              # своя подложка (скан: последний кадр)
             if pic is None:
-                pic = (view[:, :Wl_].astype(np.float32) * 0.6).astype(np.uint8) if view is not None else \
+                pic = (v0_[:, :Wl_].astype(np.float32) * 0.6).astype(np.uint8) if v0_ is not None else \
                     np.zeros((H, Wl_, 3), np.uint8)
             r_ = UI.progress_panel(pic, title, stt['stage'] if stt['stage'] != title else "",
                                    stt['frac'], stt['text'], time.monotonic() - stt['t0'], stt['left'], "",
                                    stopping=stt['stopping'])
             r2_ = UI.status_bar(pic, 0, H - bh_, Wl_, H, stt, scale=fs_)
-            fr_ = view.copy() if view is not None else np.zeros((H, W, 3), np.uint8)
+            fr_ = v0_.copy() if v0_ is not None else np.zeros((H, W, 3), np.uint8)
             fr_[:, :Wl_] = pic
             hit_ = r_ if not stt['stopping'] else None
             hit_ = (hit_[0], hit_[1] + oy_, hit_[2], hit_[3] + oy_) if hit_ else \
                 ((r2_[0], r2_[1] + oy_, r2_[2], r2_[3] + oy_) if r2_ else None)
+            if lay['list'] == 'left':                       # раскладка: список слева — и здесь
+                fr_ = np.ascontiguousarray(np.hstack([fr_[:, W - SM.CAR_W:], fr_[:, :W - SM.CAR_W]]))
+                hit_ = (hit_[0] + SM.CAR_W, hit_[1], hit_[2] + SM.CAR_W, hit_[3]) if hit_ else None
             return np.vstack([menu_img(W), fr_]), hit_
         # клавиша держит камеру (live.hold) в этом потоке, а дело берёт кадры в своём: замок — делу на всё время,
         # иначе первый же кадр (автофокус, снимок, баланс белого, Prepare) ждёт вечно
@@ -2690,9 +2694,18 @@ def _run(m, fullscreen=False, _keys=None):
             rot = 0.0
             Wl = W - SM.CAR_W                                  # картинка — слева от карусели, по центру
             split_ = lay['panes'] in ('camera|map', 'map|camera')
-            Wcam = Wl // 2 if split_ else Wl                   # два вида: камера — своя половина, карта — другая
+            Wcam = Wl                                          # два вида: камера — во всю высоту (ширина — по кадру),
+            if split_:                                         # карта — всё остальное
+                Wcam = int(np.clip(H * img.shape[1] / max(1, img.shape[0]), 0.3 * Wl, 0.7 * Wl))
             lay['Wc'], lay['Wl'] = (Wcam if split_ else None), Wl
-            to_v, back_v, i2v, v2i, cimg, kz, zm['c'] = live_map(m, img.shape, Wcam, H, zm['z'], zm['c'], rot)
+            zz_ = zm['z']
+            if split_:                                         # два вида: кадр заполняет свою часть целиком (без полос)
+                ih_, iw_ = img.shape[:2]
+                if rot % 180:
+                    ih_, iw_ = iw_, ih_
+                r_ = (Wcam / iw_) / (H / ih_)
+                zz_ = max(zz_, r_ if r_ > 1 else 1 / r_)
+            to_v, back_v, i2v, v2i, cimg, kz, zm['c'] = live_map(m, img.shape, Wcam, H, zz_, zm['c'], rot)
             base = render(img, Wcam, H, kz, zm['c'], rot)
             view = np.zeros((H, W, 3), np.uint8)
             view[:, :Wcam] = base
@@ -2965,6 +2978,12 @@ def _run(m, fullscreen=False, _keys=None):
                 kh_ = [h_.partition(": ") for h_ in HELP]
                 UI.help_panel(view[:, :Wl], [(k_, d_) for k_, _s, d_ in kh_])
             m.__dict__['_last_msg'] = msg
+            wf_ = m.__dict__['_queue'].waiting_for() if m.__dict__.get('_queue') is not None else {}
+            if wf_:                                          # съёмка ждёт другой объектив: видно сразу, пока ждёт
+                o_, n_ = sorted(wf_.items(), key=lambda t_: -t_[1])[0]
+                UI.toast(view, f"{n_} scan{'s' if n_ > 1 else ''} in the queue wait{'' if n_ > 1 else 's'} for {o_}x, "
+                               f"now {m.objective}x: put {o_}x in place and set it (O) - the scan starts by itself",
+                         Wl / 2, 70, FS, 'info', Wl - 60)
             if msg and time.monotonic() - msg_t < 5:
                 UI.toast(view, msg, Wl / 2, H - bh_ - qh_ - 20, FS, 'err' if msg.startswith('[E') else 'ok', Wl - 60)
             items = car_items()
@@ -3014,6 +3033,7 @@ def _run(m, fullscreen=False, _keys=None):
                                        W=W - SM.CAR_W, low=True)
                 oy_ = UI.MENU_H + UI.TOOL_H
                 wiz['rects'] = {k2: (r2[0], r2[1] + oy_, r2[2], r2[3] + oy_) for k2, r2 in wr_.items()}
+            lay['view0'] = view                             # до перестановки списка: подложка для долгих дел
             if lay['list'] == 'left':                       # список — слева
                 view = np.ascontiguousarray(np.hstack([view[:, W - SM.CAR_W:], view[:, :W - SM.CAR_W]]))
             if pick.get('k') is not None:                  # список съёмок выделения

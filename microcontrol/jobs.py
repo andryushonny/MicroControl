@@ -144,7 +144,7 @@ class JobQueue:
             nf = int(np.prod(SM.frames_of(m, k)))
             est = TM.estimate(m, nf, ('points' if m._use_fp else 'off') if rg.get('pts') else 'off')[0] \
                 + nf * _rates('quick')
-        o_ = SM.obj(m, rg) if rg is not None else m.objective
+        o_ = SM.obj(m, rg) if rg is not None and rg.get('kind') != 'draft' else m.objective   # черновик — тем, что стоит
         j = Job('scan', title, None, est=est, uid=uid, obj=o_)
         j.batch = batch if batch is not None else j.id
         j.hold = o_ != m.objective                     # другой объектив: ждёт, пока его поставят (и S)
@@ -178,6 +178,14 @@ class JobQueue:
             if j.obj != m.objective:
                 raise RuntimeError(f"the objective is {m.objective}x now, the scan was queued for {j.obj}x")
             m._abort = False
+            k_ = next((i_ for i_, r_ in enumerate(m._regions) if r_.get('uid') == j.uid), None)
+            if k_ is not None and m._regions[k_].get('kind') == 'draft':   # черновик (U, M в просмотре): снимается
+                from .layers import objective_to                         # объективом, который стоит
+                from . import samples as SMJ_
+                ok_, why_ = objective_to(m, k_, m.objective)
+                if not ok_:
+                    raise ValueError(why_)
+                SMJ_.persist(m)
             from . import storage as ST_
             from .live import Runner
             run_ = {}

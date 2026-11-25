@@ -6,7 +6,7 @@
 """
 import os
 import numpy as np
-import cv2
+from .text import cv2                                     # cv2 со шрифтом JetBrains Mono
 
 _FONT = cv2.FONT_HERSHEY_SIMPLEX
 
@@ -108,16 +108,22 @@ class NavMap:
         A = self.R @ Mi / k / self.s                        # пиксели превью -> пиксели карты
         t = self.R @ ((-off - self.c) / self.s) + (w / 2, h / 2)
         M = np.c_[A, t]
-        from .util import warp_clean                        # дробный сдвиг: без чёрной каймы на краях кадров
-        pic, msk = warp_clean(img, M, (w, h), alpha=ok)
+        from .util import warp_clean_roi                    # дробный сдвиг: без чёрной каймы на краях кадров;
+        got_ = warp_clean_roi(img, M, (w, h), alpha=ok)     # только видимая часть, только свой кусок холста
+        if got_ is None:
+            return
+        pic, msk, (x0, y0) = got_
+        hh_, ww_ = msk.shape
         if clip:                                            # только внутри контура выделения: лишнее (кадры за краем,
-            cm = np.zeros((h, w), np.uint8)                 # до шага мотора) не путает
-            cv2.fillPoly(cm, [np.int32(np.round(self.to_px(np.asarray(r_, float)))) for r_ in clip], 1, cv2.LINE_8)
+            cm = np.zeros((hh_, ww_), np.uint8)             # до шага мотора) не путает
+            cv2.fillPoly(cm, [np.int32(np.round(self.to_px(np.asarray(r_, float)) - (x0, y0))) for r_ in clip], 1,
+                         cv2.LINE_8)
             msk &= cm > 0
+        roi = canvas[y0:y0 + hh_, x0:x0 + ww_]
         if alpha >= 0.99:
-            canvas[msk] = pic[msk]
+            np.copyto(roi, pic, where=msk[..., None])
         elif alpha > 0.01:                                  # полупрозрачная: видно, что под ней
-            canvas[msk] = (pic[msk].astype(np.float32) * alpha + canvas[msk].astype(np.float32) * (1 - alpha)).astype(np.uint8)
+            np.copyto(roi, cv2.addWeighted(pic, alpha, roi, 1 - alpha, 0), where=msk[..., None])
 
     def base(self, scans, w, h, clip=None, alpha=None, fog=None):
         """Подложка карты: мозаики scans (папки, сначала меньшее увеличение), каждая — по контуру своего

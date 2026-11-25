@@ -379,6 +379,37 @@ def warp_clean(img, M, size, alpha=None, inverse=False):
     return out, m
 
 
+def warp_clean_roi(img, M, size, alpha=None):
+    """warp_clean, но только там, куда картинка попадает: видимый кусок исходника -> свой прямоугольник холста.
+    Невидимое не считается (карта / просмотр с тысячами кадров). -> (картинка, маска, (x0, y0)) или None."""
+    import cv2
+    w, h = int(size[0]), int(size[1])
+    M = np.asarray(M, np.float64)
+    ih, iw = img.shape[:2]
+    cr = np.array([(0, 0), (iw, 0), (0, ih), (iw, ih)], float) @ M[:, :2].T + M[:, 2]
+    x0, y0 = np.maximum(np.floor(cr.min(0)).astype(int) - 1, 0)
+    x1, y1 = np.minimum(np.ceil(cr.max(0)).astype(int) + 2, (w, h))
+    if x1 <= x0 or y1 <= y0:
+        return None                                         # не видно — не рисуется
+    A, t = M[:, :2], M[:, 2]
+    Ai = np.linalg.inv(A)
+    rc = (np.array([(x0, y0), (x1, y0), (x0, y1), (x1, y1)], float) - t) @ Ai.T   # видимое окно -> исходник
+    sx0, sy0 = np.maximum(np.floor(rc.min(0)).astype(int) - 2, 0)
+    sx1, sy1 = np.minimum(np.ceil(rc.max(0)).astype(int) + 3, (iw, ih))
+    if sx1 <= sx0 or sy1 <= sy0:
+        return None
+    sub = img[sy0:sy1, sx0:sx1]
+    al = None
+    if alpha is not None:
+        al = np.asarray(alpha)
+        if al.shape[:2] != (ih, iw):
+            al = cv2.resize(al, (iw, ih), interpolation=cv2.INTER_NEAREST)
+        al = al[sy0:sy1, sx0:sx1]
+    M2 = np.c_[A, t + A @ (sx0, sy0) - (x0, y0)]
+    pic, msk = warp_clean(sub, M2, (x1 - x0, y1 - y0), alpha=al)
+    return pic, msk, (x0, y0)
+
+
 def wheel_delta(flags):
     """Направление колеса мыши (>0 — от себя). В части сборок OpenCV нет cv2.getMouseWheelDelta:
     тогда берётся старшее 16-битное слово flags со знаком (так его кладёт OpenCV)."""

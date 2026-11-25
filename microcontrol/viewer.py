@@ -12,7 +12,7 @@
 import copy, csv, json, math, os
 import time as _t
 from collections import OrderedDict
-import cv2
+from .text import cv2                                     # cv2 со шрифтом JetBrains Mono
 import numpy as np
 from .storage import ScanData, THUMB, meta_A
 from .util import wheel_delta, wheel_gesture, open_window, window_size, exit_key, EXIT, set_icon, shift_held
@@ -41,6 +41,12 @@ class _Scene:
         self.size = self.P.max(0) + (self.W, self.H)
         self.thumbs = self.st.thumbs()
         self.cache, self.cache_b = OrderedDict(), 0         # (i, уровень) -> уменьшенный кадр; байт в кэше
+        import threading
+        self.lock = threading.RLock()                       # кэш — общий с фоновой подгрузкой
+        self.want, self.fresh = [], False                   # что подгрузить фоном; подгрузилось — перерисовать
+        self.wake = threading.Event()
+        self.alive = True
+        threading.Thread(target=self._loader, daemon=True).start()
         self.over, self.ok_ = None, 0.0                     # обзорная мозаика (join/preview_all.jpg)
         pv = os.path.join(folder, 'join', 'preview_all.jpg')
         if os.path.exists(pv) and (not os.path.exists(jp) or _mt(pv) >= _mt(jp)):
@@ -53,19 +59,59 @@ class _Scene:
 
     def level_img(self, i, lv):
         key = (i, lv)
-        if key in self.cache:
-            self.cache.move_to_end(key)
-            return self.cache[key]
+        with self.lock:
+            if key in self.cache:
+                self.cache.move_to_end(key)
+                return self.cache[key]
         f = 2 ** lv
         p = os.path.join(self.st.folder, 'viewer', 'levels', f"{i:05d}_{lv}.jpg")
-        img = cv2.imdecode(np.fromfile(p, np.uint8), cv2.IMREAD_COLOR) if os.path.exists(p) else None
+        img = cv2.imdecode(np.fromfile(p, np.uint8), cv2.IMREAD_COLOR) if lv and os.path.exists(p) else None
         if img is None:                                     # нет готового уровня — из кадра
-            img = cv2.resize(self.st.frame(i), (max(1, self.W // f), max(1, self.H // f)), interpolation=cv2.INTER_AREA)
-        self.cache[key] = img
-        self.cache_b += img.nbytes
-        while self.cache_b > 400e6 and len(self.cache) > 1:  # не больше ~400 МБ на старом ПК
-            self.cache_b -= self.cache.popitem(last=False)[1].nbytes
+            with self.lock:
+                fr_ = self.st.frame(i)
+            img = fr_ if lv == 0 else cv2.resize(fr_, (max(1, self.W // f), max(1, self.H // f)),
+                                                 interpolation=cv2.INTER_AREA)
+        with self.lock:
+            self.cache[key] = img
+            self.cache_b += img.nbytes
+            while self.cache_b > 400e6 and len(self.cache) > 1:  # не больше ~400 МБ на старом ПК
+                self.cache_b -= self.cache.popitem(last=False)[1].nbytes
         return img
+
+    def cached(self, i, lv):
+        """Готовая копия кадра i уровня lv или ближайшая грубее из кэша (None — только миниатюра)."""
+        with self.lock:
+            for l_ in range(lv, 4):
+                a = self.cache.get((i, l_))
+                if a is not None:
+                    if l_ == lv:
+                        self.cache.move_to_end((i, l_))
+                    return a, l_
+        return None, None
+
+    def _loader(self):
+        """Фоном: раскрыть кадры, которых просил вид (окно не ждёт диска и JPEG — тянется плавно)."""
+        while self.alive:
+            self.wake.wait(0.5)
+            self.wake.clear()
+            while self.alive:
+                with self.lock:
+                    if not self.want:
+                        break
+                    key = self.want.pop()                   # последние просьбы — первыми (что видно сейчас)
+                try:
+                    self.level_img(*key)
+                    self.fresh = True
+                except Exception:
+                    pass
+
+    def close(self):
+        self.alive = False
+        self.wake.set()
+        try:
+            self.st.close()
+        except Exception:
+            pass
 
     def render(self, cx, cy, s, Wv, Hv, fast=False):
         """fast — во время перетаскивания: из уменьшенных копий (плавно), затем — в полном качестве."""
@@ -98,21 +144,29 @@ class _Scene:
             if ax1 <= ax0 or ay1 <= ay0:
                 continue
             if lv >= 4:
-                src, k = self.thumbs[i], self.thumbs[i].shape[1] / W
-            elif lv == 0:
-                src, k = None, 1.0
+                src = self.thumbs[i]
             else:
-                src = self.level_img(i, lv)
-                k = src.shape[1] / W
+                src, got_ = self.cached(i, lv)              # нет нужной копии: пока — что есть, её — фоном
+                if got_ != lv:
+                    with self.lock:
+                        if (i, lv) not in self.want:
+                            self.want.append((i, lv))
+                            if len(self.want) > 64:         # ушли дальше — старые просьбы не нужны
+                                del self.want[0]
+                    self.wake.set()
+                if src is None:
+                    src = self.thumbs[i]
+            k = src.shape[1] / W
             sx0, sy0 = int((ax0 - px) * k), int((ay0 - py) * k)
             sx1, sy1 = max(sx0 + 1, int(math.ceil((ax1 - px) * k))), max(sy0 + 1, int(math.ceil((ay1 - py) * k)))
-            crop = self.st.frame(i, (sx0, sy0, sx1, sy1)) if src is None else src[sy0:sy1, sx0:sx1]
+            crop = src[sy0:sy1, sx0:sx1]
             dx0, dy0 = int(round((ax0 - x0) * s)), int(round((ay0 - y0) * s))
             dx1, dy1 = int(round((ax1 - x0) * s)), int(round((ay1 - y0) * s))
             if dx1 <= dx0 or dy1 <= dy0:
                 continue
             crop = cv2.resize(np.ascontiguousarray(crop), (dx1 - dx0, dy1 - dy0),
-                              interpolation=cv2.INTER_AREA if s < 1 else cv2.INTER_NEAREST)
+                              interpolation=cv2.INTER_AREA if dx1 - dx0 < crop.shape[1] else
+                              (cv2.INTER_NEAREST if k >= 1 else cv2.INTER_LINEAR))
             if crop.ndim == 2:
                 crop = cv2.cvtColor(crop, cv2.COLOR_GRAY2BGR)
             out[dy0:dy1, dx0:dx1] = crop[:dy1 - dy0, :dx1 - dx0]
@@ -580,7 +634,7 @@ def _view_one(folder, fullscreen, keys, car):
             car['confirm'] = None
             g.save(px_um) if f == folder else None
             if f == folder:
-                sc.st.close()
+                sc.close()
             dst = SM.remove_sample(f)
             car['hist'].push(f"remove Selection {SM.sample_index(dst)}", None, None, kind='remove', src=f, dst=dst)
             st['acted'] = False                             # это действие уже в истории
@@ -894,7 +948,7 @@ def _view_one(folder, fullscreen, keys, car):
         base = (base.astype(np.float32) * 0.35).astype(np.uint8)
         pan = carousel_img()
         if close_scene:                                     # файлы скана перепишутся (Windows не даст при открытых)
-            sc.st.close()
+            sc.close()
             sc.thumbs, sc.over = None, None
             sc.cache.clear()
         fs_ = 0.5
@@ -1147,7 +1201,9 @@ def _view_one(folder, fullscreen, keys, car):
                    max(ax_, bx_) + me_.get('fw', 0) / 2, max(ay_, by_) + me_.get('fh', 0) / 2)
 
     def inside_only(cells):
-        """Квадраты, чья середина в снятом выделении (как примет окно микроскопа). -> (взятые, сколько отброшено)."""
+        """Квадраты для выделения: любые, и там, где ещё не снимали (новое выделение — чтобы его снять, S).
+        -> (взятые, сколько отброшено = 0)."""
+        return set(cells), 0
         pg_ = scan_outline()
         if pg_ is None or not cells:
             return set(cells), 0
@@ -2728,7 +2784,7 @@ def _view_one(folder, fullscreen, keys, car):
             if os.path.exists(src) and not os.path.exists(dst):
                 os.makedirs(os.path.dirname(dst), exist_ok=True)
                 if not back and os.path.abspath(src) == os.path.abspath(folder):
-                    sc.st.close()
+                    sc.close()
                 _sh.move(src, dst)
             st['switch'] = e_['src'] if back else (folder if os.path.abspath(e_['src']) != os.path.abspath(folder) else False)
             return
@@ -3144,12 +3200,15 @@ def _view_one(folder, fullscreen, keys, car):
                 continue
             if np.hypot(*M_[:, 0]) * pic_.shape[1] < 12:        # совсем мелко — не видно, не тратим время
                 continue
-            from .util import warp_clean                  # дробный сдвиг: без чёрной каймы на краях кадров
-            w_, mb_ = warp_clean(pic_, np.c_[M_, t_], (Ww, Hh))
-            mask_ = mb_.astype(np.uint8) * 255               # вне кадров (чёрное) — не кладём
+            from .util import warp_clean_roi              # дробный сдвиг: без чёрной каймы; только видимый кусок
+            got_ = warp_clean_roi(pic_, np.c_[M_, t_], (Ww, Hh))
+            if got_ is None:
+                continue
+            w_, mb_, (xo_, yo_) = got_
+            roi_ = comp_[yo_:yo_ + mb_.shape[0], xo_:xo_ + mb_.shape[1]]
             if a_ < 0.99:                                     # полупрозрачная: видно, что под ней
-                w_ = cv2.addWeighted(w_, a_, comp_, 1 - a_, 0)
-            comp_ = cv2.copyTo(w_, mask_, comp_)
+                w_ = cv2.addWeighted(w_, a_, roi_, 1 - a_, 0)
+            np.copyto(roi_, w_, where=mb_[..., None])        # вне кадров (чёрное) — не кладём
         comp_ = put_base(comp_)                             # выбранная — поверх всех (совмещение: полупрозрачно)
         return comp_
 
@@ -3164,8 +3223,8 @@ def _view_one(folder, fullscreen, keys, car):
         Hh, Ww = img.shape[:2]
         for r_ in regs_:
             n_ = int((rf_.get(r_['uid']) or {}).get('n') or r_.get('sub') or 1)
-            if not r_.get('cells') or r_.get('hidden') or len(r_['cells']) > 4000:
-                continue
+            if n_ <= 1 or not r_.get('cells') or r_.get('hidden') or len(r_['cells']) > 4000:
+                continue                                    # без подсетки: края клеток — это сетка, граница — контур
             N_ = LT.level(r_)
             col_ = SM.color(r_['num'] - 1)
             for a, b in r_['cells']:
@@ -3290,6 +3349,9 @@ def _view_one(folder, fullscreen, keys, car):
 
     cv2.setMouseCallback(WIN, mouse_cb)
     while True:
+        if sc.fresh:                                        # фоном подгрузились кадры, которые видно: перерисовать
+            sc.fresh = False
+            st['dirty'] = True
         if st['down'] is None and st.get('lab') is None:
             sg_ = g_sig()
             dm_ = d_mt()
@@ -3334,7 +3396,7 @@ def _view_one(folder, fullscreen, keys, car):
                     else:
                         g.frames_px = sc_n.P.copy()
                     try:
-                        sc.st.close()
+                        sc.close()
                     except Exception:
                         pass
                     sc = sc_n
@@ -3887,5 +3949,5 @@ def _view_one(folder, fullscreen, keys, car):
     if os.path.isdir(folder) and not st.get('stitched'):   # после сшивки разметку уже записала она (кресты — за кадрами)
         g.save(px_um)
     if os.path.isdir(folder):
-        sc.st.close()
+        sc.close()
     return st['switch'] or None

@@ -2,7 +2,7 @@
 
 **Python control of the Optosky ATR8300 Raman microscope: scan a substrate, stitch one picture of it, put the lithography grid on it, choose the squares you need and export them for AutoCAD.**
 
-**Authors:** A. Lyapeikov, S. Domenko · **Version:** 0.35.0 · Русский: [docs/README_ru.md](docs/README_ru.md) · 中文: [docs/README_zh.md](docs/README_zh.md) · PDF: [EN](docs/MicroControl_en.pdf), [RU](docs/MicroControl_ru.pdf), [中文](docs/MicroControl_zh.pdf) · Full technical reference: [EN](docs/reference_en.md), [RU](docs/reference_ru.md), [中文](docs/reference_zh.md)
+**Authors:** A. Lyapeikov, S. Domenko · **Version:** 0.36.0 · Русский: [docs/README_ru.md](docs/README_ru.md) · 中文: [docs/README_zh.md](docs/README_zh.md) · PDF: [EN](docs/MicroControl_en.pdf), [RU](docs/MicroControl_ru.pdf), [中文](docs/MicroControl_zh.pdf) · Full technical reference: [EN](docs/reference_en.md), [RU](docs/reference_ru.md), [中文](docs/reference_zh.md)
 
 ![Overview: the 10x scan with the grid of the sample, numbered squares, a draft, 50x and 100x inside](docs/img/view.jpg)
 
@@ -48,7 +48,7 @@ The microscope window closes with **Shift+Esc** or its ×; the view — with **E
 `m.manual()` opens the live camera. Move with the arrows (one press = one frame), focus with `E` / `Q` (or `F` — autofocus). Letters do things: `L` light, `I` laser, `W` white balance, `R` ruler, `S` queue the scan (it is quick stitched in the background; the queue is at the bottom), `V` open the result in the viewer.
 
 - **One window.** The bar on top has the main buttons: **New area**, **Scan area** (scan + stitch), **Export** (drawing for AutoCAD: DWG + DXF of the chosen area), **Settings** (steps, exposure, focus points).
-- **Map** (top right; `Tab` — big map, the camera goes to the corner): everything already shot, at its real place (10x under 50x under 100x), the outlines of the areas and a yellow frame where the camera is now. **Click the map — the stage drives there**; **drag on the map — a new area** on the objective in place; **`Ctrl`+drag — a free box** exactly as drawn (around a crystal), not snapped to the squares; wheel — zoom; right drag — move the map; double-click a shot area — open it in the viewer.
+- **Map** (top right; `Tab` — big map centred on the camera, the camera goes to the corner): everything already shot, at its real place (10x under 50x under 100x), the outlines of the areas and a yellow frame where the camera is now. **Click the map — the stage drives there**; **drag on the map — a new area** on the objective in place; **`Ctrl`+drag — a free box** exactly as drawn (around a crystal), not snapped to the squares; wheel — zoom; right drag — move the map; double-click a shot area — open it in the viewer.
 - **Selection by keys** still works: go to one corner, press `1`, to the opposite one, press `2`.
 - **Focus points:** the height $Z$ at each corner is remembered; `K` adds more points. During the scan every frame gets its own $Z$ from these points, so a tilted sample stays sharp. With the checkbox "Z follows the focus points" the arrows also follow them.
 - **Several selections, layers:** set them one after another (`1`, `2`, then `1`, `2` again, or drag on the map). All selections are on one level and may overlap, any objectives; the order of the list on the right is the order of the layers (top on top), drag a card to change it. Click — choose, **Go** — drive to it, **...** — all its scans (the star is the main one), **x** — delete.
@@ -65,7 +65,7 @@ The microscope window closes with **Shift+Esc** or its ×; the view — with **E
 
 - Press `C` and click **two neighbouring crosses in one row**. From them the program knows the tilt and the size of the squares, turns the picture level and draws the red grid over everything. The mark lands exactly where you click; `Shift`+click snaps it to the cross centre, a mark can be dragged. The grid is fitted to all crosses at once; `Shift+C` then puts every frame onto the crosses (see *Accuracy for lithography*).
 - **Numbers:** press `N`, click a square and type the number written next to it (`12 7`). Do this for two squares in different rows and columns — then every square has its real number.
-- **One grid for the whole sample.** It is made from the crosses marked by hand on any selection (the ones marked last; mark them on the selection chosen in the list) and does not change while they do not. Every other scan takes it as it is; if its picture is off, `A` (align) moves the picture under the grid. `Shift+C` clears the crosses (then just click new ones).
+- **One grid for the whole sample.** It is made from the crosses marked by hand on one selection (the one chosen in the list) and does not change while they do not. Every other scan takes it as it is; if its picture is off, `A` (align) moves the picture under the grid. To make the grid on another selection, first remove the old crosses (open that selection, `C`, `Del`) — `C` elsewhere says so. Square numbers appear after you number two squares (`N`).
 
 ### 4. Choose squares — the mask
 
@@ -73,13 +73,13 @@ The microscope window closes with **Shift+Esc** or its ×; the view — with **E
 
 ### 5. Export
 
-`X` (in either window) or the button **Export** writes everything ticked on the cards into `<sample>/export/` (replaced each time). **Every ticked selection must be quality-stitched**, otherwise the export is refused and the message names the others.
+`X` (in either window) or the button **Export** writes everything ticked on the cards (the boxes are off by default) into `<sample>/export/` (replaced each time). **Every ticked selection must be quality-stitched**, otherwise the export is refused and the message names the others.
 
 The result is one drawing `export/drawing.dwg` (origin at cross 1,1, square to the lattice): the pictures of the selections at their real places in micrometres, every cell as a closed square, the crosses with their numbers, each selection on its own layer, and an empty `BONDS` layer for drawing bonds. **The drawing is made only when the crosses are marked** (the crosses are the beacons that put everything together for the lithography); without them there are the pictures and `mixed.png` only. Next to it: the pictures (`S03_50x.png` …) and `mixed.png` — all ticked scans laid over each other in the list order, at the pixel of the finest one. The DWG is written by the free ODA File Converter if it is installed; otherwise there is `drawing.dxf` (AutoCAD: Save As → DWG). Keep the `export/` folder together: pictures in DWG are always separate files. For one scan, `mc.export(folder)` writes its chosen squares straightened (PNG, DXF, list of numbers) into `export/` of that scan.
 
 `mc.projects()` and `mc.all_samples()` print a table: id, name, samples, selections, scans, created, updated, description (the Open dialogs show the same). In the viewer, Open → **New window** shows another project in its own window (`mc.view_window(folder)`), the current one stays open.
 
-Squares selected in the viewer (`M`) become a selection on **Enter** — a **draft** (no objective, not scanned) or with the objective chosen for new ones (`Shift+G`); it appears in the list at once and is chosen. All selections are on one level: any objectives may overlap, nothing is cut; the order of the list is the order of the layers (top on top), drag cards to change it; the box on a card puts it into the export. Over any selection, keys `2`–`9` (and `1` `0` — 10) give it its own finer grid; `M` then selects its cells. **Export** writes everything ticked into one folder `<sample>/export/`: one AutoCAD drawing (origin at cross 1,1, pictures in place, every cell as a closed square, crosses with their numbers), the pictures, and `mixed.png` — all ticked scans laid over each other in the list order, at the pixel you choose.
+Squares selected in the viewer (`M`) become a selection on **Enter** — a **draft** (no objective, not scanned) or with the objective chosen for new ones (`Shift+G`); it appears in the list at once and is chosen. All selections are on one level: any objectives may overlap, nothing is cut; the order of the list is the order of the layers (top on top), drag cards to change it; the box on a card puts it into the export. Over any selection, keys `2`–`5` give it its own finer grid; `M` then selects its cells. **Export** writes everything ticked into one folder `<sample>/export/`: one AutoCAD drawing (origin at cross 1,1, pictures in place, every cell as a closed square, crosses with their numbers), the pictures, and `mixed.png` — all ticked scans laid over each other in the list order, at the pixel you choose.
 
 | | |
 |---|---|
@@ -127,7 +127,7 @@ Both windows have a menu on top: **Open** (a sample of any project), **New** (ch
 
 ## Layers: a map and the details
 
-Once the crosses are marked, the map in manual mode shows the lithography grid as thin semi-transparent red lines — new areas are made of exactly these squares; it is one grid for the whole sample. The selection chosen on the right adds its own finer grid (`2`–`9`, `1` `0` — 1/2 … 1/10) inside it.
+Once the crosses are marked, the map in manual mode shows the lithography grid as thin semi-transparent red lines — new areas are made of exactly these squares; it is one grid for the whole sample. The selection chosen on the right adds its own finer grid (`2`–`5` — 1/2 … 1/5) inside it.
 
 1. Mark a large selection with a small objective (10x) and scan it: this is the map.
 2. Look at the map (`mc.view`) and find the interesting places.
@@ -253,7 +253,7 @@ T = T_0 + t\,N,
 | `T` | turn the picture | the camera by 180° (remembered) | level by the lattice / as shot |
 | `M` · `C` · `N` | cells · crosses · numbers | — | select cells (`Ctrl+A` — all / none) · mark crosses (`Shift+C` — frames onto the crosses) · number a square |
 | `P` · `G` · `A` · `Y` | profiles · straight edges · align · the others | — | profile lines (4 clicks) · crop the steps · align this scan with the others (Space — by itself) · other selections' pictures on / off |
-| `2`…`9`, `1` `0` | finer grid | — | of the chosen selection, else the one under the mouse (1/2 … 1/10) |
+| `2`…`5`, `1` | finer grid | — | of the chosen selection, else the one under the mouse (1/2 … 1/5; `1` — none) |
 | `E` / `Q` (`PgUp` / `PgDn`) · `F` · `K` · `1` / `2` | stage up / down · autofocus · focus point · corners | ✓ (`Shift` — ×5) | — |
 | `L` · `I` · `W` · `Space` · `V` | light · laser · white balance · picture · open the view (its own window: this one keeps working) | ✓ | — |
 | `Tab` or click a field | steps, exposure, objective | ✓ | — |

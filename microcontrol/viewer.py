@@ -128,7 +128,7 @@ MICRO_ONLY = {'e': "stage up", 'q': "stage down", 'f': "autofocus", 'k': "focus 
               'V': "open the view"}
 HELP_V2 = "Arrows / drag: move  Wheel: zoom  0: whole  , / .: selection  Ctrl+click: mark  H: all keys  Esc: close"
 HELP_MODE = {
-    'look': "C: crosses  M: select cells (Enter: a selection)  N: numbers  T: level  2-9, 10: finer grid  R: ruler  [ ]: transparency  A: align  O: objective  S: scan (queue)  X: export  Y: others",
+    'look': "C: crosses  M: select cells (Enter: a selection)  N: numbers  T: level  2-5: finer grid  R: ruler  [ ]: transparency  A: align  O: objective  S: scan (queue)  X: export  Y: others",
     'cross': "Click: cross exactly there (2 in a row = tilt)  Shift+click: snap to centre  Drag a mark: move  Right click: remove  Del: start again  Shift+C: frames onto the crosses  C / Esc: done",
     'select': "Click: square  Drag: box  Shift: unselect  Right click: remove a square (Shift: the whole area)  Ctrl+A: all / none  Enter: make a selection  Esc: done",
     'stitch': "Click a seam dot: seam off/on  Click a frame: its row  Shift+click: its column  Arrows: 1 px  Shift+arrows: 10 px  Backspace: automatic  J: save",
@@ -136,7 +136,7 @@ HELP_MODE = {
     'label': "Click a square, type its number X Y  Enter: set  Esc: done",
     'ruler': "R: point-point / line-line / point-line / off. Click the points: the distance (and the angle)  Drag: move  Esc: off",
     'align': "Drag / arrows (Shift: x10): move the other pictures onto this scan  Space: by itself  Enter or A: save  Backspace: no shift  Esc: cancel",
-    'refine': "Over a selection: 2-9 its finer grid (1, 0 quickly: 1/10; 1: none), then M selects its cells, Enter makes them selections",
+    'refine': "2-5: finer grid of the chosen selection (1: none), then M selects its cells, Enter makes them selections",
 }
 HELP_V = ("C: crosses   Shift+C: frames onto the crosses   M: select cells, Enter: a selection   N: number squares (X Y)   "
           "R: ruler   S: scan (queue)   X: export   Esc: leave the mode")
@@ -153,7 +153,7 @@ HELP_ALL = [
     ("", "The mark goes exactly where you click   Shift+click: snap to the cross centre   Drag a mark: move it"),
     ("", "Right click: remove a cross   Backspace: the last one   Del: start again   Shift+C: frames onto the crosses (exact)"),
     ("Grid", "One grid for the whole sample: from the crosses marked last (on any selection); the others take it as is"),
-    ("", "2-9, 1 then 0: finer grid of the chosen selection (else the one under the mouse) (1/2 ... 1/10)"),
+    ("", "2-5: finer grid of the chosen selection (else the one under the mouse) (1/2 ... 1/5); 1: none"),
     ("Numbers", "N: click a square, type the number written next to it (X Y), Enter. Two squares fix all numbers"),
     ("Select", "M: click a square (again: off) / drag a box (Shift: unselect)   Ctrl+A: all / none   Enter: they become a selection"),
     ("", "Right click on green: remove that square (or cell)   Shift + right click: the whole green area"),
@@ -444,6 +444,18 @@ def _view_one(folder, fullscreen, keys, car):
     LAT = smp0.data.get('lattice') if smp0 is not None else None
     seeded_, st0_msg = False, ""
     hand_ = LAT is not None and not LAT.get('stage') and LAT.get('src') and os.path.isdir(LAT['src'])
+    if not hand_:                                           # сетки образца нет (кресты убрали): подставленная — тоже
+        try:
+            gp0_ = os.path.join(folder, 'grid.json')
+            d0_ = json.load(open(gp0_, encoding='utf-8'))
+            if d0_.get('seeded'):
+                for k0_ in ('marks', 'index', 'labels', 'selected', 'seeded', 'seed_key', 'seeded_labels'):
+                    d0_.pop(k0_, None)
+                with open(gp0_, 'w', encoding='utf-8') as f0_:
+                    json.dump(d0_, f0_, indent=1)
+                g = Grid(folder)
+        except (OSError, ValueError):
+            pass
     if hand_ and os.path.abspath(LAT['src']) != os.path.abspath(folder):   # кресты — на другой съёмке: её сетка здесь
         try:
             d0_ = json.load(open(os.path.join(folder, 'grid.json'), encoding='utf-8'))
@@ -2000,7 +2012,7 @@ def _view_one(folder, fullscreen, keys, car):
                 UI.tint_outside(img, [(q_, []) for q_ in clear_] or [(np.zeros((3, 2)), [])], green, 0.3)
             if sel_ and step >= 7:                          # край выбранного — зелёной линией
                 cv2.polylines(img, list(np.int32(np.round(quads[sel_]))), True, green, 1, cv2.LINE_8)
-            if step >= 34 and len(cells) <= 3000:           # номер квадрата в уголке: (X, Y) по подписям
+            if step >= 34 and len(cells) <= 3000 and len(g.labels) >= 2:   # номера — когда человек дал два (N)
                 num = g.numbering()
                 fs = min(0.5, step / 160)
                 for c, pts in zip(cells, quads):
@@ -2009,9 +2021,16 @@ def _view_one(folder, fullscreen, keys, car):
                     col = (0, 230, 255) if c in g.labels else ((255, 255, 255) if g.labels else (170, 170, 170))
                     cv2.putText(img, txt, (int(u), int(v)), cv2.FONT_HERSHEY_SIMPLEX, fs, (0, 0, 0), 3, cv2.LINE_AA)
                     cv2.putText(img, txt, (int(u), int(v)), cv2.FONT_HERSHEY_SIMPLEX, fs, col, 1, cv2.LINE_AA)
-                if st.get('lab'):                           # вводимый номер — у квадрата
-                    pts = np.array([to_view(q) for q in g.corners(*st['lab'][0])])
-                    cv2.polylines(img, [np.int32(pts)], True, (0, 230, 255), 2, cv2.LINE_8)
+            if step >= 34 and len(g.labels) < 2:            # пока номеров нет — только те, что уже введены (N)
+                for c, pts in zip(cells, quads):
+                    if c in g.labels:
+                        u, v = pts[np.argmin(pts.sum(1))] + (4, 4 + 14 * min(0.5, step / 160) / 0.5)
+                        txt = "{},{}".format(*g.labels[c])
+                        cv2.putText(img, txt, (int(u), int(v)), cv2.FONT_HERSHEY_SIMPLEX, min(0.5, step / 160), (0, 0, 0), 3, cv2.LINE_AA)
+                        cv2.putText(img, txt, (int(u), int(v)), cv2.FONT_HERSHEY_SIMPLEX, min(0.5, step / 160), (0, 230, 255), 1, cv2.LINE_AA)
+            if st.get('lab'):                               # вводимый номер — у квадрата
+                pts = np.array([to_view(q) for q in g.corners(*st['lab'][0])])
+                cv2.polylines(img, [np.int32(pts)], True, (0, 230, 255), 2, cv2.LINE_8)
             if cells and step >= 7:                         # крупно: контур каждого квадрата над мозаикой
                 cv2.polylines(img, list(np.int32(np.round(quads))), True, red, 1, cv2.LINE_8)
             elif cells:                                     # мелко: линии через кресты
@@ -2036,6 +2055,7 @@ def _view_one(folder, fullscreen, keys, car):
         mks_ = car.get('marks') or set()
         dqo_ = np.asarray(st['al']['dq'], float) if st.get('al') else np.zeros(2)   # совмещение: контуры других едут
         me_o_ = sc.st.meta.get('sample_uid')
+        labs_ = []
         for q_, c_, lab_, dash_, new_, *u_ in sample_outlines():      # выделения образца на этой картинке
             sh_o_ = dqo_ if (u_ and u_[0] != me_o_) else 0
             pv_ = np.array([to_view(p_ + sh_o_) for p_ in q_], float)
@@ -2049,14 +2069,16 @@ def _view_one(folder, fullscreen, keys, car):
                 cv2.polylines(img, [np.int32(np.round(pv_))], True, c_, 2, cv2.LINE_8)
             x_l, y_l = pv_[:, 0].min(), pv_[:, 1].min()
             if 0 <= x_l < W_img - 60 and 30 <= y_l < H_img:
-                tw_ = UI.size(lab_, 0.42)[0]
-                UI.panel(img, x_l, y_l - 20, x_l + tw_ + 10, y_l - 2, 0.8, c_)
-                UI.put(img, lab_, x_l + 5, y_l - 6, 0.42, c_)
+                labs_.append((x_l, y_l, lab_, c_))
         draw_new_drafts(img)                                  # выбранное здесь — черновиком сразу
         draw_subgrids(img)                                    # подсетки выделений и их клетки кисти
         for k_, q in enumerate([] if st.get('seeded') else g.cr.marks):   # подставленные кресты — не показывать
             u_, v_ = to_view(q)
             UI.dot(img, u_, v_, yellow if k_ == st.get("mdrag") else red)
+        for x_l, y_l, lab_, c_ in labs_:                      # подписи выделений — поверх точек крестов
+            tw_ = UI.size(lab_, 0.42)[0]
+            UI.panel(img, x_l, y_l - 20, x_l + tw_ + 10, y_l - 2, 0.8, c_)
+            UI.put(img, lab_, x_l + 5, y_l - 6, 0.42, c_)
         if st['box']:
             bx0, by0, bx1, by1, shb = st['box']
             cv2.rectangle(img, (bx0, by0), (bx1, by1), (0, 140, 255) if shb else yellow, 1)
@@ -2188,7 +2210,7 @@ def _view_one(folder, fullscreen, keys, car):
             u_ = r_.get('uid')
             new_ = bool(r_.get('pending'))
             dr_ = r_.get('kind') == 'draft'
-            chk_ = None if new_ else r_.get('export', True)
+            chk_ = None if new_ else r_.get('export', False)
             if u_ in sub_of_:                               # снятое: картинка и кадры
                 k_ = sub_of_[u_]
                 it_ = dict(base_[k_], chosen=u_ in mk_, check=chk_, title=f"Selection {r_.get('num', '')}", more=True,
@@ -2210,6 +2232,24 @@ def _view_one(folder, fullscreen, keys, car):
                 if fo_ and u_ == fo_:
                     sel_k = len(items_)
                 cmap_.append(('draft', u_, subs.index(folder) if folder in subs else 0))
+        try:                                                # клетки подсетки, ещё не ставшие выделением: сразу в списке
+            rfs_ = regions_now()[1]
+        except Exception:
+            rfs_ = {}
+        par_ = {r_.get('uid'): r_ for r_ in regs_}
+        for pu_, d_ in rfs_.items():
+            nc_ = len(d_.get('cells') or [])
+            pr_ = par_.get(pu_) or next((r_ for r_ in regs_ if r_.get('pending') and r_.get('uid') == pu_), None)
+            if not nc_ or pr_ is None:
+                continue
+            n_ = int(d_.get('n') or 1)
+            pn_ = "the new one" if pr_.get('pending') else f"Selection {pr_.get('num', '')}"
+            items_.insert(0, dict(title="Selection (new)", color=(235, 235, 235), muted=True, go=False, check=None,
+                                  lines=[f"{nc_} cell{'s' if nc_ != 1 else ''} of the grid 1/{n_} in {pn_}",
+                                         "Enter: make it a selection"]))
+            cmap_.insert(0, ('draft', 'ref:' + pu_, subs.index(folder) if folder in subs else 0))
+            if sel_k is not None:
+                sel_k += 1
         car['map'] = cmap_
         pan_, car['hits'], car['content'] = SM.carousel(st['Hv'], items_, sel_k, car['scroll'], title="Selections",
                                                         go=False, hover=car.get('hxy'))
@@ -2420,7 +2460,7 @@ def _view_one(folder, fullscreen, keys, car):
         r_ = next((x_ for x_ in sh_._regions if x_['uid'] == uid), None)
         if r_ is None:
             return "Not saved yet"
-        r_['export'] = not r_.get('export', True)
+        r_['export'] = not r_.get('export', False)
         PJ_.save_regions(sh_)
         return f"Selection {r_['num']}: " + ("goes into the export" if r_['export'] else "not in the export")
 
@@ -2705,7 +2745,7 @@ def _view_one(folder, fullscreen, keys, car):
                 [int(np.floor(u_ * LT.level(r_))), int(np.floor(v_ * LT.level(r_)))] in r_['cells']]
         if not hit_:
             st['msg'] = ("Finer grid: first select lithography squares (M, they turn green), then put the mouse over "
-                         "them and press 2-9 (1, 0: 1/10). Scanned rectangles have no cells: select squares inside them")
+                         "them and press 2-5. Scanned rectangles have no cells: select squares inside them")
             return
         r_ = max(hit_, key=LT.level)
         old_ = rf_.get(r_['uid']) or {}
@@ -2738,7 +2778,8 @@ def _view_one(folder, fullscreen, keys, car):
         have_ = (have_ | cs_) if on else (have_ - cs_)
         write_refine(tg_['uid'], n_, have_)
         st['msg'] = (f"Grid 1/{M_} of {tg_['kind']} {tg_['num']}: {len(have_)} cells painted "
-                     f"(they become selections in the microscope window)")
+                     f"- Enter: make a selection of them")
+        st['car_dirty'] = True
 
     def unpaint_refine(q, whole):
         """Правый щелчок по закрашенной клетке подсетки: убрать её (whole — всю связную область). -> bool."""
@@ -2880,6 +2921,25 @@ def _view_one(folder, fullscreen, keys, car):
         if resp_ < 0.03:
             return None, f"no clear match (response {resp_:.3f}): drag it by hand"
         return dq0 - np.array([sx_, sy_]) / k_, resp_
+
+    def other_grid_src():
+        """Сетка образца построена по крестам ДРУГОЙ съёмки (руками)? -> её имя («Selection 3») или None."""
+        if smp is None:
+            return None
+        try:
+            L_ = json.load(open(smp.file, encoding='utf-8')).get('lattice') or {}
+        except (OSError, ValueError):
+            return None
+        sr_ = L_.get('src')
+        if L_.get('stage') or not sr_ or not os.path.isdir(sr_) or os.path.abspath(sr_) == os.path.abspath(folder):
+            return None
+        try:                                                # кресты там ещё стоят
+            d_ = json.load(open(os.path.join(sr_, 'grid.json'), encoding='utf-8'))
+            if d_.get('seeded') or len(d_.get('marks') or []) < 2:
+                return None
+        except (OSError, ValueError):
+            return None
+        return f"Selection {SM.sample_index(sr_)}"
 
     def al_set(dq_new):
         """Совмещение: сдвиг dq — остальных картинок относительно этой; вид едет так же, чтобы на экране двигалась
@@ -3273,6 +3333,8 @@ def _view_one(folder, fullscreen, keys, car):
             continue
         ch = chr(key & 0xFF) if 0 <= key < 256 else ''
         raw = ch
+        if key in (3014656, 65535, 0x2E0000) and st['mode'] == 'cross':   # Del в режиме крестов: заново
+            raw = ch = 'C'
         if g.ready():                                       # последняя готовая сетка: пересозданная получит её индексы
             v1_, v2_ = g.cr.vectors()
             st['regrid'] = (np.array(g.cr.O, float), np.array(v1_, float), np.array(v2_, float))
@@ -3375,8 +3437,11 @@ def _view_one(folder, fullscreen, keys, car):
             st['switch'] = subs[(i_ + (1 if raw == '.' else -1)) % len(subs)]
         elif raw == 'C':                                     # Shift+C: кресты заново (Ctrl+Z вернёт)
             unseed(); g.cr.clear(); g.refined = None; set_straight(False); g.save(px_um)
+            if smp0 is not None:                            # это были кресты сетки образца — её больше нет
+                update_lattice_of(P0_.sample_obj(folder))
             st['mode'] = 'cross'
-            st['msg'] = "Crosses cleared (Ctrl+Z brings them back). Click a cross, then its neighbour in the same row"
+            st['msg'] = ("Crosses cleared (Ctrl+Z brings them back); the grid of the sample is gone until new ones "
+                         "are marked. Click a cross, then its neighbour in the same row")
         elif ch == 's':                                      # Shift+J: точная сшивка (quality) — в очередь, как в окне микроскопа
             st['msg'] = queue_quality()
         elif ch == 'r':                                      # R: линейка: точка-точка -> прямая-прямая -> точка-прямая -> выкл
@@ -3477,9 +3542,14 @@ def _view_one(folder, fullscreen, keys, car):
                 st['mode'] = 'look'
                 st['msg'] = ""
             else:
-                st['mode'] = 'cross'
-                st['msg'] = ("Click a cross, then its neighbour in the same row: the picture turns level. "
-                             "Del: start again")
+                src_ = other_grid_src()
+                if src_:                                    # сетка образца одна: по крестам другой съёмки — сначала их убрать
+                    st['msg'] = (f"The grid of the sample is already made from the crosses of {src_}: there is only one. "
+                                 f"To make it here, remove those crosses first (open {src_}, C, Del)")
+                else:
+                    st['mode'] = 'cross'
+                    st['msg'] = ("Click a cross, then its neighbour in the same row: the picture turns level. "
+                                 "Del: start again")
         elif ch in 'mb' and ch:                              # M (и B по привычке): выбирать клетки
             L_us_ = smp0.data.get('lattice') if smp0 is not None else None
             if not g.ready() and not g.cr.marks and (L_us_ is None or L_us_.get('stage')):
@@ -3573,12 +3643,7 @@ def _view_one(folder, fullscreen, keys, car):
                 set_straight(not st['straight'])
                 st['msg'] = (f"Level: the picture is turned by {st['rot']:+.2f} deg, the squares stand straight (T: as shot)"
                              if st['straight'] else "Picture as shot, with its tilt (T: level)")
-        elif ch == '0' and st.get('lab') is None and _t.monotonic() - st.get('_k1', -9) < 1.0:   # «1», «0» — 1/10
-            st['_k1'] = -9
-            set_refine(10)
-        elif ch in '123456789' and ch and st.get('lab') is None:   # подсетка выделения под мышью: в n раз плотнее
-            if ch == '1':
-                st['_k1'] = _t.monotonic()
+        elif ch in '12345' and ch and st.get('lab') is None:   # подсетка выбранного выделения: в n раз плотнее (1 — нет)
             set_refine(int(ch))
         elif ch == 'a' and st['mode'] in ('select', 'paint') and g.ready():
             W_, H_ = sc.size
@@ -3592,7 +3657,7 @@ def _view_one(folder, fullscreen, keys, car):
             sh_ = stub()
             from .samples import init_areas as _ia, order as _ord
             _ia(sh_)
-            ks_ = [k_ for k_ in _ord(sh_) if sh_._regions[k_].get('export', True)]
+            ks_ = [k_ for k_ in _ord(sh_) if sh_._regions[k_].get('export', False)]
             r, e = busy("Export", lambda: export_sample(sh_, ks_))
             from .drawing import export_message
             st['msg'] = (str(e) if str(e).startswith("Not exported") else f"Export: {e}") if e is not None \

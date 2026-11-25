@@ -152,7 +152,7 @@ def num(m, k):
         return None
     if k < len(m._regions):
         return m._regions[k]['num']
-    return (m._pending or {}).get('num', getattr(m, '_area_seq', 0) + 1)
+    return (m._pending or {}).get('num', used_max(m) + 1)
 
 
 def col(m, k):
@@ -385,7 +385,7 @@ def corner(m, which, img=None):
             m._pending['thumbs'][:1] = th
         else:
             fw_, fh_ = m.frame_size
-            m._pending = dict(A=(rp.x, rp.y), pts=[fpt], thumbs=th, num=getattr(m, '_area_seq', 0) + 1,
+            m._pending = dict(A=(rp.x, rp.y), pts=[fpt], thumbs=th, num=used_max(m) + 1,
                               uid=uuid.uuid4().hex, obj=m.objective, fw=fw_, fh=fh_)
         k = len(m._regions)
         persist(m)
@@ -596,6 +596,27 @@ def session_of(folder):
 def samples(folder):
     """Папки образцов: для сеанса — все образцы, для одного скана — [скан]."""
     return session_of(folder)[1]
+
+
+def used_max(m):
+    """Наибольший номер, который уже занят: у выделений и у съёмок образца (в т. ч. убранных). Выделение, которое
+    создали и удалили, ничего не сняв, номер не занимает — следующее получит его же."""
+    import glob as _gl, re as _re
+    n = max([int(r.get('num', 0) or 0) for r in getattr(m, '_regions', [])] + [0])
+    smp = getattr(m, '_sample', None)
+    if smp is not None:
+        pats = ('scans/*_S[0-9]*', 'scans/_removed/*_S[0-9]*', '_removed/*_S[0-9]*', '_removed/*/*_S[0-9]*')
+        for f in [x for p_ in pats for x in _gl.glob(os.path.join(smp.folder, *p_.split('/')))]:
+            mo = _re.search(r'_S(\d+)(?:_|$)', os.path.basename(f))
+            if mo and os.path.isdir(f):
+                n = max(n, int(mo.group(1)))
+    return n
+
+
+def next_num(m):
+    """Номер нового выделения: следующий за занятыми (used_max)."""
+    m._area_seq = used_max(m) + 1
+    return m._area_seq
 
 
 def sample_index(folder):

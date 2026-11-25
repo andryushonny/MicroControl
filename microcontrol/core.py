@@ -1834,7 +1834,8 @@ class Microscope:
         if area is not None:                               # зона руками -> новое выделение проекта
             fw_, fh_ = self.frame_size
             off = self._off
-            self._area_seq = getattr(self, '_area_seq', 0) + 1
+            from .samples import next_num as _nn
+            _nn(self)
             self._regions.append(dict(A=(area.x0 + off['x'], area.y0 + off['y']), B=(area.x1 + off['x'], area.y1 + off['y']),
                                       pts=[], thumbs=[], num=self._area_seq, uid=_uuid.uuid4().hex,
                                       obj=self.objective, fw=fw_, fh=fh_, prog=True))

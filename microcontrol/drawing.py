@@ -187,7 +187,7 @@ def export_sample(m, ks=None, out=None, dwg=True, verbose=True, nested=False, pn
     from .mask import dxf_to_dwg
     from .samples import order as _order
     if ks is None:
-        ks = [k for k, r in enumerate(m._regions) if r.get('kind') != 'group' and r.get('export', True)]
+        ks = [k for k, r in enumerate(m._regions) if r.get('kind') != 'group' and r.get('export', False)]
     ks = [k for k in ks if m._regions[k].get('kind') != 'group']
     if not ks:
         raise ValueError("Nothing to export: tick the selections to export (the box on their cards)")

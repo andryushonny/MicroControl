@@ -1016,6 +1016,16 @@ def _run(m, fullscreen=False, _keys=None):
             pass
         return ring_
 
+    def nav_here():
+        """Карта — на то место, где сейчас камера (не искать её глазами после Tab)."""
+        try:
+            cam_ = camera_box(m, (m.frame_size[1], m.frame_size[0]))
+            if nav.c is not None:
+                nav.c = np.asarray(cam_, float).mean(0)
+                m._map_win = None
+        except Exception:
+            pass
+
     def draw_nav(view, Wl, bh_, shape):
         """Карта образца: в углу кадра (камера крупно) или на всё поле (Tab), камера тогда — в углу."""
         from .layers import rings as _rings
@@ -1171,7 +1181,7 @@ def _run(m, fullscreen=False, _keys=None):
             if reg.get('kind') == 'draft':                  # маска: черновик кисти, не снимается
                 hd_ = SM.hidden(m, k)
                 items.append(dict(title=SM.title(m, k), obj="draft", color=SM.col(m, k), chosen=k in car['multi'],
-                                  check=reg.get('export', True),
+                                  check=reg.get('export', False),
                                   confirm=car['confirm'] == k, depth=depth, hidden=bool(reg.get('hidden')),
                                   muted=hd_, lines=[mm_ + (", from the view (M)" if reg.get('src') else "") + (f", grid 1/{reg['sub']}" if reg.get('sub') else ""),
                                                     f"no objective: click 'draft' to scan it with {m.objective}x" if not hd_
@@ -1184,7 +1194,7 @@ def _run(m, fullscreen=False, _keys=None):
                 TM.fmt(TM.estimate(m, nfr_, 'points' if m._use_fp and reg['pts'] else 'off', o_)[0])
             hd_ = SM.hidden(m, k)
             sh_ = shot_of(k)
-            items.append(dict(title=SM.title(m, k), obj=f"{o_}x", color=SM.col(m, k), check=reg.get('export', True),
+            items.append(dict(title=SM.title(m, k), obj=f"{o_}x", color=SM.col(m, k), check=reg.get('export', False),
                               more=bool(sh_), chosen=k in car['multi'], thumbs=[] if hd_ else reg.get('thumbs', []), confirm=car['confirm'] == k, depth=depth,
                               muted=o_ != m.objective or hd_, hidden=bool(reg.get('hidden')),
                               lines=([(f"scanned {sh_}"
@@ -1604,7 +1614,7 @@ def _run(m, fullscreen=False, _keys=None):
         nonlocal msg, msg_t
         from .drawing import export_sample
         msg_t = time.monotonic()
-        ks_ = [k_ for k_ in SM.order(m) if m._regions[k_].get('kind') != 'group' and m._regions[k_].get('export', True)]
+        ks_ = [k_ for k_ in SM.order(m) if m._regions[k_].get('kind') != 'group' and m._regions[k_].get('export', False)]
         if not ks_:
             msg = "Nothing ticked for the export: the box on a card puts it into the export"
             return
@@ -2958,6 +2968,7 @@ def _run(m, fullscreen=False, _keys=None):
                 continue
             if c_[0] == 'swap':                                     # карта <-> камера
                 nv['big'] = m._nav_big = not nv['big']
+                nav_here()
                 continue
             if c_[0] in ('mapclick', 'maprect', 'mappan', 'mapwheel', 'mapdbl', 'mapscroll'):   # карта
                 if nv['mr'] is None or nav.c is None:
@@ -3084,7 +3095,7 @@ def _run(m, fullscreen=False, _keys=None):
                     k = car['order'][k] if k < len(car.get('order', [])) else k
                     if act == 'chk' and k < len(m._regions):       # галочка: в экспорт или нет
                         rg_ = m._regions[k]
-                        rg_['export'] = not rg_.get('export', True)
+                        rg_['export'] = not rg_.get('export', False)
                         SM.persist(m)
                         msg = f"{SM.title(m, k)}: " + ("goes into the export" if rg_['export'] else "not in the export")
                         msg_t = time.monotonic()
@@ -3218,6 +3229,7 @@ def _run(m, fullscreen=False, _keys=None):
             continue
         if key == 9 and not edit:                         # Tab: карта <-> камера крупно
             nv['big'] = m._nav_big = not nv['big']
+            nav_here()
             continue
         if key == 9:                                      # Tab в поле ввода: следующее поле (X -> Y -> Z -> выход)
             if edit:

@@ -867,7 +867,7 @@ M.run(m, fullscreen=False, _keys=[-1, ('tbar', bx("Export")), -1, -1])   # че�
 import glob as _glob
 assert not os.path.exists(os.path.join(m.sample.folder, 'export', 'drawing.json'))   # quick: экспорта нет (ошибка)
 try:
-    mc.export_sample(m); raise AssertionError("export of a quick scan")
+    mc.export_sample(m, ks=[0]); raise AssertionError("export of a quick scan")
 except ValueError as e:
     assert 'not quality-stitched' in str(e), e
 m.close(); print("Navigator: drag on the map - new area, click - go, Tab, Scan area, Export refused without quality: OK")
@@ -974,8 +974,8 @@ tol = 0.6 * m.motor_step / np.hypot(*u)
 assert (uv[:, 0] > -tol).all() and (uv[:, 0] < w_ + tol).all() and (uv[:, 1] > -tol).all() and (uv[:, 1] < h_ + tol).all(), uv
 uid10_ = m._regions[kd]['uid']
 q10 = g.cr.point(1 + 0.5, 0.5)
-V_.view(f, _keys=[-1, ('qmove', *q10), ord('1'), ord('0'), -1, 27])      # «1», «0» — подсетка 1/10
-assert any(int(v_.get('n') or 0) == 10 for v_ in json.load(open(os.path.join(f, 'grid.json')))['refine'].values())
+V_.view(f, _keys=[-1, ('qmove', *q10), ord('7'), -1, 27])                # 7 — не подсетка (только 2-5)
+assert not any(int(v_.get('n') or 0) > 5 for v_ in json.load(open(os.path.join(f, 'grid.json'))).get('refine', {}).values())
 m.close(); print("Lattice from cross 1,1; drafts of cells; finer grid 2-5 in the viewer, addresses 6,7 > 1,1 > 2,2; "
                  "50x on the 1/3 grid; drawing from cross 1,1, every cell closed on its layer: OK")
 
@@ -2242,6 +2242,7 @@ assert sorted(PJ.scan_label(f_) for f_ in fs) == ['S01_10x', 'S02_10x', 'S03_50x
 assert [PJ.scan_label(f_) for f_ in PJ.latest_scans(m.sample.folder)] == ['S03_50x', 'S02_10x', 'S01_10x']   # по слоям
 print(SM.reorder(m, 0, 2))                                                       # Selection 1 — наверх
 assert [PJ.scan_label(f_) for f_ in PJ.latest_scans(m.sample.folder)][0] == 'S01_10x'
+for r_ in m._regions: r_['export'] = True                                        # галочки по умолчанию сняты — поставить
 m._regions[1]['export'] = False; SM.persist(m)                                   # галочка снята у Selection 2
 dx = mc.export_sample(m, drawing=False)
 ex = os.path.join(m.sample.folder, 'export')
@@ -2436,3 +2437,44 @@ lt0 = m.light
 M.run(m, fullscreen=False, _keys=[-1, ord('l'), -1, ord('\\'), -1, -1, CZ, -1, CZ, -1, -1, 27])
 assert m.light == lt0 and int(m.map_turn) == 0, (m.light, m.map_turn)          # свет и поворот карты — назад
 m.close(); print("Ctrl+Z undoes everything: transparency, align with its outline, light, map turn: OK")
+
+
+# ------------------------------------------------------------------ 68. Выделение создали и удалили, ничего не сняв, — номер не занят; снятое — занят; галочки экспорта по умолчанию сняты
+from microcontrol import samples as SM, layers as LY68
+m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp()); m.focus(); fw, fh = m.frame_size
+SM.corner(m, 1); m.move(dx=fw); SM.corner(m, 2)                                         # 1
+m.goto(x=3 * fw, y=0); SM.corner(m, 1); m.move(dx=fw); SM.corner(m, 2)                  # 2
+assert [r['num'] for r in m._regions] == [1, 2] and not any(r.get('export') for r in m._regions)
+del m._regions[1]; SM.persist(m)                                                          # 2 удалили, не сняв
+m.goto(x=6 * fw, y=0); SM.corner(m, 1); m.move(dx=fw); SM.corner(m, 2)
+assert [r['num'] for r in m._regions] == [1, 2], [r['num'] for r in m._regions]           # снова 2
+SM.persist(m); m.scan(only=[m._regions[1]['uid']])                                        # 2 сняли
+SM.remove(m, 1) if hasattr(SM, 'remove') else m._regions.pop(1); SM.persist(m)
+m.goto(x=9 * fw, y=0); SM.corner(m, 1); m.move(dx=fw); SM.corner(m, 2)
+assert m._regions[-1]['num'] == 3, [r['num'] for r in m._regions]                         # номер 2 занят его съёмкой
+m.close(); print("Numbers: a selection made and deleted without scans gives its number back; a scanned one keeps it; ticks off by default: OK")
+
+
+# ------------------------------------------------------------------ 69. Сетка одна: кресты на другом выделении — только после того, как старые убраны
+from microcontrol import samples as SM, project as PJ
+from microcontrol.mask import Grid
+from microcontrol.snap import stage_to_mosaic as s2m69
+m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp()); m.focus(); fw, fh = m.frame_size
+SM.corner(m, 1); m.move(dx=fw); SM.corner(m, 2)
+m.goto(x=0.5 * fw, y=0.3 * fh); SM.corner(m, 1); m.move(dx=fw); SM.corner(m, 2)
+SM.persist(m); m.scan()
+fA = PJ.Selection(m.sample, m._regions[0]).latest.folder; fB = PJ.Selection(m.sample, m._regions[1]).latest.folder
+w69 = m._world; t69 = np.radians(w69.turn_deg)
+wp69 = lambda i, j: (np.cos(t69) * i * 100 - np.sin(t69) * j * 100, np.sin(t69) * i * 100 + np.cos(t69) * j * 100)
+gA = Grid(fA)
+for ij in ((1, 1), (2, 1), (1, 2)):
+    gA.cr.add(s2m69(fA, np.array([wp69(*ij)]))[0])
+gA.save(json.load(open(os.path.join(fA, 'meta.json')))['pixel_size_um'])
+r69 = {}
+mc.view(fB, _keys=[-1, ord('c'), -1, ('call', lambda st: r69.update(mode=st['mode'], msg=st['msg'])), 27, 27])
+assert r69['mode'] != 'cross' and 'Selection 1' in r69['msg'] and Grid(fB).ready(), r69       # нельзя: сетка — по Selection 1
+mc.view(fA, _keys=[-1, ord('c'), -1, 65535, -1, 27, -1, 27, 27])                           # на A: C, Del — кресты убраны
+assert 'lattice' not in json.load(open(m.sample.file)) or json.load(open(m.sample.file))['lattice'].get('stage')
+mc.view(fB, _keys=[-1, ord('c'), -1, ('call', lambda st: r69.update(mode=st['mode'])), 27, 27])
+assert r69['mode'] == 'cross' and not Grid(fB).ready(), r69                                 # теперь можно; старой сетки нет
+m.close(); print("One grid only: crosses on another selection only after the old ones are removed: OK")

@@ -254,8 +254,8 @@ def idx(m, uid):
 
 
 def new_num(m):
-    m._area_seq = getattr(m, '_area_seq', 0) + 1
-    return m._area_seq
+    from .samples import next_num
+    return next_num(m)
 
 
 def nested(ga, gb):
@@ -794,18 +794,9 @@ def sync_brush(m, make=True):
     from .samples import obj
     from .snap import mosaic_to_stage
     from .mask import Grid
-    if getattr(m, '_sample', None) is not None and hasattr(m, 'motor_step'):   # просмотр уже записал выделения
-        try:                                                                   # из кисти сам — взять их, без дублей
-            import json as _json
-            dk = _json.load(open(m._sample.file, encoding='utf-8'))
-            if len(dk.get('selections') or []) > len(m._regions or []) and \
-                    dk.get('selections') != m._sample.data.get('selections'):
-                from . import project as _P
-                from .samples import init_areas
-                m._sample.data.update(dk)
-                _P.load_regions(m)
-                m._area_seq = max(getattr(m, '_area_seq', 0), int(dk.get('seq', 0) or 0))
-                init_areas(m)
+    if getattr(m, '_sample', None) is not None and hasattr(m, 'motor_step'):   # просмотр записал выделения (новые из
+        try:                                                                   # кисти, совмещение, объектив) — взять
+            refresh_from_disk(m)                                               # их ДО записи своих: не затереть
         except Exception:
             pass
     if getattr(m, '_sample', None) is None:

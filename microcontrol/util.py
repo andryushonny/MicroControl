@@ -1,5 +1,5 @@
 """Текстовые ответы (Result) и полоса прогресса (Progress)."""
-import os, sys, time, threading
+import os, sys, time, threading, json
 import numpy as np
 
 
@@ -544,3 +544,32 @@ def named_folder(scans, objective, name, reuse=False):
             print(f"Writing into the existing folder {old[-1]} (the previous scan with this name is replaced)")
             return path
     return os.path.join(scans, _dt.now().strftime("%Y-%m-%d_%H%M%S") + f"_{objective}x_{safe}")
+
+
+# ---------------------------------------------------------------- раскладка окон (у пользователя, для обоих окон)
+_UI_P = os.path.join(os.path.expanduser('~'), '.microcontrol', 'ui.json')
+UI_DEFAULTS = dict(panes='one', list='right')            # panes: one | camera|map | map|camera; list: right | left
+
+
+def ui_pref(key):
+    """Настройка раскладки (View -> Layout): panes, list."""
+    if os.environ.get('MC_TEST') and not os.environ.get('MC_UI'):   # проверки — всегда раскладка по умолчанию
+        return UI_DEFAULTS.get(key)
+    try:
+        with open(_UI_P, encoding='utf-8') as f:
+            v = json.load(f).get(key)
+    except (OSError, ValueError):
+        v = None
+    return v if v is not None else UI_DEFAULTS.get(key)
+
+
+def set_ui_pref(key, val):
+    try:
+        with open(_UI_P, encoding='utf-8') as f:
+            d = json.load(f)
+    except (OSError, ValueError):
+        d = {}
+    d[key] = val
+    os.makedirs(os.path.dirname(_UI_P), exist_ok=True)
+    with open(_UI_P, 'w', encoding='utf-8') as f:
+        json.dump(d, f, indent=1)

@@ -790,6 +790,20 @@ def _run(m, fullscreen=False, _keys=None):
     nav = m._nav
     nv = dict(big=getattr(m, '_nav_big', False), mr=None, inset=None, press=None, drag=None, pan=None)
 
+    def to_logical(x, y):
+        """x окна -> x раскладки по умолчанию (камера | карта | список справа): рисуется по умолчанию,
+        на экран — переставленным; щелчки — обратно."""
+        yy_ = y - UI.MENU_H - UI.TOOL_H
+        if yy_ < 0 or lay.get('Wl') is None:
+            return x
+        Wl_ = lay['Wl']
+        if lay['list'] == 'left':
+            x = x + Wl_ if x < SM.CAR_W else x - SM.CAR_W
+        if lay['panes'] == 'map|camera' and lay.get('Wc') and x < Wl_ and yy_ < (lay.get('Hp') or 0):
+            Wm_ = Wl_ - lay['Wc']
+            x = x + lay['Wc'] if x < Wm_ else x - Wm_
+        return x
+
     def in_rect(r_, x, y):
         return r_ is not None and r_[0] <= x <= r_[2] and r_[1] <= y <= r_[3]
 
@@ -807,6 +821,7 @@ def _run(m, fullscreen=False, _keys=None):
             elif ev == cv2.EVENT_MOUSEWHEEL:
                 pick['scroll'] = max(0, pick.get('scroll', 0) - int(np.sign(wheel_delta(flags))))
             return
+        x = to_logical(x, y)                               # раскладка (список слева, карта слева): x как у логики
         if wiz.get('rects'):                               # кнопки мастера Prepare — раньше всего остального
             hit_ = next((k2 for k2, r2 in wiz['rects'].items() if r2[0] <= x <= r2[2] and r2[1] <= y <= r2[3]), None)
             if ev == cv2.EVENT_MOUSEMOVE:
@@ -1077,6 +1092,8 @@ def _run(m, fullscreen=False, _keys=None):
         mw_, mh_ = min(400, Wl // 2), min(290, H // 2)
         inset = (Wl - mw_ - 10, 10, Wl - 10, 10 + mh_)
         mr = (0, 0, Wl, H - bh_) if nv['big'] else inset
+        if lay.get('Wc'):                                  # два вида: карта — своя половина окна, во всю высоту
+            mr, inset = (lay['Wc'], 0, Wl, H - bh_), None
         nv['mr'], nv['inset'] = mr, inset
         w_, h_ = mr[2] - mr[0], mr[3] - mr[1]
         cam = camera_box(m, shape)
@@ -1089,7 +1106,8 @@ def _run(m, fullscreen=False, _keys=None):
                 fw_ = max(m.frame_size)
                 bx = [(c_[0] - 4 * fw_, c_[1] - 3 * fw_, c_[0] + 4 * fw_, c_[1] + 3 * fw_)]
             nav.fit(bx, w_, h_)
-        camsmall = cv2.resize(view[:mh_ * 0 + H - bh_, :Wl], (mw_, int(mw_ * (H - bh_) / Wl))) if nv['big'] else None
+        camsmall = cv2.resize(view[:mh_ * 0 + H - bh_, :Wl], (mw_, int(mw_ * (H - bh_) / Wl))) \
+            if nv['big'] and not lay.get('Wc') else None
         ls_ = latest_scans()
         from .layers import rings as _rings
         al_ = map_alpha()                                  # прозрачность картинок выделений ([ ]), без обрезки по контуру
@@ -1158,7 +1176,8 @@ def _run(m, fullscreen=False, _keys=None):
             lab_.append((f"{SM.num(m, k_)} draft" if m._regions[k_].get('kind') == 'draft' else
                          f"{SM.num(m, k_)}  {SM.obj(m, m._regions[k_])}x", b_, SM.col(m, k_),
                          [q_ for k2, q_ in boxes_.items() if k2 not in mine_]))
-        nav.labels(mp, lab_, [(inset[0] - mr[0], inset[1] - mr[1], inset[2] - mr[0], inset[3] - mr[1])] if nv['big'] else [])
+        nav.labels(mp, lab_, [(inset[0] - mr[0], inset[1] - mr[1], inset[2] - mr[0], inset[3] - mr[1])]
+                   if nv['big'] and inset is not None else [])
         pr_ = pending_ring()
         if pr_ is not None:                                 # новая область (угол 1 — столик): пунктир её цвета
             nav.poly(mp, pr_, SM.col(m, len(m._regions)), 2, dashed=True)
@@ -1184,7 +1203,7 @@ def _run(m, fullscreen=False, _keys=None):
         nav.scale_bar(mp)
         hint_ = ("Map: click - go there, drag - new area, Ctrl+drag - free box, wheel - zoom, right drag - move, "
                  "double-click - open, Tab - camera"
-                 if nv['big'] else "Map (Tab: bigger)  click - go, drag - new area, wheel - zoom")
+                 if nv['big'] or lay.get('Wc') else "Map (Tab: bigger)  click - go, drag - new area, wheel - zoom")
         UI.panel(mp, 0, 0, UI.size(hint_, 0.42)[0] + 16, 26, 0.8)        # подсказка — на тёмной плашке
         UI.put(mp, hint_, 8, 18, 0.42, (225, 225, 225), 1)
         view[mr[1]:mr[3], mr[0]:mr[2]] = mp
@@ -1252,7 +1271,9 @@ def _run(m, fullscreen=False, _keys=None):
         car['order'] = order                               # новая (только угол 1) — в списке после угла 2
         return items
 
-    MENU = ["Open", "New", "Info", "Scans", "Queue", "View", "Help"]
+    MENU = ["Open", "New", "Info", "Scans", "Queue", "View", "Layout", "Help"]
+    from .util import ui_pref, set_ui_pref
+    lay = dict(panes=ui_pref('panes'), list=ui_pref('list'), Wc=None, Wl=None, Hp=None)   # раскладка окна
     from .project import SCAN_HEAD as PICK_HEAD
     PICK_NOTE = "Click a star (or a row): the main scan - maps, view, export. A new scan becomes the main one. Esc: close"
 
@@ -1898,6 +1919,16 @@ def _run(m, fullscreen=False, _keys=None):
         elif what[1] == "Settings":
             m._panel_hidden = not getattr(m, '_panel_hidden', False)
 
+    def set_layout(k_, v_):
+        """Раскладка: panes (one | camera|map | map|camera) или list (right | left); помнится."""
+        nonlocal msg, msg_t
+        lay[k_] = v_
+        set_ui_pref(k_, v_)
+        if k_ == 'panes':
+            nv['big'] = m._nav_big = False
+            nav_here()
+        msg, msg_t = f"Layout: {'list ' + v_ if k_ == 'list' else v_.replace('one', 'one view')}", time.monotonic()
+
     def menu_do(item):
         """Пункт меню: открыть / создать проект и образец, сведения, съёмки, просмотр, подсказка."""
         nonlocal msg, msg_t, show_help
@@ -2026,6 +2057,18 @@ def _run(m, fullscreen=False, _keys=None):
                     open_view()
             elif item == "View":
                 open_view()
+            elif item == "Layout":
+                LAY_ = [("One view: camera big, the map in the corner (Tab swaps them)", 'panes', 'one'),
+                        ("Two views: camera | map", 'panes', 'camera|map'),
+                        ("Two views: map | camera", 'panes', 'map|camera'),
+                        ("Selections list on the right", 'list', 'right'),
+                        ("Selections list on the left", 'list', 'left')]
+                cur_ = next((i_ for i_, (_t, k_, v_) in enumerate(LAY_) if k_ == 'panes' and lay['panes'] == v_), 0)
+                r_ = D.choose("Layout of the windows", [("* " if lay[k_] == v_ else "  ") + t_ for t_, k_, v_ in LAY_],
+                              cur_, ("Apply",), extra="* - now. Both windows (the view: the list side). Kept for next time.")
+                if r_:
+                    _t, k_, v_ = LAY_[r_[1]]
+                    set_layout(k_, v_)
             elif item == "Help":
                 show_help = not show_help
         except Exception as e:
@@ -2639,10 +2682,13 @@ def _run(m, fullscreen=False, _keys=None):
             H -= UI.MENU_H + UI.TOOL_H                         # сверху — меню и строка шагов
             rot = 0.0
             Wl = W - SM.CAR_W                                  # картинка — слева от карусели, по центру
-            to_v, back_v, i2v, v2i, cimg, kz, zm['c'] = live_map(m, img.shape, Wl, H, zm['z'], zm['c'], rot)
-            base = render(img, Wl, H, kz, zm['c'], rot)
+            split_ = lay['panes'] in ('camera|map', 'map|camera')
+            Wcam = Wl // 2 if split_ else Wl                   # два вида: камера — своя половина, карта — другая
+            lay['Wc'], lay['Wl'] = (Wcam if split_ else None), Wl
+            to_v, back_v, i2v, v2i, cimg, kz, zm['c'] = live_map(m, img.shape, Wcam, H, zm['z'], zm['c'], rot)
+            base = render(img, Wcam, H, kz, zm['c'], rot)
             view = np.zeros((H, W, 3), np.uint8)
-            view[:, :Wl] = base
+            view[:, :Wcam] = base
             cam_poly_ = np.array([i2v(u_) for u_ in ((0, 0), (img.shape[1], 0), (img.shape[1], img.shape[0]),
                                                      (0, img.shape[0]))], float)
             rp_ = np.array([m.real_position.x, m.real_position.y])     # контуры выделений на кадре (строго:
@@ -2669,9 +2715,9 @@ def _run(m, fullscreen=False, _keys=None):
             else:
                 cam_a = 0.35
             if clear_cam:
-                sub_ = view[:, :Wl].copy()
+                sub_ = view[:, :Wcam].copy()
                 UI.tint_outside(sub_, clear_cam, (0, 0, 0) if cam_a < 0.3 else (40, 40, 40), cam_a)
-                view[:, :Wl] = sub_
+                view[:, :Wcam] = sub_
             for k_, rg_ in enumerate(m._regions):
                 if rg_.get('kind') == 'group' or SM.hidden(m, k_):
                     continue
@@ -2683,32 +2729,32 @@ def _run(m, fullscreen=False, _keys=None):
                 for ring_ in rings(m, rg_):
                     pts = np.int32(np.round(np.array([to_v(S_ + d_) for S_ in ring_], float)))   # 1/16 px
                     if rg_.get('kind') == 'draft':                   # маска — пунктиром, без заливки
-                        UI.dashed_poly(view[:, :Wl], pts / 16.0, c_k if k_ == m._sel else SM.dim(c_k, 0.9),
+                        UI.dashed_poly(view[:, :Wcam], pts / 16.0, c_k if k_ == m._sel else SM.dim(c_k, 0.9),
                                        2 if k_ == m._sel else 1)
                     else:
-                        cv2.polylines(view[:, :Wl], [pts], True, c_k if k_ == m._sel else SM.dim(c_k, 0.85),
+                        cv2.polylines(view[:, :Wcam], [pts], True, c_k if k_ == m._sel else SM.dim(c_k, 0.85),
                                       2 if k_ == m._sel else 1, cv2.LINE_8)
             pr_ = pending_ring()
             if pr_ is not None:                             # новая область: от угла 1 до столика, пунктиром
-                UI.dashed_poly(view[:, :Wl], np.array([to_v(S_) for S_ in pr_], float),
+                UI.dashed_poly(view[:, :Wcam], np.array([to_v(S_) for S_ in pr_], float),
                                SM.col(m, len(m._regions)), 2)
             if rul['on'] and rul['pts']:                    # линейка (точки — на образце: едут вместе с ним)
                 a_ = to_v(rul['pts'][0])
                 if len(rul['pts']) == 2:
                     b_, q2 = to_v(rul['pts'][1]), rul['pts'][1]
-                elif hover[0] is not None and hover[0][0] < Wl:
+                elif hover[0] is not None and hover[0][0] < Wcam:
                     b_ = (hover[0][0] + 0.5, hover[0][1] + 0.5)
                     q2 = back_v(b_)
                 else:
                     b_ = q2 = None
                 UI.ruler(view, a_, b_, ruler_text(rul['pts'][0], q2) if q2 is not None else "")
-            cm_ = np.zeros((H, Wl), np.uint8)              # дополненная реальность — только на кадре камеры
+            cm_ = np.zeros((H, Wcam), np.uint8)              # дополненная реальность — только на кадре камеры
             cv2.fillPoly(cm_, [np.int32(np.round(cam_poly_))], 255, cv2.LINE_8)
-            view[:, :Wl] = np.where(cm_[..., None] > 0, view[:, :Wl], base)
+            view[:, :Wcam] = np.where(cm_[..., None] > 0, view[:, :Wcam], base)
             if m.laser:                                    # лазер включён — видно всегда
                 t_ = f"LASER ON  {m.laser:g} mW   (I: off)"
                 tw_ = UI.size(t_, 0.7, 2)[0]
-                x_ = int((Wl - tw_) / 2)
+                x_ = int((Wcam - tw_) / 2)
                 cv2.rectangle(view, (x_ - 14, 12), (x_ + tw_ + 14, 52), (20, 20, 200), -1)
                 UI.put(view, t_, x_, 42, 0.7, (255, 255, 255), 2)
             p = m.position
@@ -2735,7 +2781,7 @@ def _run(m, fullscreen=False, _keys=None):
             FS = 0.55 * sc
             th0 = UI.size("Xg", FS)[1]
             LH = th0 + 16
-            nav_early = nv['big']                            # большая карта — под панелью, а не панель в углу
+            nav_early = nv['big'] or split_                  # большая карта — под панелью, а не панель в углу
             if nav_early:
                 draw_nav(view, Wl, th0 + 20, img.shape)
             rects = {}
@@ -2894,12 +2940,22 @@ def _run(m, fullscreen=False, _keys=None):
             # низ: строка состояния; над ней — сообщение
             bh_ = th0 + 20
             UI.status_bar(view, 0, H - bh_, Wl, H, None,                   # «Ready» и факты; дело — в busy
-                          [t_.strip() for t_ in line.split("    ") if t_.strip()] + ["H: keys"], scale=FS)
+                          [f"Objective {m.objective}x"] + [t_.strip() for t_ in line.split("    ") if t_.strip()]
+                          + ["H: keys"], scale=FS)                 # объектив программы — всегда на виду
             qh_ = UI.queue_height(qq_, FS) if qq_ is not None else 0     # очередь — над строкой состояния
             qbar['rects'] = UI.queue_panel(view, 0, H - bh_, Wl, qq_, FS) if qh_ else []
             qbar['h'] = qh_
             if not nav_early:
                 draw_nav(view, Wl, bh_ + qh_, img.shape)
+            lay['Hp'] = H - bh_ - qh_
+            if split_:                                       # граница видов
+                if lay['panes'] == 'map|camera':             # карта слева, камера справа
+                    Hp_ = lay['Hp']
+                    view[:Hp_, :Wl] = np.hstack([view[:Hp_, Wcam:Wl], view[:Hp_, :Wcam]])
+                    xb_ = Wl - Wcam
+                else:
+                    xb_ = Wcam
+                cv2.line(view, (xb_, 0), (xb_, lay['Hp']), (90, 92, 104), 2)
             if show_help:                                    # H: все клавиши — поверх всего (переносом, влезает в окно)
                 kh_ = [h_.partition(": ") for h_ in HELP]
                 UI.help_panel(view[:, :Wl], [(k_, d_) for k_, _s, d_ in kh_])
@@ -2953,6 +3009,8 @@ def _run(m, fullscreen=False, _keys=None):
                                        W=W - SM.CAR_W, low=True)
                 oy_ = UI.MENU_H + UI.TOOL_H
                 wiz['rects'] = {k2: (r2[0], r2[1] + oy_, r2[2], r2[3] + oy_) for k2, r2 in wr_.items()}
+            if lay['list'] == 'left':                       # список — слева
+                view = np.ascontiguousarray(np.hstack([view[:, W - SM.CAR_W:], view[:, :W - SM.CAR_W]]))
             if pick.get('k') is not None:                  # список съёмок выделения
                 pick['rects'] = UI.pick_panel(view, pick['title'], PICK_HEAD, pick['rows'], pick['star'], pick.get('hover'),
                                               pick.get('scroll', 0), W=W, note=PICK_NOTE)
@@ -3289,6 +3347,11 @@ def _run(m, fullscreen=False, _keys=None):
                         hold_.__exit__()
                 h_last = (h_sig(), h_snap())
             msg_t = time.monotonic()
+            continue
+        if key == 9 and not edit and lay['panes'] != 'one':   # два вида: Tab меняет их местами
+            lay['panes'] = 'map|camera' if lay['panes'] == 'camera|map' else 'camera|map'
+            set_ui_pref('panes', lay['panes'])
+            nav_here()
             continue
         if key == 9 and not edit:                         # Tab: карта <-> камера крупно
             nv['big'] = m._nav_big = not nv['big']

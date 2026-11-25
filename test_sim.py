@@ -2733,3 +2733,37 @@ from microcontrol import project as PJ76
 fB0 = PJ76.scans_of(m.sample.folder, jB.uid)[0]
 assert J76.n_frames(jB.folder) == J76.n_frames(fB0.folder if hasattr(fB0, 'folder') else fB0), (J76.n_frames(jB.folder), fB0)   # после паузы — весь
 m.close(); print("Queue: a forced stop leaves the other jobs alone (its frames quick-stitched as a job of its own); pause per job - scan after the frame, stitch frozen - then on: OK")
+
+
+# ------------------------------------------------------------------ 77. Раскладка: два вида (камера | карта, карта | камера), список слева; щелчки попадают туда, что видно; помнится
+os.environ['MC_UI'] = '1'
+import microcontrol.manual as M77
+import microcontrol.viewer as V77
+from microcontrol.util import set_ui_pref, ui_pref
+m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp()); m.focus(); fw, fh = m.frame_size
+m.area = mc.Area(0, 0, 2 * fw, fh); f77 = m.scan()
+try:
+    set_ui_pref('panes', 'map|camera'); set_ui_pref('list', 'left')
+    sh77 = []
+    o77 = cv2.imshow
+    cv2.imshow = lambda w, i: (sh77.append(i), o77(w, i))
+    M77.run(m, fullscreen=False, _keys=[-1, -1])
+    fr77 = sh77[-1]; H77, W77 = fr77.shape[:2]
+    p0 = m.real_position
+    from microcontrol import samples as SM77, ui as UI77
+    Wl77 = W77 - SM77.CAR_W; xm77 = SM77.CAR_W + (Wl77 - Wl77 // 2) // 2         # середина карты (слева, после списка)
+    ym77 = UI77.MENU_H + UI77.TOOL_H + (H77 - UI77.MENU_H - UI77.TOOL_H) // 3
+    M77.run(m, fullscreen=False, _keys=[-1, -1, ('mouse', cv2.EVENT_LBUTTONDOWN, xm77, ym77, 0), -1,
+                                        ('mouse', cv2.EVENT_LBUTTONUP, xm77, ym77, 0), -1, -1])
+    p1 = m.real_position
+    assert abs(p1.x - p0.x) + abs(p1.y - p0.y) > 1, (p0, p1)                                # щелчок по карте — поехал
+    M77.run(m, fullscreen=False, _keys=[-1, 9, -1, -1])
+    assert ui_pref('panes') == 'camera|map'                                                    # Tab: виды местами, помнится
+    sh77.clear(); V77.view(f77, _keys=[-1, -1, 27, 27])
+    cv2.imshow = o77
+    vimg = sh77[-1]
+    assert vimg[60:, :SM77.CAR_W].mean() > vimg[60:, SM77.CAR_W:SM77.CAR_W + 40].mean() - 200  # просмотр открылся
+finally:
+    cv2.imshow = o77 if 'o77' in dir() else cv2.imshow
+    set_ui_pref('panes', 'one'); set_ui_pref('list', 'right'); os.environ.pop('MC_UI', None)
+m.close(); print("Layout: two views (camera | map, map | camera) and the list on the left; clicks land where things are shown; kept: OK")

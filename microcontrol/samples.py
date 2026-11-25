@@ -539,15 +539,25 @@ def drive_to(m, X, Y, z=None, trace=None):
         pts_ += [(p0.x + np.sign(x_t - p0.x) * st_ * i, p0.y) for i in range(1, nx_ + 1)]
         ny_ = int(abs(y_t - p0.y) // st_)
         pts_ += [(x_t, p0.y + np.sign(y_t - p0.y) * st_ * i) for i in range(0, ny_ + 1)]
-        for wx, wy in pts_:
-            if abs(wx - x_t) + abs(wy - y_t) < st_ * 0.1:
-                break
-            try:
-                if trace(wx, wy, False):
-                    m.goto(x=wx, y=wy)
-                    trace(wx, wy, True)
-            except Exception:
-                break
+        mp0_ = getattr(m, 'move_pause', None)
+        try:                                                # остановки следа — вдвое короче обычных
+            if mp0_:
+                try:
+                    m.move_pause = mp0_ / 2
+                except Exception:                           # ниже допустимого — как есть
+                    mp0_ = None
+            for wx, wy in pts_:
+                if abs(wx - x_t) + abs(wy - y_t) < st_ * 0.1:
+                    break
+                try:
+                    if trace(wx, wy, False):
+                        m.goto(x=wx, y=wy)
+                        trace(wx, wy, True)
+                except Exception:
+                    break
+        finally:
+            if mp0_:
+                m.move_pause = mp0_
     p0 = m.position
     nleg = max(1, int(np.ceil(np.hypot(x_t - p0.x, y_t - p0.y) / (m.max_jump * 0.95))))
     for i_ in range(1, nleg + 1):

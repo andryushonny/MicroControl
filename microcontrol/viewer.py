@@ -808,6 +808,10 @@ def _view_one(folder, fullscreen, keys, car):
     def show(img):
         ttl = (smp.title + f"  [{smp.project.uid}]" + (f"  —  {smp.description}" if smp.description else "")) if smp else os.path.basename(folder)
         bar, menu['hits'] = UI.menu_bar(img.shape[1], ttl, ["Open", "Scans", "Info", "Help"], menu['hover'])
+        from .util import ui_pref as _uip
+        if _uip('list') == 'left':                          # раскладка: список слева (как в окне микроскопа)
+            img = np.ascontiguousarray(np.hstack([img[:, img.shape[1] - SM.CAR_W:], img[:, :img.shape[1] - SM.CAR_W]]))
+        st['_list_left'], st['_fullW'] = _uip('list') == 'left', img.shape[1]
         pk_ = st.get('pick')
         if pk_:                                             # список съёмок выделения — поверх всего
             img = img.copy()
@@ -1173,6 +1177,8 @@ def _view_one(folder, fullscreen, keys, car):
                 pk_['scroll'] = max(0, pk_.get('scroll', 0) - int(np.sign(wheel_delta(flags))))
                 st['car_dirty'] = True
             return
+        if st.get('_list_left'):                            # список слева: x — как при списке справа
+            x = x + (st['_fullW'] - SM.CAR_W) if x < SM.CAR_W else x - SM.CAR_W
         shift = bool(flags & cv2.EVENT_FLAG_SHIFTKEY)
         dg_ = car.get('drag')
         if dg_ is not None and ev in (cv2.EVENT_MOUSEMOVE, cv2.EVENT_LBUTTONUP) and not st['down']:

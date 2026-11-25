@@ -131,7 +131,9 @@ class NavMap:
                      for f in scans), None if fog is None else (id(fog), fog.ver))
         if key != self._key:
             canvas = np.full((h, w, 3), 24, np.uint8)
-            step = 10 ** np.floor(np.log10(max(1e-3, self.s * 80)))          # сетка мкм — для ориентира
+            mn_ = max(1e-3, self.s * 30)                                     # сетка мкм — для ориентира:
+            e_ = 10 ** np.floor(np.log10(mn_))                               # шаг 1-2-5, линии не чаще 30 px
+            step = next(k_ * e_ for k_ in (1, 2, 5, 10) if k_ * e_ >= mn_)
             cs_ = self.to_um(np.array([(0, 0), (w, 0), (0, h), (w, h)], float))
             S0, S1 = cs_.min(0), cs_.max(0)
             for x in np.arange(np.floor(S0[0] / step) * step, S1[0], step):

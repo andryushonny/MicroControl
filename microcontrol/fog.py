@@ -21,6 +21,7 @@ class Fog:
         self.res, self.tiles, self.dirty = float(res), {}, set()
         self.ver, self.lock, self.t_save = 0, threading.RLock(), time.monotonic()
         self.last = None                                 # центр последнего кадра, мкм
+        self._cache, self._tver = {}, {}                 # уровни плиток для карты; версия каждой плитки
         if self.folder and os.path.isdir(self.folder):
             try:
                 d = json.load(open(os.path.join(self.folder, 'fog.json'), encoding='utf-8'))
@@ -70,6 +71,7 @@ class Fog:
                         t = self.tiles[(tx, ty)] = np.zeros((TILE, TILE, 3), np.uint8)
                     t[msk] = np.maximum(pic[msk], 1)              # 0 — «здесь не были»
                     self.dirty.add((tx, ty))
+                    self._tver[(tx, ty)] = self._tver.get((tx, ty), 0) + 1
             self.ver += 1
             self.last = c
         if time.monotonic() - self.t_save > 5:
@@ -123,10 +125,32 @@ class Fog:
             T0 = np.array([tx, ty], float) * self.res * TILE
             A = nav.R * (self.res / nav.s)                                # пиксель плитки -> пиксель карты
             b = nav.R @ ((T0 - nav.c) / nav.s) + (w / 2, h / 2)
-            M = np.float32(np.c_[A, b])
-            pic = cv2.warpAffine(t, M, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
-            msk = cv2.warpAffine((t.max(2) > 0).astype(np.uint8), M, (w, h), flags=cv2.INTER_NEAREST,
-                                 borderValue=0) > 0
+            cr = np.array([(0, 0), (TILE, 0), (0, TILE), (TILE, TILE)], float) @ A.T + b
+            x0, y0 = np.maximum(np.floor(cr.min(0)).astype(int), 0)       # только свой кусок окна, не всё окно
+            x1, y1 = np.minimum(np.ceil(cr.max(0)).astype(int) + 1, (w, h))
+            if x1 <= x0 or y1 <= y0:
+                continue
+            pyr = self._pyr((tx, ty), t)
+            sc = self.res / nav.s                                         # пикселей карты на пиксель плитки
+            lv = 0
+            while sc * 2 ** lv < 0.5 and lv + 1 < len(pyr):               # далеко: уменьшенная плитка (быстро, без ряби)
+                lv += 1
+            src, sm = pyr[lv]
+            M = np.float32(np.c_[A * 2 ** lv, b - (x0, y0)])
+            pic = cv2.warpAffine(src, M, (x1 - x0, y1 - y0), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
+            msk = cv2.warpAffine(sm, M, (x1 - x0, y1 - y0), flags=cv2.INTER_NEAREST, borderValue=0)
             if dim < 1:
-                pic = (pic.astype(np.float32) * dim + 24 * (1 - dim)).astype(np.uint8)
-            canvas[msk] = pic[msk]
+                pic = cv2.convertScaleAbs(pic, alpha=dim, beta=24 * (1 - dim))
+            np.copyto(canvas[y0:y1, x0:x1], pic, where=msk[..., None] > 0)
+
+    def _pyr(self, k, t):
+        """Плитка и её маска «были здесь» по уровням (1, 1/2, 1/4 ...) — пока плитка не менялась."""
+        c = self._cache.get(k)
+        if c is None or c[0] is not t or c[1] != self._tver.get(k, 0):
+            lv = [(t, (t.max(2) > 0).astype(np.uint8))]
+            while lv[-1][0].shape[0] >= 16:
+                a, m = lv[-1]
+                lv.append((cv2.resize(a, (a.shape[1] // 2, a.shape[0] // 2), interpolation=cv2.INTER_AREA),
+                           cv2.resize(m, (m.shape[1] // 2, m.shape[0] // 2), interpolation=cv2.INTER_NEAREST)))
+            c = self._cache[k] = (t, self._tver.get(k, 0), lv)
+        return c[2]

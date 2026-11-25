@@ -2,7 +2,7 @@
 
 **Управление рамановским микроскопом Optosky ATR8300 из Python: снять подложку, сшить её в одну картинку, наложить решётку литографии, выбрать нужные квадраты и вывести их для AutoCAD.**
 
-**Авторы:** А. Ляпейков, С. Доменко · **Версия:** 0.37.0 · English: [README.md](../README.md) · 中文: [README_zh.md](README_zh.md) · PDF: [RU](MicroControl_ru.pdf) · Полный технический справочник: [RU](reference_ru.md), [EN](reference_en.md), [中文](reference_zh.md)
+**Авторы:** А. Ляпейков, С. Доменко · **Версия:** 0.37.1 · English: [README.md](../README.md) · 中文: [README_zh.md](README_zh.md) · PDF: [RU](MicroControl_ru.pdf) · Полный технический справочник: [RU](reference_ru.md), [EN](reference_en.md), [中文](reference_zh.md)
 
 ![Обзор: съёмка 10x с сеткой образца, номера квадратов, черновик, 50x и 100x внутри](img/view.jpg)
 

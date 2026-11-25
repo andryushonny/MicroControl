@@ -51,9 +51,7 @@ class Fog:
         t0 = np.floor(lo / (self.res * TILE)).astype(int)
         t1 = np.floor(hi / (self.res * TILE)).astype(int)
         Ai = cv2.invertAffineTransform(np.float32(A))
-        inner = np.zeros(small.shape[:2], np.uint8)                   # края кадра (виньетка) — не в туман
-        mh, mw = max(1, small.shape[0] // 60), max(1, small.shape[1] // 60)
-        inner[mh:-mh, mw:-mw] = 255
+        inner = np.full(small.shape[:2], 255, np.uint8)               # кадр целиком: туман — без щелей
         with self.lock:
             for tx in range(t0[0], t1[0] + 1):
                 for ty in range(t0[1], t1[1] + 1):
@@ -64,7 +62,7 @@ class Fog:
                                          borderMode=cv2.BORDER_REPLICATE)        # край кадра — без тёмной каймы
                     msk = cv2.warpAffine(inner, np.float32(M), (TILE, TILE),
                                          flags=cv2.INTER_NEAREST | cv2.WARP_INVERSE_MAP, borderValue=0)
-                    msk = msk > 0
+                    msk = cv2.dilate(msk, np.ones((3, 3), np.uint8)) > 0   # +1 px: стык соседних кадров без щели
                     if not msk.any():
                         continue
                     t = self.tiles.get((tx, ty))

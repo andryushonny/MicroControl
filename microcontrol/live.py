@@ -196,6 +196,17 @@ def watch(folder, every=0.4, parent=None):
 
 
 def _alive(pid):
+    """Жив ли процесс pid. Windows: только спросить (os.kill(pid, 0) там — Ctrl+C родителю: ядро Jupyter падает)."""
+    if os.name == 'nt':
+        import ctypes
+        k32 = ctypes.windll.kernel32
+        h = k32.OpenProcess(0x00100000, False, int(pid))         # SYNCHRONIZE
+        if not h:
+            return False
+        try:
+            return k32.WaitForSingleObject(h, 0) == 0x102          # WAIT_TIMEOUT — ещё работает
+        finally:
+            k32.CloseHandle(h)
     try:
         os.kill(pid, 0)
         return True

@@ -20,6 +20,7 @@ from . import log as L
 from .util import Result
 
 SEAM_TOL_UM = 0.1                # шов quality-снимка: расхождение не больше (мкм)
+BRIDGES_MAX = 24                 # плохих швов на круг: столько кадров-мостов (посередине пары) снимается
 QUALITY_MAX_PX = 150e6           # ровный снимок рамки — не больше (пикселей); больше — это обзор
 
 
@@ -142,7 +143,7 @@ def render(folder, verbose=False):
                 gaps.append(mosaic_to_stage(folder, [(bx0 + cents[j][0] * k, by0 + cents[j][1] * k)])[0].tolist())
     # швы: кадры, не привязанные ни одним принятым швом (их место — только по столику)
     z = seams(folder)
-    loose, stage_only = [], []
+    loose, stage_only, bad_seams = [], [], []
     res_px = None
     if z is not None and n > 1:
         acc = np.zeros(n, int)
@@ -162,8 +163,29 @@ def render(folder, verbose=False):
             med = float(np.median(list(cv_.values())))
             loose = [i for i in stage_only if cv_[i] > 1.5 * med]   # с объектом — не годится на одном столике
         pos = g['pos']
-        r_ = np.hypot(*(pos[z['J'].astype(int)] - pos[z['I'].astype(int)] - z['meas']).T)[wq > 0]
+        rall_ = np.hypot(*(pos[z['J'].astype(int)] - pos[z['I'].astype(int)] - z['meas']).T)
+        r_ = rall_[wq > 0]
         res_px = (float(np.median(r_)), float(r_.max())) if len(r_) else None
+        tol0_ = max(1.0, SEAM_TOL_UM / px)                     # плохие швы: снять кадр посередине (мост со сдвигом)
+        bad_seams = [[int(a), int(b)] for a, b, wv, rv in zip(z['I'], z['J'], wq, rall_)
+                     if wv > 0 and rv > tol0_ and int(a) not in replaced and int(b) not in replaced]
+        rej_ = [(int(a), int(b)) for a, b, wv in zip(z['I'], z['J'], wq) if wv <= 0
+                and int(a) not in replaced and int(b) not in replaced]
+        if rej_:                                               # шов не принят, а детали в обоих кадрах есть
+            st = ScanData(folder)
+            try:
+                from .optics import attach
+                attach(st, folder)
+                cv2_ = _content(st, sorted({i for q in rej_ for i in q}))
+                cva_ = _content(st, range(0, n, max(1, n // 40)))
+            finally:
+                st.close()
+            md_ = float(np.median(list(cva_.values())))
+            bad_seams += [[a, b] for a, b in rej_ if min(cv2_[a], cv2_[b]) > 0.8 * md_]
+        P_ = np.asarray(g['p'], float)[:, :2]                   # мост уже снят (кадр посередине) — шов закрыт
+        fv_ = meta.get('fov_um') or {}
+        near_ = 0.15 * min(float(fv_.get('x') or 100.0), float(fv_.get('y') or 100.0)) / float(g['ms'])
+        bad_seams = [q for q in bad_seams if np.hypot(*(P_ - (P_[q[0]] + P_[q[1]]) / 2).T).min() > near_]
     A = np.array([mosaic_to_stage(folder, [(bx0, by0)])[0], mosaic_to_stage(folder, [(bx0 + 1, by0)])[0],
                   mosaic_to_stage(folder, [(bx0, by0 + 1)])[0]])
     aff = np.c_[A[1] - A[0], A[2] - A[0], A[0]]                # пиксель (u, v, 1) снимка -> мкм столика
@@ -174,7 +196,7 @@ def render(folder, verbose=False):
                size_um=[round(w * px, 3), round(h * px, 3)], pixel_to_stage_um=aff.round(6).tolist(),
                stage_um_per_px=round(su, 6), stage_vs_pixel=round(su / px - 1, 5), turn_deg=round(ang, 4),
                coverage=round(float(cov.mean()), 5), gaps_um=gaps, frames=n, replaced=replaced, blurry=blurry,
-               stage_only=stage_only, loose=loose,
+               stage_only=stage_only, loose=loose, bad_seams=bad_seams[:BRIDGES_MAX],
                seam_px=None if res_px is None else [round(res_px[0], 3), round(res_px[1], 3)],
                seam_um=None if res_px is None else [round(res_px[0] * px, 4), round(res_px[1] * px, 4)],
                reshot=int(meta.get('reshot', 0)), rounds=int(meta.get('quality_rounds', 0)))
@@ -186,6 +208,8 @@ def render(folder, verbose=False):
     if blurry:
         problems.append(f"blurry frame(s) {', '.join(str(i + 1) for i in blurry)}")
     tol_px = max(1.0, SEAM_TOL_UM / px)                        # шов: не хуже 0.1 мкм (и не строже 1 px)
+    if bad_seams:
+        problems.append(f"{len(bad_seams)} weak seam(s): a frame in the middle of each pair is to be shot")
     if res_px is not None and res_px[1] > tol_px:
         problems.append(f"a seam off by {res_px[1]:.2f} px = {res_px[1] * px:.3f} um")
     if src != 'crosses':
@@ -248,6 +272,12 @@ def _targets(folder, rep):
             for j in sorted(nb):
                 q = (p[i] + p[j]) / 2
                 out.append(('bridge', int(round(q[0])), int(round(q[1])), float(q[2]), i))
+    W_, H_ = (st.meta.get('fov_um') or {}).get('x'), (st.meta.get('fov_um') or {}).get('y')
+    near_ = 0.15 * min(W_ or 100.0, H_ or 100.0) / ms          # кадр уже есть почти там же — новый не нужен
+    for a, b in rep.get('bad_seams', []):                      # плохой шов: кадр посередине — связь с обоими
+        q = (p[a] + p[b]) / 2
+        if np.hypot(*(p[:, :2] - q[:2]).T).min() > near_:
+            out.append(('bridge', int(round(q[0])), int(round(q[1])), float(q[2]), None))
     for gx, gy in rep.get('gaps_um', []):
         k = int(np.argmin(np.hypot(p[:, 0] * ms - gx, p[:, 1] * ms - gy)))
         out.append(('gap', int(round(gx / ms)), int(round(gy / ms)), float(p[k, 2]), None))

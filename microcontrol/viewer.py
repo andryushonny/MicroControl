@@ -36,7 +36,8 @@ class _Scene:
             with open(jp, encoding='utf-8') as f:
                 for r in csv.DictReader(f):
                     P[int(r['id'])] = (float(r['x_px']), float(r['y_px']))
-        self.P = P - P.min(0)
+        self.org = P.min(0)                                 # где начинается мозаика (кадры добавляются — меняется)
+        self.P = P - self.org
         self.size = self.P.max(0) + (self.W, self.H)
         self.thumbs = self.st.thumbs()
         self.cache, self.cache_b = OrderedDict(), 0         # (i, уровень) -> уменьшенный кадр; байт в кэше
@@ -128,7 +129,7 @@ MICRO_ONLY = {'e': "stage up", 'q': "stage down", 'f': "autofocus", 'k': "focus 
               'V': "open the view"}
 HELP_V2 = "Arrows / drag: move  Wheel: zoom  0: whole  , / .: selection  Ctrl+click: mark  H: all keys  Esc: close"
 HELP_MODE = {
-    'look': "C: crosses  M: select cells (Enter: a selection)  N: numbers  T: level  2-5: finer grid  R: ruler  [ ]: transparency  A: align  O: objective  S: scan (queue)  X: export  Y: others",
+    'look': "C: crosses  M: select cells (Enter: a selection)  U: outline (a selection by corners)  N: numbers  T: level  R: ruler  [ ]: transparency  A: align  O: objective  S: scan (queue)  X: export  Y: others",
     'cross': "Click: cross exactly there (2 in a row = tilt)  Shift+click: snap to centre  Drag a mark: move  Right click: remove  Del: start again  Shift+C: frames onto the crosses  C / Esc: done",
     'select': "Click: square  Drag: box  Shift: unselect  Right click: remove a square (Shift: the whole area)  Ctrl+A: all / none  Enter: make a selection  Esc: done",
     'stitch': "Click a seam dot: seam off/on  Click a frame: its row  Shift+click: its column  Arrows: 1 px  Shift+arrows: 10 px  Backspace: automatic  J: save",
@@ -136,7 +137,7 @@ HELP_MODE = {
     'label': "Click a square, type its number X Y  Enter: set  Esc: done",
     'ruler': "R: point-point / line-line / point-line / off. Click the points: the distance (and the angle)  Drag: move  Esc: off",
     'align': "Drag / arrows (Shift: x10): move the other pictures onto this scan  Space: by itself  Enter or A: save  Backspace: no shift  Esc: cancel",
-    'refine': "2-5: finer grid of the chosen selection (1: none), then M selects its cells, Enter makes them selections",
+    'poly': "Click the corners (sides only across or up / down, snapping to the crosses and the points: grey lines)  Click the first point or Enter: close  Backspace / right click: back  Esc: cancel",
 }
 HELP_V = ("C: crosses   Shift+C: frames onto the crosses   M: select cells, Enter: a selection   N: number squares (X Y)   "
           "R: ruler   S: scan (queue)   X: export   Esc: leave the mode")
@@ -153,7 +154,7 @@ HELP_ALL = [
     ("", "The mark goes exactly where you click   Shift+click: snap to the cross centre   Drag a mark: move it"),
     ("", "Right click: remove a cross   Backspace: the last one   Del: start again   Shift+C: frames onto the crosses (exact)"),
     ("Grid", "One grid for the whole sample: from the crosses marked last (on any selection); the others take it as is"),
-    ("", "2-5: finer grid of the chosen selection (else the one under the mouse) (1/2 ... 1/5); 1: none"),
+    ("Outline", "U: a selection by its corners: every side only across or up / down, snapping to the crosses and to the points put (grey lines); click the first point or Enter - it closes itself (the last corner is added)"),
     ("Numbers", "N: click a square, type the number written next to it (X Y), Enter. Two squares fix all numbers"),
     ("Select", "M: click a square (again: off) / drag a box (Shift: unselect)   Ctrl+A: all / none   Enter: they become a selection"),
     ("", "Right click on green: remove that square (or cell)   Shift + right click: the whole green area"),
@@ -477,7 +478,7 @@ def _view_one(folder, fullscreen, keys, car):
     except (OSError, ValueError):
         pass
     st = dict(cx=sc.size[0] / 2, cy=sc.size[1] / 2, s=None, rot=0.0, mode='look', down=None, box=None,
-              poly=[], dirty=True, Wv=Wv - SM.CAR_W, Hv=Hv, straight=False, switch=None, ruler=[], mouse=None,
+              poly=None, dirty=True, Wv=Wv - SM.CAR_W, Hv=Hv, straight=False, switch=None, ruler=[], mouse=None,
               msg=car.pop('msg', None) or (f"Selection {SM.sample_index(folder)} ({subs.index(folder) + 1} of {len(subs)})" if len(subs) > 1 else "")
               + (f"   Crosses moved with the stitched frames ({moved_}); Shift+C: frames onto the crosses" if moved_ else "")
               + ("   The grid of the sample (crosses marked on another selection); the picture is off: A aligns it; "
@@ -725,6 +726,7 @@ def _view_one(folder, fullscreen, keys, car):
     mid = lambda: np.array([st['Wv'] / 2, st['Hv'] / 2])
     to_view = lambda M: mid() + st['s'] * (R() @ (np.asarray(M, float) - (st['cx'], st['cy'])))
     from_view = lambda v: np.array([st['cx'], st['cy']]) + R().T @ ((np.asarray(v, float) - mid()) / st['s'])
+    st['tv'] = to_view                                      # для проверок: мозаика -> окно
 
     def to_view_arr(M):
         """to_view для массива точек (..., 2) разом."""
@@ -1112,10 +1114,6 @@ def _view_one(folder, fullscreen, keys, car):
 
     def apply_poly(poly_view, on, touch=False):
         pts = [from_view(v) for v in poly_view]
-        tg_ = refine_target(np.mean(pts, axis=0))
-        if tg_ is not None:                                  # внутри выделения с подсеткой — её клетки
-            paint_refine(tg_, pts, on)
-            return
         cells = g.cells_touching(pts) if touch else g.cells_in(pts, sc.size)
         out_ = 0
         if on:
@@ -1209,6 +1207,8 @@ def _view_one(folder, fullscreen, keys, car):
             st['hov'] = (x, y)
             if st.get('prof'):
                 st['prof_dirty'] = True
+        if ev == cv2.EVENT_MOUSEMOVE and st['mode'] == 'poly':
+            st['dirty'] = True                             # следующая сторона тянется за мышью
         if ev == cv2.EVENT_MOUSEMOVE and st['mode'] == 'ruler' and 0 < len(st['ruler']) < RK_N[st.get('rk', 'pp')]:
             st['mouse'] = (x + 0.5, y + 0.5)               # линейка тянется за мышью до следующей точки:
             if not st['dirty']:                            # картинку и слои не пересчитывать — только линейку
@@ -1242,7 +1242,7 @@ def _view_one(folder, fullscreen, keys, car):
                 st['down'] = (x0, y0, cx, cy, ev0, sh0, True)
                 # сдвиг: правой / средней кнопкой — в любом режиме; левой — везде, кроме рамки (S) и кисти (B),
                 # а там — с Ctrl
-                pan = ev0 != cv2.EVENT_LBUTTONDOWN or st['mode'] in ('look', 'cross', 'label', 'ruler') or st.get('ctrl')
+                pan = ev0 != cv2.EVENT_LBUTTONDOWN or st['mode'] in ('look', 'cross', 'label', 'ruler', 'poly') or st.get('ctrl')
                 if pan:
                     c = np.array([cx, cy]) - R().T @ (np.array([x - x0, y - y0], float) / st['s'])
                     st['cx'], st['cy'] = c
@@ -1274,10 +1274,11 @@ def _view_one(folder, fullscreen, keys, car):
                 st['box'] = None
                 if g.ready():                               # рамка берёт всё, чего касается
                     apply_poly([(bx0, by0), (bx1, by0), (bx1, by1), (bx0, by1)], not shb, touch=True)
-            elif st['mode'] in ('paint', 'select') and ev0 == cv2.EVENT_LBUTTONDOWN and not moved and \
-                    refine_target(from_view((x, y))) is not None:  # щелчок по клетке подсетки
-                q_ = from_view((x, y))
-                paint_refine(refine_target(q_), [q_], not sh0, single=True)
+            elif st['mode'] == 'poly' and ev0 == cv2.EVENT_LBUTTONDOWN and not moved:   # U: вершина многоугольника
+                poly_click((x, y))
+            elif st['mode'] == 'poly' and ev0 == cv2.EVENT_RBUTTONDOWN and not moved:   # правый: на шаг назад
+                st['poly']['v'] = st['poly']['v'][:-1]
+                st['msg'] = f"{len(st['poly']['v'])} points"
             elif st['mode'] == 'paint' and ev0 == cv2.EVENT_LBUTTONDOWN and not moved:
                 if g.ready():                               # щелчок кистью: один квадрат (Shift — снять)
                     c_ = g.cell_at(from_view((x, y)))
@@ -1334,9 +1335,6 @@ def _view_one(folder, fullscreen, keys, car):
                         g.cr.remove(k)
                         g.save(px_um)
                         st['msg'] = "Cross mark removed"
-                elif st['mode'] in ('look', 'select', 'paint') and g.ready() and \
-                        unpaint_refine(from_view((x, y)), sh0):   # клетка подсетки (Shift — вся её область)
-                    pass
                 elif st['mode'] in ('look', 'select', 'paint') and g.ready() and g.selected:
                     c = g.cell_at(from_view((x, y)))        # правый щелчок по зелёному: этот квадрат,
                     if c in g.selected:                     # с Shift — вся связная область
@@ -2082,6 +2080,36 @@ def _view_one(folder, fullscreen, keys, car):
         if st['box']:
             bx0, by0, bx1, by1, shb = st['box']
             cv2.rectangle(img, (bx0, by0), (bx1, by1), (0, 140, 255) if shb else yellow, 1)
+        if st['mode'] == 'poly' and st.get('poly'):          # U: многоугольник, следующая сторона, направляющие
+            P_ = st['poly']
+            V_ = [to_view(P_['R'].T @ np.asarray(v, float)) for v in P_['v']]
+            q_, gd_ = poly_next(st['hov']) if st.get('hov') is not None else (None, [])
+            if q_ is not None:
+                qv_ = to_view(P_['R'].T @ q_)
+                for ax_, val_ in gd_:                          # направляющая: через всё окно
+                    f0_ = np.array(q_, float)
+                    f1_ = f0_.copy()
+                    k_ = 1 if ax_ == 'x' else 0
+                    f0_[k_], f1_[k_] = q_[k_] - 1e5 / st['s'], q_[k_] + 1e5 / st['s']
+                    a_, b_ = (to_view(P_['R'].T @ f0_), to_view(P_['R'].T @ f1_))
+                    cv2.line(img, tuple(np.round(a_).astype(int)), tuple(np.round(b_).astype(int)), (120, 120, 120), 1,
+                             cv2.LINE_AA)
+            from . import rectpoly as RP_
+            if len(P_['v']) >= 2 and q_ is not None:           # как замкнётся (угол — сам)
+                ring_, _w = RP_.close(P_['v'] + [list(q_)])
+                if ring_ is not None:
+                    Rv_ = np.array([to_view(P_['R'].T @ np.asarray(v, float)) for v in ring_])
+                    ov_ = img.copy()
+                    cv2.fillPoly(ov_, [np.round(Rv_).astype(np.int32)], (0, 200, 255))
+                    cv2.addWeighted(ov_, 0.18, img, 0.82, 0, img)
+            for a_, b_ in zip(V_, V_[1:] + ([qv_] if q_ is not None else [])):
+                cv2.line(img, tuple(np.round(a_).astype(int)), tuple(np.round(b_).astype(int)), (0, 200, 255), 2,
+                         cv2.LINE_AA)
+            for i_, v_ in enumerate(V_):
+                cv2.circle(img, tuple(np.round(v_).astype(int)), 6 if i_ == 0 else 4, (0, 200, 255), 2 if i_ == 0 else -1,
+                           cv2.LINE_AA)
+            if q_ is not None:
+                cv2.circle(img, tuple(np.round(qv_).astype(int)), 4, (255, 255, 255), 1, cv2.LINE_AA)
         if st['mode'] == 'ruler' and st['ruler']:            # линейка: точки, отрезки, перпендикуляры, подпись
             P_ = list(st['ruler'])
             n_ = RK_N[st.get('rk', 'pp')]
@@ -2127,7 +2155,7 @@ def _view_one(folder, fullscreen, keys, car):
                 q_ = np.array([to_view(c_) for c_ in (p_, p_ + (sc.W, 0), p_ + (sc.W, sc.H), p_ + (0, sc.H))])
                 cv2.polylines(img, [np.int32(np.round(q_))], True, (255, 220, 0), 1, cv2.LINE_8)
         mode = {'look': 'Look', 'cross': 'Mark crosses', 'select': 'Select', 'stitch': 'Edit stitch',
-                'paint': 'Brush', 'label': 'Number squares', 'ruler': 'Ruler', 'align': 'Align'}.get(st['mode'], st['mode'])
+                'paint': 'Brush', 'label': 'Number squares', 'ruler': 'Ruler', 'align': 'Align', 'poly': 'Outline'}.get(st['mode'], st['mode'])
         mcol = {'look': (170, 170, 178), 'cross': (90, 90, 255), 'select': (90, 210, 90), 'stitch': (255, 220, 0),
                 'paint': (90, 210, 90), 'label': UI.ACCENT, 'ruler': (0, 220, 255), 'align': (255, 120, 255)}.get(st['mode'], UI.ACCENT)
         if st.get('lab'):
@@ -2232,24 +2260,6 @@ def _view_one(folder, fullscreen, keys, car):
                 if fo_ and u_ == fo_:
                     sel_k = len(items_)
                 cmap_.append(('draft', u_, subs.index(folder) if folder in subs else 0))
-        try:                                                # клетки подсетки, ещё не ставшие выделением: сразу в списке
-            rfs_ = regions_now()[1]
-        except Exception:
-            rfs_ = {}
-        par_ = {r_.get('uid'): r_ for r_ in regs_}
-        for pu_, d_ in rfs_.items():
-            nc_ = len(d_.get('cells') or [])
-            pr_ = par_.get(pu_) or next((r_ for r_ in regs_ if r_.get('pending') and r_.get('uid') == pu_), None)
-            if not nc_ or pr_ is None:
-                continue
-            n_ = int(d_.get('n') or 1)
-            pn_ = "the new one" if pr_.get('pending') else f"Selection {pr_.get('num', '')}"
-            items_.insert(0, dict(title="Selection (new)", color=(235, 235, 235), muted=True, go=False, check=None,
-                                  lines=[f"{nc_} cell{'s' if nc_ != 1 else ''} of the grid 1/{n_} in {pn_}",
-                                         "Enter: make it a selection"]))
-            cmap_.insert(0, ('draft', 'ref:' + pu_, subs.index(folder) if folder in subs else 0))
-            if sel_k is not None:
-                sel_k += 1
         car['map'] = cmap_
         pan_, car['hits'], car['content'] = SM.carousel(st['Hv'], items_, sel_k, car['scroll'], title="Selections",
                                                         go=False, hover=car.get('hxy'))
@@ -2329,6 +2339,81 @@ def _view_one(folder, fullscreen, keys, car):
         g2_ = _G(folder)
         g.selected = set(g2_.selected)
         h_last[:2] = [g_sig(), g_snap()]
+
+    def poly_cands(f_):
+        """Привязки многоугольника у мыши (рамка): узлы сетки рядом (кресты) — x / y и точки."""
+        P_ = st['poly']
+        if not g.ready():
+            return [], [], []
+        v1_, v2_ = (np.asarray(v, float) for v in g.cr.vectors())
+        O_ = np.asarray(g.cr.O, float)
+        try:
+            ij_ = np.linalg.solve(np.column_stack([v1_, v2_]), P_['R'].T @ np.asarray(f_, float) - O_)
+        except np.linalg.LinAlgError:
+            return [], [], []
+        i0, j0 = np.round(ij_).astype(int)
+        nd_ = [P_['R'] @ (O_ + i * v1_ + j * v2_) for i in range(i0 - 6, i0 + 7) for j in range(j0 - 6, j0 + 7)]
+        return [n[0] for n in nd_], [n[1] for n in nd_], nd_
+
+    def poly_next(xy):
+        """Куда встанет следующая вершина под мышью xy (окно). -> (q рамки, направляющие)."""
+        from . import rectpoly as RP
+        P_ = st['poly']
+        f_ = P_['R'] @ from_view((xy[0] + 0.5, xy[1] + 0.5))
+        xs_, ys_, nd_ = poly_cands(f_)
+        return RP.next_point(P_['v'], f_, xs_, ys_, 10.0 / st['s'], nd_)
+
+    def poly_click(xy):
+        from . import rectpoly as RP
+        P_ = st['poly']
+        if len(P_['v']) >= 3 and np.hypot(*(to_view(P_['R'].T @ np.asarray(P_['v'][0])) - xy)) <= 10:
+            st['msg'] = poly_finish()
+            return
+        q_, _gd = poly_next(xy)
+        P_['v'], why_ = RP.add(P_['v'], q_)
+        st['msg'] = why_ or (f"{len(P_['v'])} points. Next: click (it goes only across or up/down, snapping to the "
+                             "crosses and the points). Click the first point or Enter: close  Backspace / right "
+                             "click: back  Esc: cancel")
+
+    def poly_finish():
+        """Замкнуть многоугольник и сделать из него выделение (draft или объектив новых, Shift+O). -> сообщение."""
+        from . import rectpoly as RP
+        P_ = st['poly']
+        ring_, why_ = RP.close(P_['v'])
+        if ring_ is None:
+            return why_
+        if smp is None:
+            return "No sample: open the scan from a project"
+        from .snap import mosaic_to_stage
+        from shapely.geometry import Polygon as _Poly
+        from .layers import set_geom, objective_to, new_num
+        from .samples import to_top as _top
+        from . import project as PJ_
+        import uuid as _uu
+        S_ = mosaic_to_stage(folder, np.array([P_['R'].T @ np.asarray(v, float) for v in ring_]))
+        pg_ = _Poly(S_)
+        if not pg_.is_valid or pg_.area <= 0:
+            return "This outline cannot be a selection"
+        sh_ = stub()
+        r_ = dict(uid=_uu.uuid4().hex, num=new_num(sh_), obj=sh_.objective, fw=sh_.frame_size[0],
+                  fh=sh_.frame_size[1], pts=[], thumbs=[], kind='draft')
+        set_geom(sh_, r_, pg_)
+        _top(sh_, r_)
+        sh_._regions.append(r_)
+        no_ = car.get('new_obj', 'draft')
+        bad_ = ''
+        if no_ != 'draft':
+            ok_, m_ = objective_to(sh_, len(sh_._regions) - 1, no_)
+            bad_ = '' if ok_ else f"; {m_}"
+        sh_._sample.data['focus'] = r_['uid']
+        PJ_.save_regions(sh_)
+        sh_._sample.save()
+        car['focus'] = r_['uid']
+        st['_so_key'] = st['_sg_key'] = None
+        st['car_dirty'] = True
+        st['poly'], st['mode'] = None, 'look'
+        return (f"Selection {r_['num']} made from the outline ({len(ring_)} corners, "
+                f"{'draft' if no_ == 'draft' else f'{no_}x'}), chosen on the right{bad_}")
 
     def brush_commit():
         """Enter: выбранные клетки -> новое выделение (каждая фигура — своё), с объективом для новых (Shift+G) или
@@ -3170,6 +3255,44 @@ def _view_one(folder, fullscreen, keys, car):
             st['acted'] = False
         if _t.monotonic() - st.get('_sync_t', 0) > 0.5:  # окно микроскопа поменяло образец или кисть —
             st['_sync_t'] = _t.monotonic()                 # показать то же, что и там
+            lsig_ = (_mt(os.path.join(folder, 'index.csv')), _mt(os.path.join(folder, 'join', 'live.json')),
+                     _mt(os.path.join(folder, 'join', 'stitch.json')))   # кадры, живая сшивка, сшивка (не правка J)
+            if st.get('_lsig') is None:
+                st['_lsig'] = lsig_
+            elif lsig_ != st['_lsig'] and st['down'] is None and st.get('busy') is None:
+                st['_lsig'] = lsig_                        # скан идёт (кадры шьются на ходу) или его пересшили:
+                try:                                       # картинка — заново на месте, вид и кресты — с ней
+                    sc_n = _Scene(folder)
+                    org_o = sc.org
+                    d_o = org_o - sc_n.org                 # мозаика начинается с другого кадра: всё — на d_o
+                    if g.cr.marks:
+                        g.cr.marks = [np.asarray(q_, float) + d_o for q_ in g.cr.marks]
+                        g.cr._fit()
+                    if g.frames_px is not None:
+                        fp_ = np.asarray(g.frames_px, float) + d_o
+                        if len(fp_) < len(sc_n.P):
+                            fp_ = np.vstack([fp_, sc_n.P[len(fp_):]])
+                        g.frames_px = fp_
+                    if g.cr.marks and g.frames_px is not None and len(g.frames_px) == len(sc_n.P):
+                        g.sync(sc_n.P, sc_n.W, sc_n.H)
+                        g.save(px_um)
+                    else:
+                        g.frames_px = sc_n.P.copy()
+                    try:
+                        sc.st.close()
+                    except Exception:
+                        pass
+                    sc = sc_n
+                    st['cx'] += float(d_o[0])
+                    st['cy'] += float(d_o[1])
+                    for k_ in ('_fl_key', '_so_key', '_sg_key', '_V', '_outline_px', 'inner', '_layers'):
+                        st[k_] = None
+                    st.pop('_lat', None)
+                    st['dirty'] = st['car_dirty'] = True
+                    if not st.get('msg'):
+                        st['msg'] = f"{len(sc.P)} frames so far (stitched as they come)"
+                except Exception as e_:
+                    L.debug('VIW-020', f"live refresh: {type(e_).__name__}: {e_}")
             if smp is not None:                            # очередь окна микроскопа идёт: строка внизу — живая
                 qsp_ = os.path.join(smp.folder, '.queue_status.json')
                 qmt_ = _mt(qsp_)
@@ -3414,6 +3537,14 @@ def _view_one(folder, fullscreen, keys, car):
                 st['msg'] = "Alignment cancelled"
             st['dirty'] = True
             continue
+        if st['mode'] == 'poly' and st.get('poly') is not None and key in (13, 10, 8):   # многоугольник: Enter / Backspace
+            if key == 8:
+                st['poly']['v'] = st['poly']['v'][:-1]
+                st['msg'] = f"{len(st['poly']['v'])} points"
+            else:
+                st['msg'] = poly_finish()
+            st['dirty'] = True
+            continue
         if key in (13, 10) and st['mode'] in ('look', 'select', 'paint'):   # Enter: выбранные клетки -> выделение
             st['msg'] = brush_commit()
             st['dirty'] = True
@@ -3427,7 +3558,9 @@ def _view_one(folder, fullscreen, keys, car):
             if st.get('help'):
                 st['help'] = False
             elif st['mode'] != 'look':
-                st['mode'], st['ruler'] = 'look', []
+                if st['mode'] == 'poly':
+                    st['msg'] = "Outline cancelled"
+                st['mode'], st['ruler'], st['poly'] = 'look', [], None
             else:                                           # просмотр закрывается просто Esc (окно микроскопа — Shift+Esc)
                 st['switch'] = False
                 break
@@ -3444,6 +3577,15 @@ def _view_one(folder, fullscreen, keys, car):
                          "are marked. Click a cross, then its neighbour in the same row")
         elif ch == 's':                                      # Shift+J: точная сшивка (quality) — в очередь, как в окне микроскопа
             st['msg'] = queue_quality()
+        elif ch == 'u':                                      # U: выделение — прямоугольный многоугольник по точкам
+            if st['mode'] == 'poly':
+                st['mode'], st['poly'] = 'look', None
+                st['msg'] = "Outline off"
+            else:
+                st['mode'], st['poly'] = 'poly', {'v': [], 'R': R().copy()}
+                st['msg'] = ("Outline: click the corners - every side goes only across or up / down and snaps to the "
+                             "crosses and to the points already put (grey lines). Click the first point or Enter: "
+                             "close (the last corner is added by itself)  Backspace: back  Esc: cancel")
         elif ch == 'r':                                      # R: линейка: точка-точка -> прямая-прямая -> точка-прямая -> выкл
             nxt_ = {'pp': 'll', 'll': 'pl', 'pl': None}
             if st['mode'] == 'ruler' and nxt_[st.get('rk', 'pp')] is None:
@@ -3643,8 +3785,6 @@ def _view_one(folder, fullscreen, keys, car):
                 set_straight(not st['straight'])
                 st['msg'] = (f"Level: the picture is turned by {st['rot']:+.2f} deg, the squares stand straight (T: as shot)"
                              if st['straight'] else "Picture as shot, with its tilt (T: level)")
-        elif ch in '12345' and ch and st.get('lab') is None:   # подсетка выбранного выделения: в n раз плотнее (1 — нет)
-            set_refine(int(ch))
         elif ch == 'a' and st['mode'] in ('select', 'paint') and g.ready():
             W_, H_ = sc.size
             g.selected |= inside_only(g.cells_in([(0, 0), (W_, 0), (W_, H_), (0, H_)], sc.size))[0]

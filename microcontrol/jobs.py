@@ -177,8 +177,21 @@ class JobQueue:
             if j.obj != m.objective:
                 raise RuntimeError(f"the objective is {m.objective}x now, the scan was queued for {j.obj}x")
             m._abort = False
-            with no_stop():                             # скан останавливается сам, после кадра (снятое — цело)
-                f = m.scan(only=[j.uid], stitch=None)
+            from . import storage as ST_
+            from .live import Runner
+            run_ = {}
+
+            def on_new(f_):                             # кадры сшиваются на ходу (свой процесс, на ядрах)
+                if 'r' not in run_:
+                    run_['r'] = Runner(f_)
+            ST_.ON_CREATE.append(on_new)
+            try:
+                with no_stop():                         # скан останавливается сам, после кадра (снятое — цело)
+                    f = m.scan(only=[j.uid], stitch=None)
+            finally:
+                ST_.ON_CREATE.remove(on_new)
+                if 'r' in run_:
+                    run_['r'].stop()                    # дошить последние кадры: quick возьмёт швы готовыми
             stopped_ = bool(m._abort or j._stop)
             m._abort = False
             return f, stopped_

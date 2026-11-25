@@ -913,7 +913,9 @@ assert len(m.scan(name='again') and m.last_scans) == 1            # чернов
 f = m.last_scans[0]; mc.stitch(f, verbose=False)
 uid = m._regions[kd]['uid']
 q1 = g.cr.point(1 + 0.5 / 3, 0.5 / 3)                              # левая верхняя клетка 1/3 квадрата 6,7
-V_.view(f, _keys=[-1, ('qmove', *q1), ord('3'), ord('m'), ('qclick', *q1), -1, 27])   # 3 — подсетка; кисть — клетка
+V_.view(f, _keys=[-1, 27, 27])                                     # сетка образца — и здесь
+gq_ = json.load(open(os.path.join(f, 'grid.json')))                # подсетка 1/3 (данные; в просмотре её больше нет — U)
+gq_['refine'] = {uid: dict(n=3, cells=[[15, 18]])}; json.dump(gq_, open(os.path.join(f, 'grid.json'), 'w'))
 rf = json.load(open(os.path.join(f, 'grid.json')))['refine'][uid]
 assert rf['n'] == 3 and rf['cells'] == [[15, 18]], rf
 print(LY.sync_brush(m)); SM.persist(m)
@@ -1132,16 +1134,15 @@ LY.sync_brush(m); SM.persist(m)                                       # решё
 q = lambda i, j, a=0.5, b=0.5: g.cr.point(i + a, j + b)
 res38 = {}
 V_.view(f, _keys=[-1, ord('m'), ('qclick', *q(1, 0)), ('qclick', *q(2, 0)), ('qmove', *q(1, 0)), ord('3'),
-                  ('qclick', *q(1, 0, 0.2, 0.2)), -1, ('call', lambda: res38.update(pend=json.load(open(m.sample.file))['selections'])),
+                  -1, ('call', lambda: res38.update(pend=json.load(open(m.sample.file))['selections'])),
                   13, -1, ('call', lambda st: res38.update(msg=st['msg'], foc=st.get('_t') and None)), 27, 27])
 smj = json.load(open(m.sample.file))['selections']                   # Enter: выделения — из клеток, сразу
 assert len(res38['pend']) == 1, res38['pend']                        # до Enter — только кисть (новое не сделано)
 d1 = next(r for r in smj if r.get('kind') == 'draft' and not r.get('factors'))
-d2 = next(r for r in smj if r.get('factors') == [3])
-assert d1.get('sub') == 3 and LT.address(*d2['cells'][0], [3]) == "6,7 > 1,1", smj
-assert not d1.get('src') and not d2.get('src') and json.load(open(m.sample.file)).get('focus') in (d1['uid'], d2['uid'])
+assert not any(r.get('factors') for r in smj) and sorted(map(tuple, d1['cells'])) == [(5, 6), (6, 6)], smj   # 3 — ничего (подсетки нет)
+assert not d1.get('src') and json.load(open(m.sample.file)).get('focus') == d1['uid']
 assert 'made' in res38['msg'], res38
-m.close(); print("Selected cells and the finer-grid cell become selections on Enter (not before), chosen: OK")
+m.close(); print("Selected cells become a selection on Enter (not before), chosen; keys 2-5 do nothing now: OK")
 
 
 # ------------------------------------------------------------------ 39. Ctrl+Z в окне микроскопа — для всех операций над выделениями (вместе с квадратами в просмотре)
@@ -2478,3 +2479,180 @@ assert 'lattice' not in json.load(open(m.sample.file)) or json.load(open(m.sampl
 mc.view(fB, _keys=[-1, ord('c'), -1, ('call', lambda st: r69.update(mode=st['mode'])), 27, 27])
 assert r69['mode'] == 'cross' and not Grid(fB).ready(), r69                                 # теперь можно; старой сетки нет
 m.close(); print("One grid only: crosses on another selection only after the old ones are removed: OK")
+
+
+# ------------------------------------------------------------------ 70. U: выделение — прямоугольный многоугольник по точкам (подкова, Г, крест), привязка к крестам
+from microcontrol import samples as SM, project as PJ, rectpoly as RP70
+from microcontrol.mask import Grid
+from microcontrol.snap import stage_to_mosaic as s2m70
+from shapely.geometry import Polygon as Pg70
+for sh_, ar_ in (([(0, 0), (30, 0), (30, 30), (20, 30), (20, 10), (10, 10), (10, 30), (0, 30)], 700),
+                 ([(0, 0), (30, 0), (30, 10), (10, 10), (10, 40), (0, 40)], 600),
+                 ([(10, 0), (20, 0), (20, 10), (30, 10), (30, 20), (20, 20), (20, 30), (10, 30), (10, 20), (0, 20), (0, 10), (10, 10)], 500)):
+    for drop in (0, 1):                                    # с последним углом и без (достраивается сам)
+        vs, rng = [], np.random.default_rng(7)
+        for c in (sh_[:-1] if drop else sh_):
+            q, _ = RP70.next_point(vs, np.array(c, float) + rng.uniform(-2.5, 2.5, 2), range(0, 50, 10), range(0, 50, 10), 3)
+            vs, why = RP70.add(vs, q); assert not why, why
+        ring, why = RP70.close(vs)
+        assert ring and Pg70(ring).symmetric_difference(Pg70(sh_)).area < 1e-6 and len(ring) == len(sh_), (sh_, ring, why)
+vs = []
+for c in ((0, 0), (10, 0), (10, 10), (0, 10)):
+    vs = RP70.add(vs, RP70.next_point(vs, c)[0])[0]
+assert RP70.add(vs, RP70.next_point(vs, (0, -5))[0])[1] and RP70.add(vs, RP70.next_point(vs, (5, 10))[0])[1]   # пересечь, назад — нельзя
+m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp()); m.focus(); fw, fh = m.frame_size
+SM.corner(m, 1); m.move(dx=fw, dy=fh); SM.corner(m, 2); SM.persist(m); m.scan()
+f70 = PJ.Selection(m.sample, m._regions[0]).latest.folder
+w70 = m._world; t70 = np.radians(w70.turn_deg)
+wp70 = lambda i, j: np.array([np.cos(t70) * i * 100 - np.sin(t70) * j * 100, np.sin(t70) * i * 100 + np.cos(t70) * j * 100])
+g70 = Grid(f70)
+for ij in ((1, 1), (2, 1), (1, 2)):
+    g70.cr.add(s2m70(f70, np.array([wp70(*ij)]))[0])
+g70.save(json.load(open(os.path.join(f70, 'meta.json')))['pixel_size_um'])
+got70 = {}
+for nm, sh_, cells in (('U', [(0, 0), (3, 0), (3, 3), (2, 3), (2, 1), (1, 1), (1, 3), (0, 3)], 7),
+                       ('G', [(0, 0), (3, 0), (3, 1), (1, 1), (1, 4), (0, 4)], 6),
+                       ('X', [(1, 0), (2, 0), (2, 1), (3, 1), (3, 2), (2, 2), (2, 3), (1, 3), (1, 2), (0, 2), (0, 1), (1, 1)], 5)):
+    def keys70(sh_=sh_):
+        box_ = {}
+        yield -1; yield ord('t'); yield -1
+        for _ in range(8):
+            yield ord('-'); yield -1
+        yield ord('u'); yield -1
+        yield ('call', lambda st: box_.update(tv=st['tv']))
+        rng = np.random.default_rng(3)
+        for i, j in sh_[:-1]:                              # последний угол — сам (Enter)
+            v = box_['tv'](s2m70(f70, np.array([wp70(i + 1, j + 1)]))[0]) + rng.uniform(-4, 4, 2)
+            yield ('click', int(v[0]), int(v[1])); yield -1
+        yield 13; yield -1
+        yield ('call', lambda st: got70.update({nm: st['msg']})); yield 27; yield 27
+    n0 = len(json.load(open(m.sample.file))['selections'])
+    mc.view(f70, _keys=keys70())
+    regs = json.load(open(m.sample.file))['selections']
+    assert len(regs) == n0 + 1 and 'made from the outline' in got70[nm], got70
+    r_ = max(regs, key=lambda r: r['num'])
+    pg = mc.layers.from_json(r_['shape'])
+    assert r_['kind'] == 'draft' and abs(pg.area - cells * 1e4) < 0.02 * cells * 1e4, (nm, pg.area, cells)
+    ref = Pg70([wp70(i + 1, j + 1) for i, j in sh_])
+    assert pg.symmetric_difference(ref).area < 0.03 * ref.area, (nm, pg.symmetric_difference(ref).area)
+    assert len(pg.exterior.coords) - 1 == len(sh_), (nm, len(pg.exterior.coords))
+m.close(); print("U: a selection as a right-angled outline by its corners (horseshoe, L, cross), snapping to the crosses, the last corner by itself: OK")
+
+
+# ------------------------------------------------------------------ 71. A: выделение с крестами двигают — сетка образца едет вместе с ним, у других съёмок — тоже
+from microcontrol import samples as SM, project as PJ
+from microcontrol.mask import Grid
+from microcontrol.snap import stage_to_mosaic as s2m71, mosaic_to_stage as m2s71, align as al71
+m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp()); m.focus(); fw, fh = m.frame_size
+SM.corner(m, 1); m.move(dx=fw); SM.corner(m, 2)
+m.goto(x=0.5 * fw, y=0.3 * fh); SM.corner(m, 1); m.move(dx=fw); SM.corner(m, 2)
+SM.persist(m); m.scan()
+fA = PJ.Selection(m.sample, m._regions[0]).latest.folder; fB = PJ.Selection(m.sample, m._regions[1]).latest.folder
+t71 = np.radians(m._world.turn_deg)
+wp71 = lambda i, j: (np.cos(t71) * i * 100 - np.sin(t71) * j * 100, np.sin(t71) * i * 100 + np.cos(t71) * j * 100)
+gA = Grid(fA)
+for ij in ((1, 1), (2, 1), (1, 2)):
+    gA.cr.add(s2m71(fA, np.array([wp71(*ij)]))[0])
+gA.save(json.load(open(os.path.join(fA, 'meta.json')))['pixel_size_um'])
+mc.view(fB, _keys=[-1, 27, 27])                                                   # B берёт сетку образца
+node71 = lambda f: m2s71(f, np.array([Grid(f).cr.point(0, 0)]))[0]
+L0 = np.array(json.load(open(m.sample.file))['lattice']['O'], float)
+bA0, bB0 = node71(fA), node71(fB)
+mc.view(fA, _keys=[-1, ord('a'), -1] + [2555904, -1] * 5 + [2621440, -1] * 3 + [13, -1, 27, 27])   # A: двигать A, Enter
+d71 = np.array(al71(fA), float)
+assert np.hypot(*d71) > 1, d71
+L1 = np.array(json.load(open(m.sample.file))['lattice']['O'], float)
+assert np.hypot(*(L1 - L0 - d71)) < 0.05, (L1 - L0, d71)                          # сетка образца — вместе с A
+mc.view(fB, _keys=[-1, 27, 27])
+assert np.hypot(*(node71(fA) - bA0 - d71)) < 0.05 and np.hypot(*(node71(fB) - bB0 - d71)) < 0.5, (node71(fA) - bA0, node71(fB) - bB0, d71)
+m.close(); print("A on the selection with the crosses: the grid of the sample moves with it, in the other scans too: OK")
+
+
+# ------------------------------------------------------------------ 72. Живая сшивка: кадры шьются, пока скан идёт; просмотр показывает их сразу, кресты ставятся параллельно; quick берёт швы готовыми
+from microcontrol import storage as ST72
+from microcontrol.snap import stage_to_mosaic as s2m72, mosaic_to_stage as m2s72
+from microcontrol.mask import Grid
+m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp()); m.focus(); fw, fh = m.frame_size
+m.area = mc.Area(0, 0, 7 * fw, 5 * fh); m.scan(stitch=None)
+got72 = []
+ST72.ON_CREATE.append(got72.append)
+j72 = m.queue.scan(m._regions[0]['uid'])
+while not got72:
+    time.sleep(0.05)
+ST72.ON_CREATE.remove(got72.append)
+f72 = got72[0]
+nrows72 = lambda: len(open(os.path.join(f72, 'index.csv')).read().splitlines()) - 1
+while nrows72() < 16:
+    time.sleep(0.1)
+t72 = np.radians(m._world.turn_deg)
+wp72 = lambda i, j: np.array([np.cos(t72) * i * 100 - np.sin(t72) * j * 100, np.sin(t72) * i * 100 + np.cos(t72) * j * 100])
+seen72 = []
+def keys72():
+    b = {}
+    yield -1; yield -1
+    yield ('call', lambda st: b.update(tv=st['tv']))
+    yield ord('c'); yield -1
+    for ij in ((1, 1), (2, 1)):                            # кресты — там, где кадров ещё нет: встанут на свои места
+        v = b['tv'](s2m72(f72, np.array([wp72(*ij)]))[0]); yield ('click', int(v[0]), int(v[1])); yield -1
+    yield 27; yield -1
+    for k in range(60):
+        yield ('sleep', 0.5); yield -1
+        yield ('call', lambda st: seen72.append(st['tv'] is not None and nrows72()))
+        if not m.queue.active():
+            break
+    yield 27; yield 27
+mc.view(f72, _keys=keys72())
+assert m.queue.wait(120) and j72.state == 'done', (j72.state, j72.error)
+S72 = m2s72(f72, np.array(Grid(f72).cr.marks))
+assert np.hypot(*(S72 - np.array([wp72(1, 1), wp72(2, 1)])).T).max() < 1.5, S72      # кресты, поставленные на ходу, — точно
+sj72 = json.load(open(os.path.join(f72, 'join', 'stitch.json')))
+assert sj72.get('live_seams', 0) > 100 and sj72['mode'] == 'quick', sj72                    # швы — готовые, с хода
+assert not json.load(open(os.path.join(f72, 'join', 'live.json')))['running']
+m.close(); print(f"Live stitch: frames stitched while scanning ({sj72['live_seams']} seams ready for quick), the view shows them at once, crosses marked meanwhile land right: OK")
+
+
+# ------------------------------------------------------------------ 73. Quality: слабый шов -> столик сам едет и снимает кадр посередине пары (мост со сдвигом); снятый мост второй раз не снимается
+from microcontrol import quality as Q73
+from microcontrol.storage import ScanData as SD73
+m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp()); m.focus(); fw, fh = m.frame_size
+m.area = mc.Area(0, 0, 2 * fw, fh); f73 = m.scan(stitch=None)
+mc.stitch(f73, verbose=False)
+s0 = SD73(f73); p0 = np.array([[r['x_p'], r['y_p']] for r in s0.index], float); n0 = len(s0); s0.close()
+a73, b73 = 0, 1
+tg73 = Q73._targets(f73, {'bad_seams': [[a73, b73]]})
+assert len(tg73) == 1 and tg73[0][0] == 'bridge' and np.allclose(tg73[0][1:3], (p0[a73] + p0[b73]) / 2, atol=1), tg73
+assert Q73.reshoot(m, f73, {'bad_seams': [[a73, b73]]}, verbose=False) == 1
+s1 = SD73(f73); p1 = np.array([[r['x_p'], r['y_p']] for r in s1.index], float); s1.close()
+assert len(p1) == n0 + 1 and np.allclose(p1[-1], (p0[a73] + p0[b73]) / 2, atol=1), p1[-1]       # столик съездил сам
+assert not Q73._targets(f73, {'bad_seams': [[a73, b73]]})                                      # мост есть — не снова
+r73 = mc.stitch(f73, verbose=False)
+z73 = np.load(os.path.join(f73, 'join', 'seams.npz'))
+assert any(n0 in (int(i), int(j)) for i, j in zip(z73['I'], z73['J'])), "the bridge frame is in no seam"
+m.close(); print("Quality: a weak seam -> the stage goes by itself and shoots a frame in the middle of the pair (a shifted bridge); a bridge is not shot twice: OK")
+
+
+# ------------------------------------------------------------------ 74. «Туман войны»: кадры камеры, пока столик ездит, — на карте под снятым, на своём месте; запоминаются у образца
+import microcontrol.manual as M74
+from microcontrol.navmap import NavMap as NM74
+from microcontrol.fog import Fog as FG74
+m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp()); m.focus(); fw, fh = m.frame_size
+R_, D_, L_ = 65363, 65364, 65361
+M74.run(m, fullscreen=False, _keys=[-1, -1, R_, -1, -1, R_, -1, -1, D_, -1, -1, L_, -1, -1, L_, -1, -1, -1])
+fg74 = M74.fog_of(m)
+assert fg74.tiles and fg74.ver >= 4, (len(fg74.tiles), fg74.ver)
+sd74 = os.path.join(m.sample.folder, 'fog')
+assert os.path.exists(os.path.join(sd74, 'fog.json'))                                   # запомнен у образца
+assert len(FG74(m.sample.folder).tiles) == len(fg74.tiles)
+m.area = mc.Area(0, 0, 2 * fw, fh); f74 = m.scan()                                         # то же место — снимком
+nv74 = NM74(); nv74.c = np.array([fw / 2, fh / 2]); nv74.s = 0.4
+a74 = nv74.base([], 600, 400, fog=fg74).astype(np.float32).mean(2)                         # только туман
+b74 = nv74.base([f74], 600, 400).astype(np.float32).mean(2)                                # только снимок
+ok74 = (a74 > 30) & (b74 > 30)
+assert ok74.mean() > 0.3, ok74.mean()
+ok74 = cv2.erode(ok74.astype(np.uint8), np.ones((9, 9), np.uint8)) > 0
+a74, b74 = cv2.GaussianBlur(a74, (0, 0), 2), cv2.GaussianBlur(b74, (0, 0), 2)              # туман грубее (2 мкм/px)
+a74 = np.where(ok74, a74 - a74[ok74].mean(), 0).astype(np.float32); b74 = np.where(ok74, b74 - b74[ok74].mean(), 0).astype(np.float32)
+(dx74, dy74), _r = cv2.phaseCorrelate(a74, b74)
+ncc74 = float((a74 * b74).sum() / np.sqrt((a74 ** 2).sum() * (b74 ** 2).sum()))
+assert np.hypot(dx74, dy74) * nv74.s < 2.0 and ncc74 > 0.3, (dx74, dy74, ncc74)                # туман лёг на своё место (< 2 мкм)
+m.close(); print(f"Fog of war: camera frames while the stage moves lie on the map under the scans, in place (off the scan by {np.hypot(dx74, dy74) * nv74.s:.1f} um), kept with the sample: OK")

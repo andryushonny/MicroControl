@@ -119,7 +119,7 @@ class NavMap:
         elif alpha > 0.01:                                  # полупрозрачная: видно, что под ней
             canvas[msk] = (pic[msk].astype(np.float32) * alpha + canvas[msk].astype(np.float32) * (1 - alpha)).astype(np.uint8)
 
-    def base(self, scans, w, h, clip=None, alpha=None):
+    def base(self, scans, w, h, clip=None, alpha=None, fog=None):
         """Подложка карты: мозаики scans (папки, сначала меньшее увеличение), каждая — по контуру своего
         выделения (clip: папка -> кольца, мкм). Кэш, пока вид не менялся."""
         self.size = (w, h)
@@ -128,7 +128,7 @@ class NavMap:
         alpha = alpha or {}
         key = (w, h, tuple(np.round(self.c, 3)), round(self.s, 6), self.turn, ck_, tuple(sorted(alpha.items())),
                tuple((f, _mt(os.path.join(f, 'join', 'preview_all.jpg')), _mt(os.path.join(f, 'align.json')))
-                     for f in scans))
+                     for f in scans), None if fog is None else (id(fog), fog.ver))
         if key != self._key:
             canvas = np.full((h, w, 3), 24, np.uint8)
             step = 10 ** np.floor(np.log10(max(1e-3, self.s * 80)))          # сетка мкм — для ориентира
@@ -140,6 +140,11 @@ class NavMap:
             for y in np.arange(np.floor(S0[1] / step) * step, S1[1], step):
                 a_, b_ = self.to_px(np.array([(S0[0], y), (S1[0], y)]))
                 cv2.line(canvas, tuple(np.int32(a_)), tuple(np.int32(b_)), (34, 34, 38), 1)
+            if fog is not None:                                 # где камера уже была — под снятым
+                try:
+                    fog.draw(canvas, self)
+                except Exception:
+                    pass
             for f in scans:
                 try:
                     self._warp(canvas, f, clip.get(f), alpha.get(f, 1.0))

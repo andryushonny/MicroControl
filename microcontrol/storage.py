@@ -24,6 +24,9 @@ THUMB = 16                       # превью кадра: 1/16 по сторо
 FLT = {'x_um', 'y_um', 'z_um', 'sharpness', 't_s'}
 
 
+ON_CREATE = []                                              # f(папка) при создании съёмки для записи
+
+
 def meta_A(meta, W=None, H=None):
     """Матрица A (px на импульс) карты: из meta['A']; для старых карт — из калибровки или оценки."""
     if meta.get('A'):
@@ -117,6 +120,12 @@ class ScanData:
         st._csv = csv.writer(st._csv_f)
         st._csv.writerow(COLS)
         st.save_meta()
+        if fmt in ('jpg', 'png'):
+            for cb in list(ON_CREATE):                     # новая съёмка: например, живая сшивка (очередь)
+                try:
+                    cb(folder)
+                except Exception as e:
+                    L.debug('STO-003', f"on create: {type(e).__name__}: {e}")
         return st
 
     @classmethod
@@ -295,12 +304,21 @@ class ScanData:
         else:
             return out
         if os.path.exists(cache):
-            with np.load(cache) as z:                       # файл не держится открытым (Windows: его перезапишет сшивка)
-                return [z[f"t{i}"] for i in range(len(self))]
-        for i, img in self.frames():                        # по одному кадру: память не растёт
-            out[i] = _thumb(img)
+            try:
+                with np.load(cache) as z:                   # файл не держится открытым (Windows: его перезапишет сшивка)
+                    for i in range(len(self)):
+                        if f"t{i}" in z.files:
+                            out[i] = z[f"t{i}"]
+            except (OSError, ValueError, EOFError):
+                pass
+            if all(o is not None for o in out):
+                return out
+        for i in [i for i, o in enumerate(out) if o is None]:   # скан ещё идёт: только новые кадры
+            out[i] = _thumb(self.frame(i))
         os.makedirs(os.path.dirname(cache), exist_ok=True)
-        np.savez(cache, **{f"t{i}": a for i, a in enumerate(out)})
+        tmp = cache[:-4] + '.tmp.npz'
+        np.savez(tmp, **{f"t{i}": a for i, a in enumerate(out)})
+        os.replace(tmp, cache)
         return out
 
     def footprint(self):

@@ -336,7 +336,11 @@ def _quick(st, pred, p, W, H, max_shift_um, px, verbose, A):
     r = max([k for k in (1, 2, 4, 8) if W // k >= 300] or [1])
     red = _Reduced(st, r, verbose=verbose)
     ms = min(max_shift_um / (px * r), 0.5 * min(red.W, red.H))
-    pos, info = _builtin(red, pred / r, p, red.W, red.H, ms, 0.0, 0.01, verbose, A=A / r)
+    from .live import cached_pairs
+    cache = cached_pairs(st.folder, r)                       # швы, сшитые на ходу во время скана
+    pos, info = _builtin(red, pred / r, p, red.W, red.H, ms, 0.0, 0.01, verbose, A=A / r, cache=cache)
+    if cache:
+        info['live_seams'] = len(cache)
     sm = info.get('_seams')
     if sm is not None:                                       # швы — в пикселях полного кадра (кресты, F)
         sm['meas'] = sm['meas'] * r
@@ -486,7 +490,7 @@ def stitch(folder, engine='builtin', max_shift_um=40.0, sigma=None, alpha=0.01, 
 
 
 @timed_fn('Stitch: seams')
-def _builtin(st, pred, p, W, H, max_shift, sigma, alpha, verbose, A=None):
+def _builtin(st, pred, p, W, H, max_shift, sigma, alpha, verbose, A=None, cache=None):
     n = len(pred)
     pad = int(max_shift)
     # 1) соседи
@@ -525,9 +529,11 @@ def _builtin(st, pred, p, W, H, max_shift, sigma, alpha, verbose, A=None):
         nw_ = max(1, min(8, (os.cpu_count() or 2) - 1))
         ex_ = ThreadPoolExecutor(max_workers=nw_)
         try:
-            futs_ = [ex_.submit(_pair, st, a, b, pred[b] - pred[a], W, H, pad, sigma, max_shift) for a, b in pairs]
+            cache = cache or {}                                 # швы, сшитые на ходу (live): готовы
+            futs_ = [None if (a, b) in cache else ex_.submit(_pair, st, a, b, pred[b] - pred[a], W, H, pad, sigma, max_shift)
+                     for a, b in pairs]
             for k_, ((a, b), fu_) in enumerate(zip(pairs, futs_)):
-                dt, e = fu_.result()
+                dt, e = cache[(a, b)] if fu_ is None else fu_.result()
                 meas.append(pred[b] - pred[a] if dt is None else dt); err.append(e)
                 if pr:
                     pr.update(1, f"seam {k_ + 1} of {len(pairs)}: frames {a + 1} + {b + 1}")
@@ -538,16 +544,27 @@ def _builtin(st, pred, p, W, H, max_shift, sigma, alpha, verbose, A=None):
     meas, err = np.array(meas), np.array(err)
     # 3) тест перестановок: та же геометрия, но вместо соседа — далёкий кадр (заведомо ложная пара)
     rng = np.random.default_rng(0)
-    fake = []
+    fk_ = []
     for f_ in range(nf):
-        if pr:
-            pr.update(1, f"false-match test {f_ + 1} of {nf}")
         a, b = pairs[rng.integers(len(pairs))]
         c = int(rng.integers(n))
         dc = np.abs(pred[c] - pred[a])
         if c in (a, b) or (dc[0] < 1.5 * W and dc[1] < 1.5 * H):
             continue
-        fake.append(_pair(st, a, b, pred[b] - pred[a], W, H, pad, sigma, 1e9, other=c)[1])
+        fk_.append((a, b, c))
+    fake = []
+    st.frame = frame_locked                                     # на всех ядрах, как и швы
+    try:
+        with ThreadPoolExecutor(max_workers=nw_) as ex_:
+            for f_, r_ in enumerate(ex_.map(lambda q_: _pair(st, q_[0], q_[1], pred[q_[1]] - pred[q_[0]], W, H, pad,
+                                                             sigma, 1e9, other=q_[2])[1], fk_)):
+                fake.append(r_)
+                if pr:
+                    pr.update(1, f"false-match test {f_ + 1} of {len(fk_)}")
+        if pr and nf > len(fk_):
+            pr.update(nf - len(fk_), "false-match test")
+    finally:
+        st.frame = fr0_
     if pr:
         pr.update(1, "solving frame positions")
     thr = float(np.quantile(fake, alpha)) if len(fake) >= 20 else 0.7

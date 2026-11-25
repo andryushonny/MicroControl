@@ -195,12 +195,16 @@ class _Live:
             if self.paused:
                 time.sleep(0.01)
                 continue
+            m_ = self.m
+            p0_ = (m_._p.get('x'), m_._p.get('y'), m_.objective)
             try:
                 img = self.m.image(0)
             except Exception:
                 time.sleep(0.05)
                 continue
             self.img, self.n = img, self.n + 1
+            if p0_ == (m_._p.get('x'), m_._p.get('y'), m_.objective) and not (m_.__dict__.get('_queue') is not None and m_.__dict__['_queue'].inst_busy()):
+                fog_add(m_, img)                        # столик стоял весь кадр: кадр — на карту («туман»)
 
     def hold(self):
         live = self
@@ -277,6 +281,27 @@ def camera_box(m, shape):
     P = P * d + _ar_d(m)
     c = np.array([iw / 2, ih / 2])
     return np.array([P - d * np.linalg.solve(K, np.array(u, float) - c) for u in ((0, 0), (iw, 0), (iw, ih), (0, ih))])
+
+
+def fog_of(m):
+    """«Туман войны» образца (fog.Fog): где камера уже была — на карте под снятым."""
+    from .fog import Fog
+    fd_ = m.sample.folder if getattr(m, 'sample', None) is not None else None
+    f = m.__dict__.get('_fog')
+    if f is None or m.__dict__.get('_fog_dir') != fd_:
+        if f is not None:
+            f.save()
+        f = m.__dict__['_fog'] = Fog(fd_)
+        m.__dict__['_fog_dir'] = fd_
+    return f
+
+
+def fog_add(m, img):
+    """Живой кадр — в туман карты (если столик сдвинулся с прошлого заметно)."""
+    try:
+        fog_of(m).add(img, camera_box(m, img.shape))
+    except Exception:
+        pass
 
 
 def _ar_d(m):
@@ -1048,7 +1073,8 @@ def _run(m, fullscreen=False, _keys=None):
         ls_ = latest_scans()
         from .layers import rings as _rings
         al_ = map_alpha()                                  # прозрачность картинок выделений ([ ]), без обрезки по контуру
-        mp = nav.base([f_ for f_, _k in ls_], w_, h_, alpha={f_: al_.get(m._regions[k_]['uid'], 1.0) for f_, k_ in ls_})
+        mp = nav.base([f_ for f_, _k in ls_], w_, h_, alpha={f_: al_.get(m._regions[k_]['uid'], 1.0) for f_, k_ in ls_},
+                      fog=fog_of(m))
         boxes_ = {}
         from .layers import geom as _gm
         base0_ = mp.copy()
@@ -2554,6 +2580,8 @@ def _run(m, fullscreen=False, _keys=None):
             img = li_ if li_ is not None else (img if qb_ and img is not None else
                                                (live.img if live is not None else m.image(0)))
             last_n, last_t = (live.n if live is not None else last_n), time.monotonic()
+            if live is None and not qb_:                       # без потока камеры (проверки): туман — здесь
+                fog_add(m, img)
             pos_ = (m._p['x'], m._p['y'], m.objective)          # дополненная реальность: сверка с мозаикой,
             if pos_ != arl['pos']:                              # когда столик постоял
                 if arl['pos'] is not None and (np.hypot(pos_[0] - arl['pos'][0], pos_[1] - arl['pos'][1]) *
@@ -3454,6 +3482,10 @@ def _run(m, fullscreen=False, _keys=None):
         live.stop()
     m._save_last_view()                                   # кадр здесь — сверка положения при следующем подключении
     SM.persist(m)
+    try:
+        fog_of(m).save()                                  # туман карты — у образца
+    except Exception:
+        pass
     if not fullscreen:
         window_size(WIN, remember=True)                                  # запомнить размер для следующего окна
     try:                                                   # окно уже закрыли крестиком — ничего

@@ -2,7 +2,7 @@
 
 **Python control of the Optosky ATR8300 Raman microscope: scan a substrate, stitch one picture of it, put the lithography grid on it, choose the squares you need and export them for AutoCAD.**
 
-**Authors:** A. Lyapeikov, S. Domenko · **Version:** 0.36.0 · Русский: [docs/README_ru.md](docs/README_ru.md) · 中文: [docs/README_zh.md](docs/README_zh.md) · PDF: [EN](docs/MicroControl_en.pdf), [RU](docs/MicroControl_ru.pdf), [中文](docs/MicroControl_zh.pdf) · Full technical reference: [EN](docs/reference_en.md), [RU](docs/reference_ru.md), [中文](docs/reference_zh.md)
+**Authors:** A. Lyapeikov, S. Domenko · **Version:** 0.37.0 · Русский: [docs/README_ru.md](docs/README_ru.md) · 中文: [docs/README_zh.md](docs/README_zh.md) · PDF: [EN](docs/MicroControl_en.pdf), [RU](docs/MicroControl_ru.pdf), [中文](docs/MicroControl_zh.pdf) · Full technical reference: [EN](docs/reference_en.md), [RU](docs/reference_ru.md), [中文](docs/reference_zh.md)
 
 ![Overview: the 10x scan with the grid of the sample, numbered squares, a draft, 50x and 100x inside](docs/img/view.jpg)
 
@@ -48,14 +48,14 @@ The microscope window closes with **Shift+Esc** or its ×; the view — with **E
 `m.manual()` opens the live camera. Move with the arrows (one press = one frame), focus with `E` / `Q` (or `F` — autofocus). Letters do things: `L` light, `I` laser, `W` white balance, `R` ruler, `S` queue the scan (it is quick stitched in the background; the queue is at the bottom), `V` open the result in the viewer.
 
 - **One window.** The bar on top has the main buttons: **New area**, **Scan area** (scan + stitch), **Export** (drawing for AutoCAD: DWG + DXF of the chosen area), **Settings** (steps, exposure, focus points).
-- **Map** (top right; `Tab` — big map centred on the camera, the camera goes to the corner): everything already shot, at its real place (10x under 50x under 100x), the outlines of the areas and a yellow frame where the camera is now. **Click the map — the stage drives there**; **drag on the map — a new area** on the objective in place; **`Ctrl`+drag — a free box** exactly as drawn (around a crystal), not snapped to the squares; wheel — zoom; right drag — move the map; double-click a shot area — open it in the viewer.
+- **Map** (top right; `Tab` — big map centred on the camera, the camera goes to the corner): everything already shot, at its real place (10x under 50x under 100x), the outlines of the areas and a yellow frame where the camera is now. Where the camera has only been while you drove around, its live frames stay on the map, a little darker, under the scans ("fog of war" lifted; kept with the sample in `<sample>/fog/`). **Click the map — the stage drives there**; **drag on the map — a new area** on the objective in place; **`Ctrl`+drag — a free box** exactly as drawn (around a crystal), not snapped to the squares; wheel — zoom; right drag — move the map; double-click a shot area — open it in the viewer.
 - **Selection by keys** still works: go to one corner, press `1`, to the opposite one, press `2`.
 - **Focus points:** the height $Z$ at each corner is remembered; `K` adds more points. During the scan every frame gets its own $Z$ from these points, so a tilted sample stays sharp. With the checkbox "Z follows the focus points" the arrows also follow them.
 - **Several selections, layers:** set them one after another (`1`, `2`, then `1`, `2` again, or drag on the map). All selections are on one level and may overlap, any objectives; the order of the list on the right is the order of the layers (top on top), drag a card to change it. Click — choose, **Go** — drive to it, **...** — all its scans (the star is the main one), **x** — delete.
 - **Ruler:** `R`, then click two points — the distance in µm (the stage may move between the clicks).
 - **Undo:** `Ctrl+Z` undoes any action in either window (selections, objective, ticks, order, focus points, light, steps, transparency, align, crosses and cells, a move — the stage drives back), up to 1000 steps; `Ctrl+Y` redoes it.
 
-`m.scan()` shoots every area frame by frame with 30 % overlap (35 % at 50x, 100x); every scan of a selection is a new folder `<sample>/scans/<date>_<time>_S03_50x/`. Selections keep their numbers and colours when one is deleted. Only the selections of the objective in place are shot. It prints the expected time; this estimate learns from the previous scans of your microscope. In the windows the scan goes into the queue and is quick-stitched in the background; `mc.stitch(folder)` does it from Python (`mode='quality'` — the exact stitch).
+`m.scan()` shoots every area frame by frame with 30 % overlap (35 % at 50x, 100x); every scan of a selection is a new folder `<sample>/scans/<date>_<time>_S03_50x/`. Selections keep their numbers and colours when one is deleted. Only the selections of the objective in place are shot. It prints the expected time; this estimate learns from the previous scans of your microscope. In the windows the scan goes into the queue and is **quick-stitched while it is being shot**: every new frame is stitched at once to its neighbours already shot (in a separate process, on the other cores), the viewer shows the frames as they come and you can mark the crosses meanwhile; the quick stitch after the scan takes these seams ready-made; `mc.stitch(folder)` does it from Python (`mode='quality'` — the exact stitch).
 
 ### 3. Red grid — find the squares
 
@@ -79,7 +79,7 @@ The result is one drawing `export/drawing.dwg` (origin at cross 1,1, square to t
 
 `mc.projects()` and `mc.all_samples()` print a table: id, name, samples, selections, scans, created, updated, description (the Open dialogs show the same). In the viewer, Open → **New window** shows another project in its own window (`mc.view_window(folder)`), the current one stays open.
 
-Squares selected in the viewer (`M`) become a selection on **Enter** — a **draft** (no objective, not scanned) or with the objective chosen for new ones (`Shift+G`); it appears in the list at once and is chosen. All selections are on one level: any objectives may overlap, nothing is cut; the order of the list is the order of the layers (top on top), drag cards to change it; the box on a card puts it into the export. Over any selection, keys `2`–`5` give it its own finer grid; `M` then selects its cells. **Export** writes everything ticked into one folder `<sample>/export/`: one AutoCAD drawing (origin at cross 1,1, pictures in place, every cell as a closed square, crosses with their numbers), the pictures, and `mixed.png` — all ticked scans laid over each other in the list order, at the pixel you choose.
+Squares selected in the viewer (`M`) become a selection on **Enter** — a **draft** (no objective, not scanned) or with the objective chosen for new ones (`Shift+G`); it appears in the list at once and is chosen. All selections are on one level: any objectives may overlap, nothing is cut; the order of the list is the order of the layers (top on top), drag cards to change it; the box on a card puts it into the export. `U` in the viewer draws a selection by its corners: every side goes only across or up / down and snaps to the crosses and to the corners already put (grey guide lines), so the outline is always right-angled; a click on the first corner or Enter closes it (the last corner is added by itself). **Export** writes everything ticked into one folder `<sample>/export/`: one AutoCAD drawing (origin at cross 1,1, pictures in place, every cell as a closed square, crosses with their numbers), the pictures, and `mixed.png` — all ticked scans laid over each other in the list order, at the pixel you choose.
 
 | | |
 |---|---|
@@ -96,7 +96,7 @@ The drawing is used to write a circuit over the flakes, so every picture in it i
 
 | What | How |
 |---|---|
-| Stitching in two steps | Quick — by itself after the scan (frames by their overlaps, an overview). **Quality** — Stitch / `Shift+J` (into the queue; blurry frames are shot again). Then `C` (2–3 crosses) and `Shift+C` — every frame is put onto the crosses: the frames, the square lattice and the lens distortion are fitted together, so seam errors do not add up. Python: `mc.stitch(folder, mode='quality')`, then `mc.fit_crosses(folder)` |
+| Stitching in two steps | Quick — by itself after the scan (frames by their overlaps, an overview). **Quality** — Stitch / `Shift+J` (into the queue; blurry frames are shot again; for a weak seam the stage goes by itself and shoots a frame in the middle of the pair — a shifted bridge tying both). Then `C` (2–3 crosses) and `Shift+C` — every frame is put onto the crosses: the frames, the square lattice and the lens distortion are fitted together, so seam errors do not add up. Python: `mc.stitch(folder, mode='quality')`, then `mc.fit_crosses(folder)` |
 | Picture in the drawing | every pixel is taken through the **4 crosses of its own square** (bilinear), crosses measured on that very scan; what is left of stitching, distortion and tilt does not reach the drawing |
 | Cross centre | template + **edges of the arms**: two straight lines through the middles of the arms, their crossing is the centre (≈0.1 px, also when the chip is turned; digits next to the cross are ignored) |
 | Lens distortion | `D` in the microscope window (`m.calibrate_distortion()`): 3×3 pictures with 50 % overlap around any details; matched pieces of the overlaps give $k_1, k_2, p_1, p_2$ without crosses and without trusting the stage. Remembered for the objective, used for every scan |
@@ -127,7 +127,7 @@ Both windows have a menu on top: **Open** (a sample of any project), **New** (ch
 
 ## Layers: a map and the details
 
-Once the crosses are marked, the map in manual mode shows the lithography grid as thin semi-transparent red lines — new areas are made of exactly these squares; it is one grid for the whole sample. The selection chosen on the right adds its own finer grid (`2`–`5` — 1/2 … 1/5) inside it.
+Once the crosses are marked, the map in manual mode shows the lithography grid as thin semi-transparent red lines — new areas are made of exactly these squares; it is one grid for the whole sample.
 
 1. Mark a large selection with a small objective (10x) and scan it: this is the map.
 2. Look at the map (`mc.view`) and find the interesting places.
@@ -253,7 +253,7 @@ T = T_0 + t\,N,
 | `T` | turn the picture | the camera by 180° (remembered) | level by the lattice / as shot |
 | `M` · `C` · `N` | cells · crosses · numbers | — | select cells (`Ctrl+A` — all / none) · mark crosses (`Shift+C` — frames onto the crosses) · number a square |
 | `P` · `G` · `A` · `Y` | profiles · straight edges · align · the others | — | profile lines (4 clicks) · crop the steps · align this scan with the others (Space — by itself) · other selections' pictures on / off |
-| `2`…`5`, `1` | finer grid | — | of the chosen selection, else the one under the mouse (1/2 … 1/5; `1` — none) |
+| `U` | outline | — | a selection by its corners: sides only across / up-down, snapping to the crosses and the corners; Enter or the first corner closes it |
 | `E` / `Q` (`PgUp` / `PgDn`) · `F` · `K` · `1` / `2` | stage up / down · autofocus · focus point · corners | ✓ (`Shift` — ×5) | — |
 | `L` · `I` · `W` · `Space` · `V` | light · laser · white balance · picture · open the view (its own window: this one keeps working) | ✓ | — |
 | `Tab` or click a field | steps, exposure, objective | ✓ | — |

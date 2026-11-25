@@ -600,7 +600,7 @@ def minimap(img, m, A, B, size=MAP_W, zcolor=None, others=(), right=0):
         label(f"{'Area' if fixed else 'Preview'} {nx_} x {ny_}{nfr}",
               (W / 2, H - 12), line, 0.45)
     else:
-        label(f"Frame: row {cj + 1}, column {ci + 1}    Key 1: corner of a new area", (W / 2, H - 12), (170, 170, 170), 0.45)
+        label("Key 1: corner of a new area", (W / 2, H - 12), (170, 170, 170), 0.45)
     cr = getattr(m, '_crosses', None)
     if cr is not None and cr.marks:                                      # решётка крестов (красная)
         offv = np.array([m._off['x'], m._off['y']])
@@ -1110,9 +1110,15 @@ def _run(m, fullscreen=False, _keys=None):
             if nv['big'] and not lay.get('Wc') else None
         ls_ = latest_scans()
         from .layers import rings as _rings
-        al_ = map_alpha()                                  # прозрачность картинок выделений ([ ]), без обрезки по контуру
-        mp = nav.base([f_ for f_, _k in ls_], w_, h_, alpha={f_: al_.get(m._regions[k_]['uid'], 1.0) for f_, k_ in ls_},
-                      fog=fog_of(m))
+        al_ = map_alpha()                                  # прозрачность картинок выделений ([ ]); по контуру выделения
+        clip_ = {}
+        for f_, k_ in ls_:                                 # снятое за цветной границей не видно: граница = край картинки
+            try:
+                clip_[f_] = [np.asarray(r_, float) for r_ in _rings(m, m._regions[k_])]
+            except Exception:
+                pass
+        mp = nav.base([f_ for f_, _k in ls_], w_, h_, clip=clip_,
+                      alpha={f_: al_.get(m._regions[k_]['uid'], 1.0) for f_, k_ in ls_}, fog=fog_of(m))
         boxes_ = {}
         from .layers import geom as _gm
         base0_ = mp.copy()
@@ -1261,6 +1267,7 @@ def _run(m, fullscreen=False, _keys=None):
             sh_ = shot_of(k)
             items.append(dict(title=SM.title(m, k), obj=f"{o_}x", color=SM.col(m, k), check=reg.get('export', False),
                               more=bool(sh_), chosen=k in car['multi'], thumbs=[] if hd_ else reg.get('thumbs', []), confirm=car['confirm'] == k, depth=depth,
+                              alpha=map_alpha().get(reg['uid'], 1.0) if sh_ else None,
                               muted=o_ != m.objective or hd_, hidden=bool(reg.get('hidden')),
                               lines=([(f"scanned {sh_}"
                                        if sh_ else "not scanned yet") +
@@ -2767,14 +2774,12 @@ def _run(m, fullscreen=False, _keys=None):
                     r = None if r is None or r >= ny else r
                     c = None if c is None or c >= nx else c
                     r = None if c is None else r
-                line += f"    Selection {SM.num(m, zk)} ({m.objective}x): {nx} x {ny} = {nx * ny} frames" + \
-                        (f"    Frame: row {r + 1}/{ny}, column {c + 1}/{nx}" if r is not None else "    Outside the area")
+                line += f"    Selection {SM.num(m, zk)} ({m.objective}x): {nx} x {ny} = {nx * ny} frames"
             else:
                 *_, (ci_, cj_), _z = _grid(m, A, B)
                 b0c, b0r = (_z[0], _z[2]) if _z else (0, 0)
-                line += f"    Frame: row {cj_ - b0r + 1}, column {ci_ - b0c + 1}" + \
-                        (f"    Selection {SM.num(m, zk)}: corner 1 set, press 2 at the other corner" if A else
-                         f"    Key 1: corner of a new selection ({m.objective}x)")
+                line += (f"    Selection {SM.num(m, zk)}: corner 1 set, press 2 at the other corner" if A else
+                         f"    Key 1: corner of a new selection ({m.objective}x)")   # номер кадра людям не нужен
             q = i2v(cimg + np.array([gd['u'], gd['v']]))                 # точка направляющих в окне
 
             # левая панель: координаты крупно, поля ввода в один столбец, точки фокуса цветом своей области
@@ -3230,6 +3235,17 @@ def _run(m, fullscreen=False, _keys=None):
                         SM.persist(m)
                         msg, msg_t = (f"{SM.title(m, k)} " + ("hidden on the maps (the eye shows it again)"
                                                                 if rg_.get('hidden') else "shown on the maps")), time.monotonic()
+                        continue
+                    if act == 'alpha' and k < len(m._regions):     # прозрачность картинки: 100 -> 75 -> ... -> 0 -> 100
+                        lv_ = [1.0, 0.75, 0.5, 0.25, 0.0]
+                        u_ = m._regions[k]['uid']
+                        a0_ = map_alpha().get(u_, 1.0)
+                        i_ = min(range(len(lv_)), key=lambda i2_: abs(lv_[i2_] - a0_))
+                        a1_ = lv_[(i_ + 1) % len(lv_)]
+                        map_alpha({u_: a1_})
+                        car['shot_t'] = -9
+                        msg, msg_t = (f"{SM.title(m, k)}: picture {100 * a1_:.0f} %" + (" (outline only)" if a1_ == 0 else "")
+                                      + "   (click: less, [ ]: more / less)"), time.monotonic()
                         continue
                     if act == 'more' and k < len(m._regions):      # «...»: все съёмки, выбрать основную
                         car['press'] = None

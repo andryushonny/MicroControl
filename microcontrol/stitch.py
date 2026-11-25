@@ -299,7 +299,7 @@ class _Reduced:
         self.index, self.meta, self.r = st.index, st.meta, r
         H, W = st.shape[:2]
         self.W, self.H = W // r, H // r
-        self.shape = (self.H, self.W) + tuple(st.shape[2:])
+        self.shape = (self.H, self.W)                        # кадры — один канал (зелёный)
         pr = Progress(len(st), "Quick stitch: reading", unit='frames') if verbose else None
 
         def rd(i):
@@ -312,7 +312,7 @@ class _Reduced:
                 a = cv2.resize(a, (self.W, self.H), interpolation=cv2.INTER_AREA) if r > 1 else a
             if a.shape[1] != self.W or a.shape[0] != self.H:
                 a = cv2.resize(a, (self.W, self.H), interpolation=cv2.INTER_AREA)
-            return a
+            return np.ascontiguousarray(a[..., 1]) if a.ndim == 3 else a   # швы — по зелёному: память втрое меньше
         self.img = [None] * len(st)
         with ThreadPoolExecutor(max_workers=max(1, min(8, (os.cpu_count() or 2)))) as ex:
             for i, a in enumerate(ex.map(rd, range(len(st)))):

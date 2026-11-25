@@ -693,18 +693,22 @@ def _button(img, x0, y0, x1, y1, label, hover=False, danger=False, active=False)
         base = (60, 60, 200) if danger else (96, 96, 104)
     cv2.rectangle(img, (x0, y0), (x1, y1), base, -1)
     cv2.rectangle(img, (x0, y0), (x1, y1), (120, 120, 130) if hover else (84, 84, 92), 1)
-    (tw, th), _ = cv2.getTextSize(label, _FONT, 0.45, 1)
-    cv2.putText(img, label, (x0 + (x1 - x0 - tw) // 2 + 1, y0 + (y1 - y0 + th) // 2), _FONT, 0.45,
+    from .ui import ICON_OF, icon
+    if label in ICON_OF:                                    # значок — вектором, сглаженный
+        icon(img, ICON_OF[label], (x0 + x1 + 1) / 2, (y0 + y1 + 1) / 2, min(x1 - x0, y1 - y0) * 0.8, (245, 245, 245))
+        return
+    fs_ = 0.45
+    while fs_ > 0.3 and cv2.getTextSize(label, _FONT, fs_, 1)[0][0] > x1 - x0 - 6:   # надпись — в кнопку
+        fs_ -= 0.02
+    (tw, th), _ = cv2.getTextSize(label, _FONT, fs_, 1)
+    cv2.putText(img, label, (x0 + (x1 - x0 - tw + 1) // 2, y0 + (y1 - y0 + th + 1) // 2), _FONT, fs_,
                 (245, 245, 245), 1, cv2.LINE_AA)
 
 
 def _eye(img, cx, cy, open_=True):
     """Значок глаза: открытый — видно на карте, перечёркнутый — скрыто."""
-    c = (235, 235, 235) if open_ else (130, 130, 136)
-    cv2.ellipse(img, (cx, cy), (8, 5), 0, 0, 360, c, 1, cv2.LINE_AA)
-    cv2.circle(img, (cx, cy), 2, c, -1, cv2.LINE_AA)
-    if not open_:
-        cv2.line(img, (cx - 8, cy + 6), (cx + 8, cy - 6), (235, 235, 235), 1, cv2.LINE_AA)
+    from .ui import icon
+    icon(img, 'eye' if open_ else 'eye-off', cx, cy, 20, (235, 235, 235) if open_ else (150, 150, 156))
 
 
 def hidden(m, k):
@@ -837,6 +841,10 @@ def carousel(H, items, sel, scroll=0, title="Selections", go=True, hover=None, t
             ex1 = right
             ex0 = ex1 - 24
             right = ex0 - 6
+        if it.get('alpha') is not None:                                    # прозрачность картинки: щелчок — меньше
+            ax1_ = right
+            ax0_ = ax1_ - 38
+            right = ax0_ - 6
         if it.get('more'):                                                 # кнопка «...»: все съёмки, основная
             mx1_ = right
             mx0_ = mx1_ - 26
@@ -885,15 +893,25 @@ def carousel(H, items, sel, scroll=0, title="Selections", go=True, hover=None, t
             hits.append((gx0, y0 + 8, gx1, y0 + 28, 'go', k))
         if it.get('hidden') is not None:
             _button(img, ex0, y0 + 8, ex1, y0 + 28, '', over(ex0, y0 + 8, ex1, y0 + 28))
-            _eye(img, (ex0 + ex1) // 2, y0 + 18, not it['hidden'])
+            _eye(img, (ex0 + ex1 + 1) / 2, y0 + 18.5, not it['hidden'])
             hits.append((ex0, y0 + 8, ex1, y0 + 28, 'eye', k))
+        if it.get('alpha') is not None:                                   # прозрачность: полоска заливки + число
+            a_ = float(it['alpha'])
+            _button(img, ax0_, y0 + 8, ax1_, y0 + 28, '', over(ax0_, y0 + 8, ax1_, y0 + 28))
+            cv2.rectangle(img, (ax0_ + 3, y0 + 24), (ax0_ + 3 + int((ax1_ - ax0_ - 6) * a_), y0 + 25), c, -1)
+            t_ = f"{int(round(100 * a_))}%"
+            fs_a = 0.38
+            (tw_, th_), _ = cv2.getTextSize(t_, _FONT, fs_a, 1)
+            cv2.putText(img, t_, (ax0_ + (ax1_ - ax0_ - tw_ + 1) // 2, y0 + 20), _FONT, fs_a, (245, 245, 245), 1, cv2.LINE_AA)
+            hits.append((ax0_, y0 + 8, ax1_, y0 + 28, 'alpha', k))
         if it.get('more'):
             _button(img, mx0_, y0 + 8, mx1_, y0 + 28, '...', over(mx0_, y0 + 8, mx1_, y0 + 28))
             hits.append((mx0_, y0 + 8, mx1_, y0 + 28, 'more', k))
         yy = y0 + 44
+        from .ui import fit as _fit
         for ln in it.get('lines', []):
-            cv2.putText(img, ln, (tx, yy), _FONT, 0.4, (200, 200, 205) if not it.get('muted') else (160, 160, 165),
-                        1, cv2.LINE_AA)
+            cv2.putText(img, _fit(ln, 0.4, x1c - tx - 8), (tx, yy), _FONT, 0.4,   # строка — в карточку
+                        (200, 200, 205) if not it.get('muted') else (160, 160, 165), 1, cv2.LINE_AA)
             yy += 15
         if conf:
             cv2.putText(img, "click x again to delete", (tx, yy), _FONT, 0.38, (120, 120, 255), 1, cv2.LINE_AA)

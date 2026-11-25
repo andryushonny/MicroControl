@@ -43,7 +43,9 @@ def neighbours(pred, W, H, new, armax=0.0):
 class Live:
     def __init__(self, folder):
         self.folder = folder
-        self.img = {}                                   # i -> уменьшенный кадр
+        from collections import OrderedDict
+        self.img = OrderedDict()                        # i -> уменьшенный кадр (последние CACHE: память не растёт)
+        self._st = None
         self.pairs = {}                                 # (a, b) -> (dx, dy, err) в px уменьшенного кадра
         self.n = 0
         self.r = None
@@ -58,6 +60,32 @@ class Live:
             return None
         if a.shape[1] != self.W or a.shape[0] != self.H:
             a = cv2.resize(a, (self.W, self.H), interpolation=cv2.INTER_AREA)
+        return np.ascontiguousarray(a[..., 1]) if a.ndim == 3 else a   # швы — по зелёному (как quick): память втрое меньше
+
+    CACHE = 160                                         # кадров в памяти (слабый ПК, 1000+ кадров)
+
+    def _put(self, i, a):
+        import threading
+        if not hasattr(self, '_lk'):
+            self._lk = threading.Lock()
+        with self._lk:
+            self.img[i] = a
+            self.img.move_to_end(i)
+            while len(self.img) > self.CACHE:
+                self.img.popitem(last=False)
+
+    def _get(self, i):
+        """Уменьшенный кадр i: из памяти или заново с диска (старые вытесняются)."""
+        import threading
+        if not hasattr(self, '_lk'):
+            self._lk = threading.Lock()
+        with self._lk:
+            a = self.img.get(i)
+            if a is not None:
+                self.img.move_to_end(i)
+                return a
+        a = self._frame(self._st, i)
+        self._put(i, a)
         return a
 
     def update(self):
@@ -76,12 +104,13 @@ class Live:
                 self.W, self.H = W0 // self.r, H0 // self.r
             n = len(st.index)
             new = list(range(self.n, n))
+            self._st = st
             for i in new:
                 a = self._frame(st, i)
                 if a is None:                           # кадр ещё пишется: в следующий раз
                     n = i
                     break
-                self.img[i] = a
+                self._put(i, a)
             new = [i for i in new if i < n]
             if not new and self.pos is not None:
                 return self.n
@@ -94,8 +123,8 @@ class Live:
             class _R:
                 pass
             red = _R()
-            red.frame = lambda i, crop=None: self.img[i] if crop is None else \
-                self.img[i][crop[1]:crop[3], crop[0]:crop[2]]
+            red.frame = lambda i, crop=None: self._get(i) if crop is None else \
+                self._get(i)[crop[1]:crop[3], crop[0]:crop[2]]
             todo, self.armax = neighbours(pred, self.W, self.H, new, self.armax)
             if todo:
                 from concurrent.futures import ThreadPoolExecutor
@@ -171,6 +200,10 @@ def running(folder):
 
 def watch(folder, every=0.4, parent=None):
     """Следить за папкой и дошивать, пока не попросят остановиться (join/live.stop) или не умрёт родитель."""
+    try:                                                # фоном: окно и съёмка — важнее (слабый ПК)
+        os.nice(10)
+    except (AttributeError, OSError):
+        pass
     lv = Live(folder)
     stop = os.path.join(folder, 'join', STOP)
     while True:

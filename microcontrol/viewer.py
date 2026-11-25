@@ -530,6 +530,16 @@ def _view_one(folder, fullscreen, keys, car):
             st['msg'] = pick_open(u_k_)
             st['car_dirty'] = st['dirty'] = True
             return
+        if act == 'alpha' and u_k_:                         # прозрачность на карточке: 100 -> 75 -> ... -> 0 -> 100
+            lv_ = [1.0, 0.75, 0.5, 0.25, 0.0]
+            a0_ = alphas().get(u_k_, 1.0)
+            i_ = min(range(len(lv_)), key=lambda i2_: abs(lv_[i2_] - a0_))
+            a1_ = lv_[(i_ + 1) % len(lv_)]
+            alphas({u_k_: a1_})
+            st['msg'] = f"Picture {100 * a1_:.0f} %" + (" (outline only)" if a1_ == 0 else "") + "   (click: less, [ ]: more / less)"
+            st['_fl_key'] = None
+            st['car_dirty'] = st['dirty'] = True
+            return
         if act == 'chk' and u_k_:                           # галочка: в экспорт или нет
             st['msg'] = set_export(u_k_)
             st['car_dirty'] = st['dirty'] = True
@@ -1093,8 +1103,12 @@ def _view_one(folder, fullscreen, keys, car):
     def cut_outline(img):
         """Снятое за контуром выделения (кадры шире контура — до шага мотора, по краям) не показывается:
         картинка — ровно то, что выделено."""
-        return img                                          # без обрезки: картинка — вся снятая
-        pm_ = st.get('_outline_px')
+        mt_ = (_mt(smp.file) if smp is not None else 0, _mt(os.path.join(folder, 'align.json')),
+               _mt(os.path.join(folder, 'join', 'positions_all.csv')))
+        pm_ = st.get('_outline_px')                         # контур двигали (A, объектив) — заново
+        if pm_ is not None and st.get('_outline_mt') != mt_:
+            pm_ = None
+        st['_outline_mt'] = mt_
         if pm_ is None:
             pm_ = False
             try:
@@ -1241,8 +1255,10 @@ def _view_one(folder, fullscreen, keys, car):
             st['hov'] = (x, y)
             if st.get('prof'):
                 st['prof_dirty'] = True
-        if ev == cv2.EVENT_MOUSEMOVE and st['mode'] == 'poly':
-            st['dirty'] = True                             # следующая сторона тянется за мышью
+        if ev == cv2.EVENT_MOUSEMOVE and st['mode'] == 'poly' and st['down'] is None:
+            if not st['dirty']:                            # следующая сторона тянется за мышью: картинка и слои —
+                st['ruler_only'] = True                    # готовые, заново только контур
+            st['dirty'] = True
         if ev == cv2.EVENT_MOUSEMOVE and st['mode'] == 'ruler' and 0 < len(st['ruler']) < RK_N[st.get('rk', 'pp')]:
             st['mouse'] = (x + 0.5, y + 0.5)               # линейка тянется за мышью до следующей точки:
             if not st['dirty']:                            # картинку и слои не пересчитывать — только линейку
@@ -2275,6 +2291,7 @@ def _view_one(folder, fullscreen, keys, car):
             if u_ in sub_of_:                               # снятое: картинка и кадры
                 k_ = sub_of_[u_]
                 it_ = dict(base_[k_], chosen=u_ in mk_, check=chk_, title=f"Selection {r_.get('num', '')}", more=True,
+                           alpha=alphas().get(u_, 1.0),
                            color=SM.color(int(r_.get('num', 1)) - 1), obj='draft' if dr_ else f"{r_.get('obj')}x")
                 if subs[k_] == folder and not fo_:
                     sel_k = len(items_)
@@ -3296,8 +3313,9 @@ def _view_one(folder, fullscreen, keys, car):
                      _mt(os.path.join(folder, 'join', 'stitch.json')))   # кадры, живая сшивка, сшивка (не правка J)
             if st.get('_lsig') is None:
                 st['_lsig'] = lsig_
-            elif lsig_ != st['_lsig'] and st['down'] is None and st.get('busy') is None:
-                st['_lsig'] = lsig_                        # скан идёт (кадры шьются на ходу) или его пересшили:
+            elif lsig_ != st['_lsig'] and st['down'] is None and _t.monotonic() - st.get('_lsig_t', 0) > 2.0:
+                st['_lsig'], st['_lsig_t'] = lsig_, _t.monotonic()   # скан идёт (кадры шьются на ходу) или пересшили:
+                                                           # не чаще раза в 2 с (слабый ПК, 1000 кадров)
                 try:                                       # картинка — заново на месте, вид и кресты — с ней
                     sc_n = _Scene(folder)
                     org_o = sc.org

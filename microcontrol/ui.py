@@ -115,16 +115,80 @@ def toast(img, msg, cx, y, scale, kind='ok', max_w=None):
         put(img, l_, x0 + 20, int(y - lh * (len(lines) - 1 - i)), scale, TEXT)
 
 
-def facts(img, items, x, y, scale, color=TEXT):
-    """Факты через точку-разделитель: «30 frames · 1.40 um/px · ...». Возвращает правый край."""
+def fit(text, scale, maxw, thick=1):
+    """Текст, который влезает в maxw px: лишнее с конца — «..»."""
+    t = str(text)
+    if size(t, scale, thick)[0] <= maxw:
+        return t
+    while t and size(t + "..", scale, thick)[0] > maxw:
+        t = t[:-1]
+    return (t.rstrip() + "..") if t else ""
+
+
+def facts(img, items, x, y, scale, color=TEXT, x_max=None):
+    """Факты через точку-разделитель: «30 frames · 1.40 um/px · ...». Не дальше x_max (по умолчанию — край
+    картинки): что не влезло — обрезано «..». Возвращает правый край."""
     dot = "  |  "
+    x_max = img.shape[1] - 8 if x_max is None else x_max
     for k, t in enumerate(items):
         if k:
+            if x + size(dot, scale)[0] + size("..", scale)[0] > x_max:
+                break
             put(img, dot, x, y, scale, LINE)
             x += size(dot, scale)[0]
+        t = fit(t, scale, x_max - x)
+        if not t:
+            break
         put(img, t, x, y, scale, color)
         x += size(t, scale)[0]
     return x
+
+
+ICON_OF = {'x': 'close', '...': 'more', '||': 'pause', '>': 'play', 'eye': 'eye', 'eye-off': 'eye-off'}
+
+
+def icon(img, kind, cx, cy, sz, color, weight=1.0):
+    """Значок вектором, сглаженный (рисуется в 4 раза крупнее и уменьшается): close, pause, play, more, eye,
+    eye-off, stop, check. cx, cy — центр в непрерывных координатах (у кнопки x0..x1 включительно — (x0 + x1 + 1) / 2),
+    точно, с долями пикселя; sz — сторона квадрата значка, px."""
+    K = 4
+    x0, y0 = int(np.floor(cx - sz / 2)) - 1, int(np.floor(cy - sz / 2)) - 1
+    P = int(np.ceil(sz)) + 3
+    msk = np.zeros((P * K, P * K), np.uint8)
+    S = sz * K
+    ox, oy = (cx - x0) * K, (cy - y0) * K                  # центр значка в крупной картинке
+    q = lambda dx, dy: (int(round(ox + dx * S)), int(round(oy + dy * S)))
+    t = max(K, int(round(S * 0.14 * weight)))
+    if kind == 'close':
+        cv2.line(msk, q(-.30, -.30), q(.30, .30), 255, t, cv2.LINE_AA)
+        cv2.line(msk, q(-.30, .30), q(.30, -.30), 255, t, cv2.LINE_AA)
+    elif kind == 'pause':
+        for a in (-.26, .10):
+            cv2.rectangle(msk, q(a, -.31), q(a + .16, .31), 255, -1, cv2.LINE_AA)
+    elif kind == 'play':                                    # центр тяжести треугольника — в центре
+        cv2.fillPoly(msk, [np.array([q(-.22, -.34), q(.34, 0), q(-.22, .34)], np.int32)], 255, cv2.LINE_AA)
+    elif kind == 'stop':
+        cv2.rectangle(msk, q(-.28, -.28), q(.28, .28), 255, -1, cv2.LINE_AA)
+    elif kind == 'more':
+        r = max(K, int(S * 0.075))
+        for dx in (-.27, 0, .27):
+            cv2.circle(msk, q(dx, 0), r, 255, -1, cv2.LINE_AA)
+    elif kind in ('eye', 'eye-off'):
+        cv2.ellipse(msk, q(0, 0), (int(S * 0.42), int(S * 0.26)), 0, 0, 360, 255, max(K, t * 3 // 4), cv2.LINE_AA)
+        cv2.circle(msk, q(0, 0), int(S * 0.12), 255, -1, cv2.LINE_AA)
+        if kind == 'eye-off':
+            cv2.line(msk, q(-.40, .40), q(.40, -.40), 0, t * 2, cv2.LINE_AA)
+            cv2.line(msk, q(-.40, .40), q(.40, -.40), 255, max(K, t * 3 // 4), cv2.LINE_AA)
+    elif kind == 'check':
+        cv2.polylines(msk, [np.array([q(-.28, .02), q(-.08, .22), q(.28, -.20)], np.int32)], False, 255, t, cv2.LINE_AA)
+    a_ = cv2.resize(msk, (P, P), interpolation=cv2.INTER_AREA).astype(np.float32) / 255.0
+    H, W = img.shape[:2]
+    xa, ya, xb, yb = max(0, x0), max(0, y0), min(W, x0 + P), min(H, y0 + P)
+    if xb <= xa or yb <= ya:
+        return
+    a_ = a_[ya - y0:yb - y0, xa - x0:xb - x0, None]
+    roi = img[ya:yb, xa:xb].astype(np.float32)
+    img[ya:yb, xa:xb] = (roi * (1 - a_) + np.array(color, np.float32) * a_).astype(np.uint8)
 
 
 def chevron(img, cx, cy, r, direction, color, th=2):
@@ -304,20 +368,19 @@ def queue_panel(img, x0, y1, x1, q, scale=0.45):
             s_ = f"waiting: {nx_[1] if nx_ else 'start'}  ~{_tm(j.remaining())}"
         else:
             s_ = (j.note or j.state) if j.state != 'failed' else f"failed: {j.error}"
-        bw = size("x", scale)[0] + 16
-        pw = size("||", scale)[0] + 16
+        bw = pw = lh - 6 + 4                               # квадратные кнопки значков
         while s_ and size(s_, scale)[0] > x1 - 32 - bw - pw - x:
             s_ = s_[:-2]
         put(img, s_, x, y + th // 2, scale, DIM if j.state != 'failed' else ERR, 1)
         if j.active:
             r = (x1 - 12 - bw, y - lh // 2 + 3, x1 - 12, y + lh // 2 - 3)
-            cv2.rectangle(img, r[:2], r[2:], (40, 40, 120), -1)
-            put(img, "x", r[0] + 8, y + th // 2, scale, TEXT, 1)
+            cv2.rectangle(img, r[:2], r[2:], (50, 50, 140), -1)
+            isz_ = (r[3] - r[1]) * 0.8
+            icon(img, 'close', (r[0] + r[2] + 1) / 2, (r[1] + r[3] + 1) / 2, isz_, TEXT)
             out.append((r, 'stop', j.id))
             r2 = (r[0] - 6 - pw, r[1], r[0] - 6, r[3])           # пауза / дальше — у каждой задачи своя
-            cv2.rectangle(img, r2[:2], r2[2:], (40, 90, 40) if j.paused else (70, 70, 76), -1)
-            lab_ = ">" if j.paused else "||"
-            put(img, lab_, r2[0] + (pw - size(lab_, scale)[0]) // 2, y + th // 2, scale, TEXT, 1)
+            cv2.rectangle(img, r2[:2], r2[2:], (50, 110, 50) if j.paused else (70, 70, 76), -1)
+            icon(img, 'play' if j.paused else 'pause', (r2[0] + r2[2] + 1) / 2, (r2[1] + r2[3] + 1) / 2, isz_, TEXT)
             out.append((r2, 'pause', j.id))
     if more:
         y += lh
@@ -407,7 +470,7 @@ def status_bar(img, x0, y0, x1, y1, state=None, facts_=(), scale=0.45):
         put(img, "Ready", x, cy + th // 2, scale, OK, 1)
         x += size("Ready", scale)[0] + 22
         if facts_:
-            facts(img, list(facts_), x, cy + th // 2, scale)
+            facts(img, list(facts_), x, cy + th // 2, scale, x_max=x1 - 8)
     return stop_r
 
 
@@ -598,7 +661,7 @@ def pick_panel(img, title, header, rows, star_i=None, hover=None, scroll=0, W=No
     cx1, cy0 = x0 + pw - 12, y0 + 12                        # закрыть
     on = hover is not None and cx1 - 24 <= hover[0] <= cx1 and cy0 <= hover[1] <= cy0 + 24
     cv2.rectangle(img, (cx1 - 24, cy0), (cx1, cy0 + 24), (96, 96, 104) if on else (62, 62, 70), -1)
-    put(img, "x", cx1 - 16, cy0 + 17, 0.5, TEXT, 1)
+    icon(img, 'close', cx1 - 11.5, cy0 + 12.5, 18, TEXT)
     out.append(((cx1 - 24, cy0, cx1, cy0 + 24), 'close'))
     xs, x_ = [], x0 + 44
     for c in cols:

@@ -372,6 +372,8 @@ def run(m, program, save=None, notes='', folder=None, extra=None, reuse=False):
     report = []
     try:
         for k_, (n, c, p) in enumerate(cmds):
+            while getattr(m, '_pause', False) and not getattr(m, '_abort', False):   # пауза очереди: после кадра
+                time.sleep(0.1)
             if getattr(m, '_abort', False):                 # «Стоп» из окна (Esc во время скана)
                 m._abort = False
                 raise KeyboardInterrupt

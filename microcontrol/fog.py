@@ -78,6 +78,17 @@ class Fog:
             self.save()
         return True
 
+    def covered(self, x, y):
+        """Здесь (мкм столика) туман уже рассеян?"""
+        q = np.array([x, y], float) / self.res
+        k = (int(np.floor(q[0] / TILE)), int(np.floor(q[1] / TILE)))
+        with self.lock:
+            t = self.tiles.get(k)
+            if t is None:
+                return False
+            i, j = int(q[1] - k[1] * TILE), int(q[0] - k[0] * TILE)
+            return bool(t[min(i, TILE - 1), min(j, TILE - 1)].max() > 0)
+
     def save(self):
         """Записать изменённые плитки (у образца)."""
         self.t_save = time.monotonic()

@@ -2656,3 +2656,80 @@ a74 = np.where(ok74, a74 - a74[ok74].mean(), 0).astype(np.float32); b74 = np.whe
 ncc74 = float((a74 * b74).sum() / np.sqrt((a74 ** 2).sum() * (b74 ** 2).sum()))
 assert np.hypot(dx74, dy74) * nv74.s < 2.0 and ncc74 > 0.3, (dx74, dy74, ncc74)                # туман лёг на своё место (< 2 мкм)
 m.close(); print(f"Fog of war: camera frames while the stage moves lie on the map under the scans, in place (off the scan by {np.hypot(dx74, dy74) * nv74.s:.1f} um), kept with the sample: OK")
+
+
+# ------------------------------------------------------------------ 75. Прерванная съёмка — снятое сшито сразу (и после падения окна — при запуске); переезд по карте рассеивает туман по пути; съёмка 50x идёт сама, как только 50x поставлен
+import microcontrol.manual as M75
+from microcontrol import samples as SM75, jobs as J75
+m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp()); m.focus(); fw, fh = m.frame_size
+m.area = mc.Area(0, 0, 7 * fw, 5 * fh); m.scan(stitch=None)
+j75 = m.queue.scan(m._regions[0]['uid'])
+while j75.state != 'running' or (j75.text or '').find('frame') < 0:
+    time.sleep(0.05)
+time.sleep(2.0); m.queue.stop(j75); m.queue.wait(60)
+f75 = j75.folder
+assert f75 and 0 < J75.n_frames(f75) < 108 and os.path.exists(os.path.join(f75, 'join', 'stitch.json')), (j75.state, j75.note)
+assert 'quick stitch queued' in j75.note, j75.note
+os.remove(os.path.join(f75, 'join', 'stitch.json'))                                     # как если бы окно упало
+json.dump(dict(frames=1, t=0, running=True), open(os.path.join(f75, 'join', 'live.json'), 'w'))
+assert J75.unstitched(m.sample.folder) == [f75]
+M75.run(m, fullscreen=False, _keys=[-1, -1])
+m.queue.wait(60)
+assert os.path.exists(os.path.join(f75, 'join', 'stitch.json'))                        # при запуске — досшита
+fg75 = M75.fog_of(m); fg75.clear()
+X0, Y0 = m.real_position.x, m.real_position.y
+SM75.drive_to(m, X0 + 6 * fw, Y0 + 4 * fh, trace=M75.fog_trace(m))                      # Г: по X, потом по Y
+for k in range(1, 6):                                                                    # след — на всём пути
+    assert fg75.covered(X0 + k * fw, Y0) and fg75.covered(X0 + 6 * fw, Y0 + k * fh * 0.8), k
+assert not fg75.covered(X0 + 3 * fw, Y0 + 3 * fh)                                        # в стороне — туман
+SM75.drive_to(m, X0, Y0); n0_ = fg75.ver; SM75.drive_to(m, X0 + 6 * fw, Y0 + 4 * fh, trace=M75.fog_trace(m))
+assert fg75.ver - n0_ <= 1                                                                # там, где уже был, не стоит
+m.objective = 10; m.area = mc.Area(0, 0, fw, fh); SM75.persist(m)
+r50 = dict(m._regions[0]); r50['obj'] = 50
+m.objective = 10
+k50 = len(m._regions); m._regions.append(dict(r50, uid='u50', num=99)); SM75.persist(m)
+j50 = m.queue.scan('u50')
+time.sleep(1.0)
+assert m.queue.held(j50) and j50.state == 'queued'
+m.objective = 50
+t0_ = time.time()
+while j50.state == 'queued' and time.time() - t0_ < 10:
+    time.sleep(0.1)
+assert j50.state != 'queued', j50.state                                                  # пошла сама, без S
+m.queue.stop(j50); m.queue.wait(60)
+m.close(); print("Interrupted scan: frames stitched at once (and on the next start after a crash); a drive on the map clears the fog along its L path; a 50x scan starts by itself once 50x is set: OK")
+
+
+# ------------------------------------------------------------------ 76. Очередь: остановка одной задачи не ломает остальные; пауза у каждой задачи — скан (после кадра) и сшивка (процесс замирает), потом дальше
+from microcontrol import jobs as J76
+m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp()); m.focus(); fw, fh = m.frame_size
+m.area = mc.Area(0, 0, 3 * fw, 2 * fh); m.scan(stitch=None)
+m.area = mc.Area(5 * fw, 0, 8 * fw, 2 * fh); m.scan(stitch=None)
+m.area = mc.Area(0, 5 * fh, 5 * fw, 8 * fh); f76c = m.scan(stitch=None)
+q = m.queue
+jA = q.scan(m._regions[0]['uid']); jB = q.scan(m._regions[1]['uid']); jC = q.stitch(f76c, 'quality')
+while jA.state != 'running' or 'frame' not in (jA.text or ''):
+    time.sleep(0.05)
+time.sleep(0.8); q.stop(jA)                                                                  # принудительно
+while jB.state != 'running' or 'frame' not in (jB.text or ''):
+    time.sleep(0.05)
+q.pause(jB); time.sleep(1.0)
+n1 = J76.n_frames(jB.folder) if jB.folder else None
+sB = [r for r in os.listdir(os.path.join(m.sample.folder, 'scans')) if '_S02_' in r]
+nB = lambda: J76.n_frames(os.path.join(m.sample.folder, 'scans', sB[-1]))
+k1 = nB(); time.sleep(1.5); k2 = nB()
+assert k1 == k2 and jB.paused and 'paused' in q.summary(), (k1, k2, q.summary())          # скан стоит
+while not any(j.kind == 'stitch' and j.state == 'running' for j in q.jobs):
+    time.sleep(0.1)
+jC2 = jC if jC.state == 'running' else next(j for j in q.jobs if j.kind == 'stitch' and j.state == 'running')
+q.pause(jC2); f0 = jC2.frac; time.sleep(1.5)
+assert jC2.paused and jC2.frac == f0, (jC2.frac, f0)                                        # сшивка замерла
+q.resume(jC2); q.resume(jB)
+assert q.wait(300)
+assert jA.state == 'stopped' and jB.state == 'done' and jC.state == 'done', (jA.state, jB.state, jC.state, jB.error, jC.error)
+qa = [j for j in q.jobs if j.kind == 'stitch' and '(stopped)' in j.title]
+assert qa and qa[0].state == 'done' and os.path.exists(os.path.join(jA.folder, 'join', 'stitch.json')), [(j.title, j.state) for j in q.jobs]
+from microcontrol import project as PJ76
+fB0 = PJ76.scans_of(m.sample.folder, jB.uid)[0]
+assert J76.n_frames(jB.folder) == J76.n_frames(fB0.folder if hasattr(fB0, 'folder') else fB0), (J76.n_frames(jB.folder), fB0)   # после паузы — весь
+m.close(); print("Queue: a forced stop leaves the other jobs alone (its frames quick-stitched as a job of its own); pause per job - scan after the frame, stitch frozen - then on: OK")

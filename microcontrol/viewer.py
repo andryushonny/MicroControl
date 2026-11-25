@@ -314,14 +314,9 @@ def _view(folder, fullscreen=False, _keys=None):
         if not fullscreen:                                  # окно могли растянуть: заставка — его размера, не растянутая
             Wv, Hv = window_size(WIN, (Wv, Hv))
             car['size'] = (Wv, Hv)
-        try:                                                # пока грузится — видно, что идёт работа
-            ld_ = np.full((Hv, Wv, 3), 24, np.uint8)
-            UI.progress_panel(ld_, "Opening", f"Selection {SM.sample_index(cur)}" if ses else os.path.basename(cur),
-                              0.0, "loading the stitched picture and its grid", 0.0, None, "")
-            cv2.imshow(WIN, ld_)
-            cv2.waitKey(1)
-        except Exception:
-            pass
+        car['open_label'] = f"Selection {SM.sample_index(cur)}" if ses else os.path.basename(cur)
+        car['open_t'] = _t.monotonic()
+        _open_frame(car)                                    # пока грузится — видно, что идёт работа
         cur = _view_one(cur, fullscreen, keys, car)
     if not fullscreen:
         window_size(WIN, remember=True)                                    # запомнить размер для следующего окна
@@ -419,6 +414,39 @@ def stage_lattice(smp0, pitch):
     return L
 
 
+def _open_frame(car):
+    """Кадр заставки «Opening»: бегущая полоса (сколько ждать — неизвестно), сколько прошло."""
+    try:
+        Wv, Hv = car['size']
+        ld_ = np.full((Hv, Wv, 3), 24, np.uint8)
+        UI.progress_panel(ld_, "Opening", car.get('open_label', ''), None, "loading the stitched picture and its grid",
+                          _t.monotonic() - car.get('open_t', _t.monotonic()), None, "")
+        cv2.imshow(WIN, ld_)
+        cv2.waitKey(1)
+    except Exception:
+        pass
+
+
+def _opening(fn, car):
+    """fn() в своём потоке; окно тем временем рисует бегущую полосу (~25 кадров/с). -> результат fn."""
+    import threading
+    box = {}
+
+    def run():
+        try:
+            box['r'] = fn()
+        except BaseException as e:
+            box['e'] = e
+    th = threading.Thread(target=run, daemon=True)
+    th.start()
+    while th.is_alive():
+        _open_frame(car)
+        th.join(0.04)
+    if 'e' in box:
+        raise box['e']
+    return box['r']
+
+
 def _view_one(folder, fullscreen, keys, car):
     """Открыть сшитый скан. Перемещение — левая кнопка (в режимах выделения — правая или средняя), колесо — масштаб.
     G — отметить кресты (щелчок у креста: центр находится сам по симметрии креста); соседний крест по ряду,
@@ -428,7 +456,7 @@ def _view_one(folder, fullscreen, keys, car):
     E — вывести выделенное (mc.export). Разметка хранится в <скан>/grid.json."""
     from .mask import Grid, snap_cross, export
     from . import samples as SM
-    sc = _Scene(folder)
+    sc = _opening(lambda: _Scene(folder), car)             # грузится — бегущая полоса, окно живое
     g = Grid(folder)
     px_um = sc.st.meta.get('pixel_size_um') or 1.0
     moved_ = g.sync(sc.P, sc.W, sc.H) if g.cr.marks else 0   # кадры встали иначе (сшивка): кресты — за ними
@@ -2198,7 +2226,6 @@ def _view_one(folder, fullscreen, keys, car):
             except (OSError, ValueError):
                 pass
         UI.status_bar(img, 0, Hv - sbh, Wv, Hv, None, [mode, f"{len(sc.st)} frames"] + ([qs_] if qs_ else []), scale=0.5)
-        import time as _t
         if st['msg'] != st.get('_lm'):
             st['_lm'], st['_lt'] = st['msg'], _t.monotonic()
         prompt = bool(st.get('lab'))
@@ -3067,18 +3094,22 @@ def _view_one(folder, fullscreen, keys, car):
         T_ = np.c_[Rm, mid() - Rm @ np.array([st['cx'], st['cy']])]
         dq_ = np.asarray(st['al']['dq'], float) if st.get('al') else np.zeros(2)   # совмещение: сдвиг на просмотр
         al_ = alphas()
-        base_ok_ = ~(((img.max(2) <= 28) & (img.min(2) >= 14)))   # где у этой съёмки картинка (фон вне мозаики — нет)
-        comp_ = np.full_like(img, 20)
         me_u_ = sc.st.meta.get('sample_uid')
+        lays_ = finer_layers()
+        a0_ = al_.get(me_u_, 1.0) if not st.get('al') else 0.6
+        if not lays_ and a0_ >= 0.99:                       # других слоёв нет: картинка как есть (быстро)
+            return img
+        base_ok_ = 255 - cv2.inRange(img, (14, 14, 14), (28, 28, 28))   # где у этой съёмки картинка (фон — нет)
+        comp_ = np.full_like(img, 20)
 
         def put_base(c_):
-            a_ = al_.get(me_u_, 1.0) if not st.get('al') else 0.6   # совмещение: сверху, сквозь неё видно остальные
+            a_ = a0_                                        # совмещение: сверху, сквозь неё видно остальные
             if a_ >= 0.99:
-                c_[base_ok_] = img[base_ok_]
+                return cv2.copyTo(img, base_ok_, c_)
             elif a_ > 0.01:
-                c_[base_ok_] = (img[base_ok_].astype(np.float32) * a_ + c_[base_ok_].astype(np.float32) * (1 - a_)).astype(np.uint8)
+                return cv2.copyTo(cv2.addWeighted(img, a_, c_, 1 - a_, 0), base_ok_, c_)
             return c_
-        for o_, pic_, A_, ring_, uid_, f_, n_, under_ in reversed(finer_layers()):   # снизу списка вверх
+        for o_, pic_, A_, ring_, uid_, f_, n_, under_ in reversed(lays_):   # снизу списка вверх
             a_ = al_.get(uid_, 1.0)
             if a_ <= 0.01:                                    # прозрачность 0: только контур
                 continue

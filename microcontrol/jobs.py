@@ -69,6 +69,7 @@ class Job:
         self.result, self.error, self.note = None, None, ''
         self._gen, self._send, self._stop, self._halt = steps, None, False, None
         self._proc = None
+        self.paused = False                             # пауза: ждёт, пока не возобновят (сканер — после кадра)
         self.step_t0, self.step_est = None, 0.0
 
     @property
@@ -185,6 +186,7 @@ class JobQueue:
                 if 'r' not in run_:
                     run_['r'] = Runner(f_)
             ST_.ON_CREATE.append(on_new)
+            f = None
             try:
                 with no_stop():                         # скан останавливается сам, после кадра (снятое — цело)
                     f = m.scan(only=[j.uid], stitch=None)
@@ -192,8 +194,12 @@ class JobQueue:
                 ST_.ON_CREATE.remove(on_new)
                 if 'r' in run_:
                     run_['r'].stop()                    # дошить последние кадры: quick возьмёт швы готовыми
-            stopped_ = bool(m._abort or j._stop)
-            m._abort = False
+                stopped_ = bool(m._abort or j._stop)
+                m._abort = False
+                fp_ = f or (run_['r'].folder if 'r' in run_ else None)
+                if fp_ and (stopped_ or f is None) and n_frames(fp_) > 0:   # прервали (или ошибка): снятое — сшить
+                    from .project import scan_label as _sl  # отдельной задачей на ядрах: прибор и очередь — дальше
+                    self.stitch(fp_, 'quick', title=f"Quick stitch {_sl(fp_)} (stopped)")
             return f, stopped_
 
         def halt():
@@ -207,7 +213,7 @@ class JobQueue:
             m._q_scans.append(folder)
             m.last_scans, m.last_scan = list(m._q_scans), folder
         if stopped_:
-            j.note = "stopped: frames so far are kept"
+            j.note = f"stopped: {n_frames(folder)} frames so far are kept (quick stitch queued)"
             return
         yield ('cpu', "Quick stitch", ('stitch', folder, {'mode': 'quick'}), None, n_frames(folder) * _rates('quick'), 0.0)
         j.note = "scanned, quick stitched"
@@ -253,6 +259,8 @@ class JobQueue:
             job = next((j for j in self.jobs if j.id == job), None)
         if job is None or not job.active:
             return False
+        if job.paused:                                  # на паузе: сначала отпустить, иначе не остановится
+            self.resume(job)
         with self._lock:
             job._stop = True
             if job.state in ('queued', 'waiting') and not (self._inst and self._inst[0] is job) and job not in self._cpu:
@@ -277,6 +285,40 @@ class JobQueue:
         self._wake.set()
         return True
 
+    def pause(self, job):
+        """Пауза задачи (до resume): скан — после текущего кадра (прибор свободен), сшивка — процесс замирает,
+        ждущая — не начнётся. Остальные задачи идут. -> True / False."""
+        if isinstance(job, int):
+            job = next((j for j in self.jobs if j.id == job), None)
+        if job is None or not job.active or job.paused:
+            return False
+        with self._lock:
+            job.paused = True
+            job._t_pause = time.monotonic()
+            if self._inst is not None and self._inst[0] is job and self.m is not None:
+                self.m._pause = True
+            if job._proc is not None and job._proc.poll() is None:
+                _suspend(job._proc.pid, True)
+        self._wake.set()
+        return True
+
+    def resume(self, job):
+        if isinstance(job, int):
+            job = next((j for j in self.jobs if j.id == job), None)
+        if job is None or not job.paused:
+            return False
+        with self._lock:
+            job.paused = False
+            dt_ = time.monotonic() - getattr(job, '_t_pause', time.monotonic())
+            if job.step_t0 is not None:                 # пауза — не в счёт времени шага
+                job.step_t0 += dt_
+            if self._inst is not None and self._inst[0] is job and self.m is not None:
+                self.m._pause = False
+            if job._proc is not None and job._proc.poll() is None:
+                _suspend(job._proc.pid, False)
+        self._wake.set()
+        return True
+
     def stop_all(self):
         for j in list(self.jobs):
             self.stop(j)
@@ -294,8 +336,7 @@ class JobQueue:
 
     def held(self, j):
         """Съёмка ждёт свой объектив (его ещё не поставили или не сказали S)."""
-        return j.kind == 'scan' and j.state == 'queued' and (getattr(j, 'hold', False) or
-                                                             j.obj != getattr(self.m, 'objective', j.obj))
+        return j.kind == 'scan' and j.state == 'queued' and not j.paused and j.obj != getattr(self.m, 'objective', j.obj)   # стоит — пошла
 
     def waiting_for(self):
         """{объектив: сколько съёмок его ждут}."""
@@ -326,11 +367,12 @@ class JobQueue:
         a = self.active()
         if not a:
             return ""
-        run_ = [j for j in a if j.state == 'running']
+        pz_ = sum(1 for j in a if j.paused)
+        run_ = [j for j in a if j.state == 'running' and not j.paused]
         wf_ = self.waiting_for()
         held_ = sum(wf_.values())
-        wait_ = len(a) - len(run_) - held_
-        return (f"Queue: {len(run_)} running" + (f", {wait_} waiting" if wait_ else "")
+        wait_ = len(a) - len(run_) - held_ - pz_
+        return (f"Queue: {len(run_)} running" + (f", {pz_} paused" if pz_ else "") + (f", {wait_} waiting" if wait_ else "")
                 + "".join(f", {n} wait for {o}x" for o, n in sorted(wf_.items()))
                 + (f"  -  all done in ~{tm(self.total_left())}" if len(a) > held_ else ""))
 
@@ -410,12 +452,12 @@ class JobQueue:
     def _tick(self):
         with self._lock:
             for j in self.jobs:                          # новые задачи: первый шаг
-                if j.state == 'queued' and not j._stop:
-                    if j.kind == 'scan' and (getattr(j, 'hold', False) or j.obj != getattr(self.m, 'objective', j.obj)):
+                if j.state == 'queued' and not j._stop and not j.paused:
+                    if j.kind == 'scan' and j.obj != getattr(self.m, 'objective', j.obj):
                         continue                         # ждёт свой объектив
                     self._advance(j)
             if self._inst is None:                       # прибор свободен: первая ждущая на приборе
-                j = next((j for j in self.jobs if j.state == 'waiting' and j.lane == 'inst'), None)
+                j = next((j for j in self.jobs if j.state == 'waiting' and j.lane == 'inst' and not j.paused), None)
                 if j is not None:
                     self._start_inst(j)
             for j in [j for j in self._cpu if j._proc is not None and j._proc.poll() is not None
@@ -426,7 +468,7 @@ class JobQueue:
                 if j._stop and getattr(j, '_t_stop', None) and time.monotonic() - j._t_stop > 5 and j._proc.poll() is None:
                     j._proc.kill()
             while len(self._cpu) < self.workers:
-                j = next((j for j in self.jobs if j.state == 'waiting' and j.lane == 'cpu'), None)
+                j = next((j for j in self.jobs if j.state == 'waiting' and j.lane == 'cpu' and not j.paused), None)
                 if j is None:
                     break
                 self._start_cpu(j)
@@ -541,6 +583,62 @@ class JobQueue:
             self._advance(j, res[1])
         else:
             self._advance(j, exc=RuntimeError(res[1]))
+
+
+def _suspend(pid, on):
+    """Заморозить (on) / разморозить процесс сшивки (пауза задачи на ядрах)."""
+    try:
+        import psutil
+        p = psutil.Process(pid)
+        p.suspend() if on else p.resume()
+        return True
+    except ImportError:
+        pass
+    except Exception:
+        return False
+    if os.name == 'nt':
+        import ctypes
+        h = ctypes.windll.kernel32.OpenProcess(0x0800, False, int(pid))     # PROCESS_SUSPEND_RESUME
+        if not h:
+            return False
+        try:
+            f = ctypes.windll.ntdll.NtSuspendProcess if on else ctypes.windll.ntdll.NtResumeProcess
+            return f(h) == 0
+        finally:
+            ctypes.windll.kernel32.CloseHandle(h)
+    import signal
+    try:
+        os.kill(pid, signal.SIGSTOP if on else signal.SIGCONT)
+        return True
+    except OSError:
+        return False
+
+
+def quick_partial(folder):
+    """Прерванная съёмка: то, что снято, — quick-сшить сразу (швы живой сшивки готовы — секунды)."""
+    try:
+        from .stitch import stitch
+        stitch(folder, mode='quick', verbose=False)
+        return True
+    except Exception as e:
+        try:
+            from . import log as L
+            L.debug('JOB-030', f"quick of an interrupted scan {folder}: {type(e).__name__}: {e}")
+        except Exception:
+            pass
+        return False
+
+
+def unstitched(sample_folder):
+    """Съёмки образца с кадрами, но без сшивки (окно упало посреди съёмки): их quick-сшить при запуске."""
+    from .project import all_scans
+    from .live import running
+    out = []
+    for f in all_scans(sample_folder):
+        if n_frames(f) > 0 and os.path.exists(os.path.join(f, 'join', 'live.json')) \
+                and not os.path.exists(os.path.join(f, 'join', 'stitch.json')) and not running(f):   # из очереди, не досшита
+            out.append(f)
+    return out
 
 
 def n_frames_est(j, m):

@@ -304,6 +304,19 @@ def fog_add(m, img):
         pass
 
 
+def fog_trace(m):
+    """След переезда для тумана: trace(x, y, shot) для samples.drive_to (рабочие мкм). shot False — спросить,
+    нужен ли здесь кадр (туман ещё не рассеян), True — столик уже здесь: снять кадр в туман."""
+    def trace(x, y, shot):
+        f = fog_of(m)
+        if not shot:
+            return not f.covered(x + m._off['x'], y + m._off['y'])
+        img = m.image(0)
+        f.add(img, camera_box(m, img.shape), min_move=0.0)
+        return True
+    return trace
+
+
 def _ar_d(m):
     """Поправка положения столика по картинке, мкм: где столик на самом деле минус где он по модели (люфт и
     прочее). Её меряет ar_lock, сверяя живой кадр с уже снятой мозаикой, — кресты на кадре и контуры совпадают."""
@@ -910,6 +923,13 @@ def _run(m, fullscreen=False, _keys=None):
             msg, msg_t = str(e), time.monotonic()
     rects = {}
     live = _Live(m) if keys is None or getattr(m, '_test_live', False) else None   # в тестах — синхронно
+    try:                                                  # окно упало посреди съёмки: снятое — quick-сшить
+        from .jobs import unstitched as _uns
+        from .project import scan_label as _sl
+        for f_ in _uns(m.sample.folder):
+            m.queue.stitch(f_, 'quick', title=f"Quick stitch {_sl(f_)} (interrupted)")
+    except Exception:
+        pass
     qbar = {'rects': [], 'paused': False, 'h': 0}
     QBUSY = "wait for the queue or stop its job at the instrument (x on the bar at the bottom)"
 
@@ -1622,7 +1642,7 @@ def _run(m, fullscreen=False, _keys=None):
         k_ = SM.area_at(m, S[0], S[1])
         rg_ = m._regions[k_] if k_ is not None else None
         z_ = focus_z(rg_['pts'], S[0], S[1]) - m._off['z'] if rg_ and rg_.get('pts') and SM.obj(m, rg_) == m.objective else None
-        SM.drive_to(m, float(S[0]), float(S[1]), z_)
+        SM.drive_to(m, float(S[0]), float(S[1]), z_, trace=fog_trace(m))   # по пути — кадры в туман карты
         return f"At X {S[0] - m._off['x']:.0f}, Y {S[1] - m._off['y']:.0f} um"
 
     def _chain(k_):
@@ -2249,9 +2269,16 @@ def _run(m, fullscreen=False, _keys=None):
             sel_ = P_.Selection(m.sample, m._regions[m._sel])
             sc_ = sel_.shown
             f_ = sc_.folder if sc_ else None
-            if f_ is None and sel_.latest is not None:
-                msg = f"Selection {m._regions[m._sel]['num']}: no stitched scan yet (the queue stitches it)"
-                return
+            from .live import running as _lrun
+            if sel_.latest is not None and _lrun(sel_.latest.folder):   # снимается сейчас — её, кадры появляются на глазах
+                f_ = sel_.latest.folder
+            if f_ is None and sel_.latest is not None:     # снимается (или ещё не сшита): кадры — как они есть,
+                from .jobs import n_frames as _nf          # просмотр дошивает их на ходу
+                if _nf(sel_.latest.folder) > 0:
+                    f_ = sel_.latest.folder
+                else:
+                    msg = f"Selection {m._regions[m._sel]['num']}: no frames yet - the view opens after the first ones"
+                    return
             if f_ is None:
                 msg = (f"Selection {m._regions[m._sel]['num']} is not scanned yet: S scans it"
                        + ("" if not P_.latest_scans(m.sample.folder) else " (Scans in the menu: the others)"))
@@ -2283,7 +2310,7 @@ def _run(m, fullscreen=False, _keys=None):
                 pic_ = view.copy()
                 pic_[:, :Wl_] = (pic_[:, :Wl_].astype(np.float32) * 0.4).astype(np.uint8)
                 UI.progress_panel(pic_[:, :Wl_], "Opening the view", __import__("microcontrol.project", fromlist=["x"]).scan_label(f_),
-                                  0.0, "loading the stitched picture", 0.0, None, "")
+                                  None, "loading the stitched picture", 0.0, None, "")
                 cv2.imshow(WIN, np.vstack([menu_img(W), pic_]))
                 cv2.waitKey(1)
             _view(f_, fullscreen=fullscreen, _keys=keys)          # в тестах — те же нажатия
@@ -2967,6 +2994,14 @@ def _run(m, fullscreen=False, _keys=None):
                     j_ = next((j_ for j_ in m.queue.jobs if j_.id == c_[2]), None)
                     if j_ is not None and m.queue.stop(j_):
                         msg = f"Stopping: {j_.title}" + (" (after the current frame)" if j_.lane == 'inst' else "")
+                elif c_[1] == 'pause':
+                    j_ = next((j_ for j_ in m.queue.jobs if j_.id == c_[2]), None)
+                    if j_ is not None and j_.paused:
+                        m.queue.resume(j_)
+                        msg = f"Resumed: {j_.title}"
+                    elif j_ is not None and m.queue.pause(j_):
+                        msg = f"Paused: {j_.title}" + (" (after the current frame)" if j_.lane == 'inst' and
+                                                      j_.state == 'running' else "") + " - > resumes"
                 elif c_[1] == 'all':
                     n_ = len(m.queue.active())
                     m.queue.stop_all()

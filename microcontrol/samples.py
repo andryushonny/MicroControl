@@ -524,11 +524,30 @@ def goto_area(m, k):
             + (f". It was marked with {obj(m, reg)}x, now {m.objective}x: Z not changed" if other else ""))
 
 
-def drive_to(m, X, Y, z=None):
-    """Безопасно поехать в точку (настоящие мкм): вниз (если z ниже), X/Y отрезками ≤ max_jump, вверх кусками."""
+def drive_to(m, X, Y, z=None, trace=None):
+    """Безопасно поехать в точку (настоящие мкм): вниз (если z ниже), X/Y отрезками ≤ max_jump, вверх кусками.
+    trace(x, y) (рабочие мкм) -> снять ли здесь кадр: столик едет, как всегда, по X, потом по Y, но там, где
+    trace просит, останавливается и снимает (туман войны карты — след переезда)."""
     if z is not None and z < m.position.z:
         m.goto(z=z)
     x_t, y_t = X - m._off['x'], Y - m._off['y']
+    if trace is not None:
+        p0 = m.position
+        st_ = 0.9 * min(m.frame_size)                       # шаг следа — чуть меньше кадра: без щелей
+        pts_ = []
+        nx_ = int(abs(x_t - p0.x) // st_)
+        pts_ += [(p0.x + np.sign(x_t - p0.x) * st_ * i, p0.y) for i in range(1, nx_ + 1)]
+        ny_ = int(abs(y_t - p0.y) // st_)
+        pts_ += [(x_t, p0.y + np.sign(y_t - p0.y) * st_ * i) for i in range(0, ny_ + 1)]
+        for wx, wy in pts_:
+            if abs(wx - x_t) + abs(wy - y_t) < st_ * 0.1:
+                break
+            try:
+                if trace(wx, wy, False):
+                    m.goto(x=wx, y=wy)
+                    trace(wx, wy, True)
+            except Exception:
+                break
     p0 = m.position
     nleg = max(1, int(np.ceil(np.hypot(x_t - p0.x, y_t - p0.y) / (m.max_jump * 0.95))))
     for i_ in range(1, nleg + 1):

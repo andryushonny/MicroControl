@@ -206,7 +206,23 @@ def _tm(s):
     return f"{s // 3600}:{s % 3600 // 60:02d}:{s % 60:02d}" if s >= 3600 else f"{s // 60:02d}:{s % 60:02d}"
 
 
-QROWS = 5                                                   # сколько задач очереди видно внизу (остальные — «+N»)
+QROWS = 3                                                   # сколько задач очереди видно внизу (остальные — «+N», пока до них не дойдёт)
+
+
+_DOTS = {}
+
+
+def dot_step(key, period=0.18):
+    """Какая из трёх точек горит: строго 1, 2, 3, 1, 2, 3 ... — не больше шага на кадр (окно подвисло — точка
+    не перескакивает), шаг не чаще period с."""
+    import time as _t
+    now = _t.monotonic()
+    d = _DOTS.get(key)
+    if d is None:
+        d = _DOTS[key] = [0, now]
+    elif now - d[1] >= period:
+        d[0], d[1] = (d[0] + 1) % 3, now
+    return d[0]
 
 
 def queue_rows(q):
@@ -239,7 +255,7 @@ def queue_panel(img, x0, y1, x1, q, scale=0.45):
     lh = th + 12
     h = queue_height(q, scale)
     y0 = y1 - h
-    panel(img, x0, y0, x1, y1, 0.9, LINE)
+    panel(img, x0, y0, x1, y1, 1.0, LINE)                    # непрозрачная: карта под ней не мешает
     out = [((x0, y0, x1, y1), 'none', None)]
     now = _t.monotonic()
     y = y0 + 4 + lh // 2
@@ -256,13 +272,17 @@ def queue_panel(img, x0, y1, x1, q, scale=0.45):
         y += lh
         x = x0 + 12
         col = {'running': ACCENT, 'done': OK, 'failed': ERR, 'stopped': DIM}.get(j.state, DIM)
-        if j.state == 'running':
+        if j.state == 'running' and not j.paused:
             for i in range(3):
-                cv2.circle(img, (x + 5 + 10 * i, y), 3, ACCENT if int(now * 6) % 3 == i else LINE, -1, cv2.LINE_AA)
+                cv2.circle(img, (x + 5 + 10 * i, y), 3, ACCENT if dot_step(('q', j.id)) == i else LINE, -1, cv2.LINE_AA)
         else:
-            cv2.circle(img, (x + 15, y), 4, col, -1 if j.state != 'waiting' and j.state != 'queued' else 1, cv2.LINE_AA)
+            if j.active and q.held(j):                      # ждёт объектив: знак паузы
+                cv2.rectangle(img, (x + 10, y - 5), (x + 13, y + 5), ACCENT, -1)
+                cv2.rectangle(img, (x + 17, y - 5), (x + 20, y + 5), ACCENT, -1)
+            else:
+                cv2.circle(img, (x + 15, y), 4, col, -1 if j.state != 'waiting' and j.state != 'queued' else 1, cv2.LINE_AA)
         x += 38
-        lane = {'inst': "instrument", 'cpu': "cpu"}.get(j.lane, "")
+        lane = {'inst': "instrument", 'cpu': "cpu"}.get(j.lane, "on hold" if j.active and q.held(j) else "queued" if j.active else "")
         put(img, lane, x, y + th // 2, scale * 0.85, DIM, 1)
         x += size("instrument", scale * 0.85)[0] + 10
         t_ = j.title
@@ -270,20 +290,23 @@ def queue_panel(img, x0, y1, x1, q, scale=0.45):
             t_ = t_[:-2]
         put(img, t_, x, y + th // 2, scale, TEXT if j.active else DIM, 1)
         x += 270
-        if j.state == 'running':
+        if j.paused:
+            s_ = "paused: > resumes" + (f"  ({j.step_title} {100 * (j.frac or 0):.0f}%)" if j.state == 'running' else "")
+        elif j.state == 'running':
             _bar(img, x, y - 6, x + 120, 12, j.frac, now)
             x += 130
             lft = j.remaining()
             s_ = f"{j.step_title}  {100 * (j.frac or 0):.0f}%  {_tm(j.elapsed())}" + (f", ~{_tm(lft)} left" if lft else "")
         elif j.active and q.held(j):
-            s_ = f"waits for {j.obj}x: put it in place, then S (Scan area)"
+            s_ = f"waits for {j.obj}x: set the objective to {j.obj}x (O) - it starts by itself"
         elif j.active:
             nx_ = getattr(j, '_next', None)
             s_ = f"waiting: {nx_[1] if nx_ else 'start'}  ~{_tm(j.remaining())}"
         else:
             s_ = (j.note or j.state) if j.state != 'failed' else f"failed: {j.error}"
         bw = size("x", scale)[0] + 16
-        while s_ and size(s_, scale)[0] > x1 - 24 - bw - x:
+        pw = size("||", scale)[0] + 16
+        while s_ and size(s_, scale)[0] > x1 - 32 - bw - pw - x:
             s_ = s_[:-2]
         put(img, s_, x, y + th // 2, scale, DIM if j.state != 'failed' else ERR, 1)
         if j.active:
@@ -291,6 +314,11 @@ def queue_panel(img, x0, y1, x1, q, scale=0.45):
             cv2.rectangle(img, r[:2], r[2:], (40, 40, 120), -1)
             put(img, "x", r[0] + 8, y + th // 2, scale, TEXT, 1)
             out.append((r, 'stop', j.id))
+            r2 = (r[0] - 6 - pw, r[1], r[0] - 6, r[3])           # пауза / дальше — у каждой задачи своя
+            cv2.rectangle(img, r2[:2], r2[2:], (40, 90, 40) if j.paused else (70, 70, 76), -1)
+            lab_ = ">" if j.paused else "||"
+            put(img, lab_, r2[0] + (pw - size(lab_, scale)[0]) // 2, y + th // 2, scale, TEXT, 1)
+            out.append((r2, 'pause', j.id))
     if more:
         y += lh
         put(img, f"+{more} more (menu Queue)", x0 + 50, y + th // 2, scale, DIM, 1)
@@ -345,9 +373,9 @@ def status_bar(img, x0, y0, x1, y1, state=None, facts_=(), scale=0.45):
     stop_r = None
     if state:
         now = _t.monotonic()
-        ph_ = now * 6.0                                     # бегущая точка: окно живо
+        k_ = dot_step('status')                             # бегущая точка: окно живо
         for i in range(3):
-            c_ = ACCENT if int(ph_) % 3 == i else LINE
+            c_ = ACCENT if k_ == i else LINE
             cv2.circle(img, (x + 5 + 10 * i, cy), 3, c_, -1, cv2.LINE_AA)
         x += 38
         nm = state.get('title', '')

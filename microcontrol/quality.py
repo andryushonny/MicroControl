@@ -172,16 +172,17 @@ def render(folder, verbose=False):
         rej_ = [(int(a), int(b)) for a, b, wv in zip(z['I'], z['J'], wq) if wv <= 0
                 and int(a) not in replaced and int(b) not in replaced]
         if rej_:                                               # шов не принят, а детали в обоих кадрах есть
-            st = ScanData(folder)
+            st = ScanData(folder)                              # (по уменьшенным копиям: быстро и на тысячах кадров)
             try:
-                from .optics import attach
-                attach(st, folder)
-                cv2_ = _content(st, sorted({i for q in rej_ for i in q}))
-                cva_ = _content(st, range(0, n, max(1, n // 40)))
+                tb_ = st.thumbs()
             finally:
                 st.close()
-            md_ = float(np.median(list(cva_.values())))
-            bad_seams += [[a, b] for a, b in rej_ if min(cv2_[a], cv2_[b]) > 0.8 * md_]
+            cv_ = {}
+            for i_, t_ in enumerate(tb_):
+                g_ = cv2.cvtColor(t_, cv2.COLOR_BGR2GRAY) if t_.ndim == 3 else t_
+                cv_[i_] = float(cv2.Laplacian(g_.astype(np.float32), cv2.CV_32F, ksize=3).std())
+            md_ = float(np.median(list(cv_.values()))) if cv_ else 0.0
+            bad_seams += [[a, b] for a, b in rej_ if a in cv_ and b in cv_ and min(cv_[a], cv_[b]) > 0.8 * md_]
         P_ = np.asarray(g['p'], float)[:, :2]                   # мост уже снят (кадр посередине) — шов закрыт
         fv_ = meta.get('fov_um') or {}
         near_ = 0.15 * min(float(fv_.get('x') or 100.0), float(fv_.get('y') or 100.0)) / float(g['ms'])

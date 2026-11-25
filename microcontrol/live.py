@@ -52,10 +52,37 @@ class Live:
         self.pos = None
         self.armax = 0.0
 
+    LEVELS = True                                       # уровни просмотра (1/2, 1/4, 1/8) — сразу при съёмке
+
+    def _levels(self, i, p):
+        """Кадр i: уровни 1/2, 1/4, 1/8 в viewer/levels/ (как stitch.make_preview), если их ещё нет; JPEG
+        раскрывается сразу вдвое меньше. -> уровень с уменьшением self.r (для швов) или None."""
+        lvdir = os.path.join(self.folder, 'viewer', 'levels')
+        if not self.LEVELS or self.r < 2 or not p.lower().endswith(('.jpg', '.jpeg')) or levels_ok(lvdir, i, p):
+            return None
+        a = cv2.imdecode(np.fromfile(p, np.uint8), cv2.IMREAD_REDUCED_COLOR_2)
+        if a is None:
+            return None
+        W0, H0 = self.W0, self.H0
+        lv = {1: a if a.shape[:2] == (H0 >> 1, W0 >> 1) else
+              cv2.resize(a, (max(1, W0 >> 1), max(1, H0 >> 1)), interpolation=cv2.INTER_AREA)}
+        for k in (2, 3):
+            lv[k] = cv2.resize(lv[k - 1], (max(1, W0 >> k), max(1, H0 >> k)), interpolation=cv2.INTER_AREA)
+        os.makedirs(lvdir, exist_ok=True)
+        if not hasattr(self, '_pool'):
+            from concurrent.futures import ThreadPoolExecutor
+            self._pool, self._jobs = ThreadPoolExecutor(max_workers=2), []
+        while len(self._jobs) > 8:                      # не копить в памяти: подождать записи
+            self._jobs.pop(0).result()
+        self._jobs.append(self._pool.submit(write_levels, lv, i, lvdir))
+        return lv.get({2: 1, 4: 2, 8: 3}.get(self.r, 0))
+
     def _frame(self, st, i):
         row = st.index[i]
         p = os.path.join(self.folder, 'frames', row['file'])
-        a = cv2.imdecode(np.fromfile(p, np.uint8), FLAGS.get(self.r, cv2.IMREAD_COLOR))
+        a = self._levels(i, p)
+        if a is None:
+            a = cv2.imdecode(np.fromfile(p, np.uint8), FLAGS.get(self.r, cv2.IMREAD_COLOR))
         if a is None:
             return None
         if a.shape[1] != self.W or a.shape[0] != self.H:
@@ -102,6 +129,7 @@ class Live:
             if self.r is None:
                 self.r = reduce_of(W0)
                 self.W, self.H = W0 // self.r, H0 // self.r
+                self.W0, self.H0 = W0, H0
             n = len(st.index)
             new = list(range(self.n, n))
             self._st = st
@@ -174,6 +202,28 @@ class Live:
             json.dump(dict(frames=self.n, t=time.time(), running=True), f)
 
 
+def levels_ok(lvdir, i, frame_path):
+    """Уровни кадра i уже записаны и не старше кадра (кадр могли переснять)."""
+    try:
+        t = os.path.getmtime(os.path.join(lvdir, f"{i:05d}_3.jpg"))
+        return t >= os.path.getmtime(frame_path) and all(
+            os.path.exists(os.path.join(lvdir, f"{i:05d}_{k}.jpg")) for k in (1, 2))
+    except OSError:
+        return False
+
+
+def write_levels(lv, i, lvdir):
+    """{уровень: картинка} -> viewer/levels/<i>_<уровень>.jpg; целиком (через .tmp): просмотр не прочтёт половину.
+    Самый мелкий — последним: по нему видно, что записаны все."""
+    for k in sorted(lv):
+        ok, buf = cv2.imencode('.jpg', lv[k], [cv2.IMWRITE_JPEG_QUALITY, 88])
+        if not ok:
+            continue
+        p = os.path.join(lvdir, f"{i:05d}_{k}.jpg")
+        buf.tofile(p + '.tmp')
+        os.replace(p + '.tmp', p)
+
+
 def cached_pairs(folder, r):
     """Швы, измеренные на ходу (тем же уменьшением r): {(a, b): (dt | None, err)}."""
     try:
@@ -219,6 +269,11 @@ def watch(folder, every=0.4, parent=None):
         if done:
             break
         time.sleep(every)
+    for j in getattr(lv, '_jobs', []):                  # уровни — дописать
+        try:
+            j.result()
+        except Exception:
+            pass
     try:
         with open(os.path.join(folder, 'join', 'live.json'), 'w', encoding='utf-8') as f:
             json.dump(dict(frames=lv.n, t=time.time(), running=False), f)

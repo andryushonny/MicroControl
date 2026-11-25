@@ -2,7 +2,7 @@
 
 **用 Python 控制 Optosky ATR8300 拉曼显微镜：扫描基底，把它拼接成一张图，叠加光刻网格，选出需要的方格并导出给 AutoCAD。**
 
-**作者：** A. Lyapeikov, S. Domenko · **版本：** 0.41.0 · English: [README.md](../README.md) · Русский: [README_ru.md](README_ru.md) · PDF: [中文](MicroControl_zh.pdf) · 完整技术参考：[中文](reference_zh.md)、[EN](reference_en.md)、[RU](reference_ru.md)
+**作者：** A. Lyapeikov, S. Domenko · **版本：** 0.42.0 · English: [README.md](../README.md) · Русский: [README_ru.md](README_ru.md) · PDF: [中文](MicroControl_zh.pdf) · 完整技术参考：[中文](reference_zh.md)、[EN](reference_en.md)、[RU](reference_ru.md)
 
 ![总览：带样品网格的 10x 拍摄、方格编号、草稿、其中的 50x 与 100x](img/view.jpg)
 
@@ -259,6 +259,7 @@ T = T_0 + t\,N,
 | `Tab` 或单击字段 | 步长、曝光、物镜 | ✓ | — |
 | `Ctrl+Z` · `Ctrl+Y` | 撤销 · 重做 | ✓（包括移动） | ✓ |
 | `H` · `Esc` | 全部按键 · 退出模式 / 取消标记 | ✓ | ✓；无其他打开内容时按 `Esc` —— **关闭查看器** |
+| `` ` ``（或 `F12`） | 计时：窗口各部分每帧毫秒数（每 5 秒也写入日志）—— 这台电脑上什么慢 | ✓ | ✓ |
 | `Shift+Esc` | 关闭 | 显微镜窗口（只能这样） | ✓ |
 | `Ctrl+P` | Settings 面板（左侧） | 显示 / 隐藏 | — |
 

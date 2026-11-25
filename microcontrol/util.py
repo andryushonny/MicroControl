@@ -582,15 +582,29 @@ _UI_P = os.path.join(os.path.expanduser('~'), '.microcontrol', 'ui.json')
 UI_DEFAULTS = dict(panes='one', list='right')            # panes: one | camera|map | map|camera; list: right | left
 
 
+_UI_C = [None, 0.0, {}]                                    # (mtime, когда смотрели, настройки): не читать диск каждый кадр
+
+
 def ui_pref(key):
     """Настройка раскладки (View -> Layout): panes, list."""
     if os.environ.get('MC_TEST') and not os.environ.get('MC_UI'):   # проверки — всегда раскладка по умолчанию
         return UI_DEFAULTS.get(key)
-    try:
-        with open(_UI_P, encoding='utf-8') as f:
-            v = json.load(f).get(key)
-    except (OSError, ValueError):
-        v = None
+    import time as _tm
+    now = _tm.monotonic()
+    if now - _UI_C[1] > 0.5:                             # другое окно могло поменять: смотрим раз в полсекунды
+        _UI_C[1] = now
+        try:
+            mt = os.path.getmtime(_UI_P)
+        except OSError:
+            mt = None
+        if mt != _UI_C[0]:
+            try:
+                with open(_UI_P, encoding='utf-8') as f:
+                    _UI_C[2] = json.load(f)
+            except (OSError, ValueError):
+                _UI_C[2] = {}
+            _UI_C[0] = mt
+    v = _UI_C[2].get(key)
     return v if v is not None else UI_DEFAULTS.get(key)
 
 
@@ -604,3 +618,55 @@ def set_ui_pref(key, val):
     os.makedirs(os.path.dirname(_UI_P), exist_ok=True)
     with open(_UI_P, 'w', encoding='utf-8') as f:
         json.dump(d, f, indent=1)
+    _UI_C[0], _UI_C[1], _UI_C[2] = None, 0.0, d
+
+
+# ---------------------------------------------------------------- замер: сколько мс уходит на каждую часть кадра
+PROF_KEYS = (ord('`'), ord('~'), 0x7B0000, 65481)        # ` / ~ / F12 (Windows, GTK)
+
+
+class Prof:
+    """Счётчик мс на кадр по этапам окна (` или F12 — показать). Средние — сглаженно; раз в 5 с — в журнал."""
+    def __init__(self, name):
+        self.name, self.on = name, False
+        self.avg, self.cur, self.t = {}, {}, None
+        self.n, self.t_log = 0, 0.0
+
+    def start(self):
+        import time as _tm
+        self.cur, self.t = {}, _tm.perf_counter()
+
+    def mark(self, stage):
+        """Этап закончился: его время (с прошлой отметки)."""
+        import time as _tm
+        if self.t is None:
+            return
+        now = _tm.perf_counter()
+        self.cur[stage] = self.cur.get(stage, 0.0) + (now - self.t) * 1000
+        self.t = now
+
+    def end(self):
+        if not self.cur:
+            return
+        self.cur['total'] = sum(self.cur.values())
+        for k, v in self.cur.items():
+            self.avg[k] = v if k not in self.avg else 0.8 * self.avg[k] + 0.2 * v
+        self.n += 1
+        self.t = None
+        import time as _tm
+        if self.on and _tm.monotonic() - self.t_log > 5:
+            self.t_log = _tm.monotonic()
+            try:
+                from . import log as L
+                L.event('PRF-001', f"{self.name}: " + ", ".join(f"{k} {v:.0f} ms" for k, v in self.lines()))
+            except Exception:
+                pass
+
+    def lines(self):
+        """[(этап, мс)] — по порядку этапов, total — последним."""
+        return [(k, v) for k, v in self.avg.items() if k != 'total'] + ([('total', self.avg['total'])]
+                                                                       if 'total' in self.avg else [])
+
+    def toggle(self):
+        self.on = not self.on
+        return f"Timing per frame: {'on (also written to the log every 5 s)' if self.on else 'off'}"

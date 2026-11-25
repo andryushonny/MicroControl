@@ -35,6 +35,25 @@ def panel(img, x0, y0, x1, y1, alpha=0.78, border=None):
         cv2.rectangle(img, (x0, y0), (x1 - 1, y1 - 1), border, 1)
 
 
+def prof_panel(img, prof, x1, y0, scale=0.45):
+    """Замер (`): мс на кадр по этапам — столбиком у правого края x1, сверху y0."""
+    rows = prof.lines()
+    if not rows:
+        return
+    th = size("Xg", scale)[1] + 8
+    tw = max(size(f"{k}", scale)[0] for k, _v in rows) + size("0000 ms", scale)[0] + 30
+    h = th * (len(rows) + 1) + 10
+    panel(img, x1 - tw, y0, x1, y0 + h, 0.85, ACCENT)
+    put(img, f"ms per frame ({prof.name})", x1 - tw + 8, y0 + th, scale, ACCENT)
+    tot = max(1e-6, prof.avg.get('total', 1.0))
+    for i, (k, v) in enumerate(rows):
+        y = y0 + th * (i + 2)
+        col = TEXT if k == 'total' else ((80, 80, 255) if v > 0.4 * tot and v > 15 else (0, 210, 255) if v > 8 else TEXT)
+        put(img, k, x1 - tw + 8, y, scale, col)
+        t = f"{v:.0f} ms" if v >= 1 else f"{v:.1f} ms"
+        put(img, t, x1 - 8 - size(t, scale)[0], y, scale, col)
+
+
 def chip(img, s, x, y, scale, color, fg=None):
     """Плашка режима: тонированный фон, рамка и текст цвета color (обычное начертание).
     (x, y) — левый край и базовая линия текста. Возвращает правый край."""

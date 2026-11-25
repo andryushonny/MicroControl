@@ -790,11 +790,11 @@ def _ashlar(st, pred, px, max_shift_um, sigma, verbose):
 
 def _write_levels(img, i, W, H, lvdir):
     """Кадр, уменьшенный в 2, 4, 8 раз, — в viewer/levels/ (для быстрого просмотра)."""
-    lv_img = img
-    for lv in (1, 2, 3):
-        lv_img = cv2.resize(lv_img, (max(1, W >> lv), max(1, H >> lv)), interpolation=cv2.INTER_AREA)
-        ok, buf = cv2.imencode('.jpg', lv_img, [cv2.IMWRITE_JPEG_QUALITY, 88])
-        buf.tofile(os.path.join(lvdir, f"{i:05d}_{lv}.jpg"))
+    from .live import write_levels
+    lv_img, lv = img, {}
+    for k in (1, 2, 3):
+        lv_img = lv[k] = cv2.resize(lv_img, (max(1, W >> k), max(1, H >> k)), interpolation=cv2.INTER_AREA)
+    write_levels(lv, i, lvdir)
 
 
 @timed_fn('Stitch: preview and small copies')
@@ -835,11 +835,15 @@ def make_preview(folder, pos=None, max_side=4000, levels=True, verbose=False, fa
         with _TP(max_workers=max(1, min(8, os.cpu_count() or 2))) as ex_:
             for i, a in enumerate(ex_.map(rd, range(n))):
                 yield i, a
+    lv_done = None
+    if levels and st.index and st.index[0].get('file'):
+        from .live import levels_ok
+        lv_done = lambda i_: levels_ok(lvdir, i_, os.path.join(folder, 'frames', st.index[i_]['file']))
     for i, img in frames_():
         if pr:
             pr.update(1, f"frame {i + 1} of {n}: preview and 3 small copies")
-        if levels:                                          # уровни пишутся в фоне (кодирование JPG — в потоках)
-            while len(jobs) > 6:
+        if levels and not (lv_done and lv_done(i)):         # уровни пишутся в фоне (кодирование JPG — в потоках);
+            while len(jobs) > 6:                            # уже записанные при съёмке (live) — не заново
                 jobs.pop(0).result()
             jobs.append(pool.submit(_write_levels, img, i, W, H, lvdir))
         if thumbs is not None:

@@ -72,6 +72,7 @@ HELP = ["Same keys: one letter means one thing here and in the view (M C N P G A
         "Shift+drag over a selection: move it",
         "D: Distortion   B: One-side approach   \\: Map 90 deg (also buttons of the Settings panel)   Esc during a long job: Stop",
         "Grid: one for the whole sample - from the crosses marked last in the view (C), on any selection",
+        "` (or F12): timing - ms per frame for each part of the window (also in the log every 5 s): what is slow on this PC",
         ]
 LEFT, UP, RIGHT, DOWN = {2424832, 65361}, {2490368, 65362}, {2555904, 65363}, {2621440, 65364}
 INT = 0x110000                       # внутреннее дело (кнопка панели Settings): INT + ord(буква), мимо единых клавиш
@@ -946,6 +947,9 @@ def _run(m, fullscreen=False, _keys=None):
     except Exception:
         pass
     qbar = {'rects': [], 'paused': False, 'h': 0}
+    from .util import Prof, PROF_KEYS
+    prof = Prof('microscope')                            # `: сколько мс на что уходит в кадре окна
+    FAST_OK = keys is None or bool(os.environ.get('MC_FAST'))   # карта едет — вдвое грубее (не в проверках)
     QBUSY = "wait for the queue or stop its job at the instrument (x on the bar at the bottom)"
 
     def qbusy():
@@ -1118,7 +1122,8 @@ def _run(m, fullscreen=False, _keys=None):
             except Exception:
                 pass
         mp = nav.base([f_ for f_, _k in ls_], w_, h_, clip=clip_,
-                      alpha={f_: al_.get(m._regions[k_]['uid'], 1.0) for f_, k_ in ls_}, fog=fog_of(m))
+                      alpha={f_: al_.get(m._regions[k_]['uid'], 1.0) for f_, k_ in ls_}, fog=fog_of(m),
+                      fast=FAST_OK and time.monotonic() - nv.get('fast_t', -9.0) < 0.2)
         boxes_ = {}
         from .layers import geom as _gm
         base0_ = mp.copy()
@@ -2657,6 +2662,7 @@ def _run(m, fullscreen=False, _keys=None):
             now_ = time.monotonic()                        # не чаще UI_FPS: камере 30 кадров/с не нужно
             need = bool(clicks) or now_ - last_t > 0.3 or (live.n != last_n and now_ - last_t >= 1.0 / UI_FPS)
         if need:
+            prof.start()
             li_ = getattr(m, '_last_img', None) if qb_ else None
             img = li_ if li_ is not None else (img if qb_ and img is not None else
                                                (live.img if live is not None else m.image(0)))
@@ -2800,8 +2806,10 @@ def _run(m, fullscreen=False, _keys=None):
             th0 = UI.size("Xg", FS)[1]
             LH = th0 + 16
             nav_early = nv['big'] or split_                  # большая карта — под панелью, а не панель в углу
+            prof.mark('camera')
             if nav_early:
                 draw_nav(view, Wl, th0 + 20, img.shape)
+                prof.mark('map')
             rects = {}
             ops = []                                         # (что рисовать) — сначала размеры, потом панель
             x_l = 22
@@ -2955,6 +2963,7 @@ def _run(m, fullscreen=False, _keys=None):
                 elif op[0] == 'd':
                     cv2.circle(view, op[1], 5, op[2], -1, cv2.LINE_AA)
             Wl = W - SM.CAR_W
+            prof.mark('panel')
             # низ: строка состояния; над ней — сообщение
             bh_ = th0 + 20
             UI.status_bar(view, 0, H - bh_, Wl, H, None,                   # «Ready» и факты; дело — в busy
@@ -2963,8 +2972,10 @@ def _run(m, fullscreen=False, _keys=None):
             qh_ = UI.queue_height(qq_, FS) if qq_ is not None else 0     # очередь — над строкой состояния
             qbar['rects'] = UI.queue_panel(view, 0, H - bh_, Wl, qq_, FS) if qh_ else []
             qbar['h'] = qh_
+            prof.mark('bars')
             if not nav_early:
                 draw_nav(view, Wl, bh_ + qh_, img.shape)
+                prof.mark('map')
             lay['Hp'] = H - bh_ - qh_
             if split_:                                       # граница видов
                 if lay['panes'] == 'map|camera':             # карта слева, камера справа
@@ -2986,6 +2997,9 @@ def _run(m, fullscreen=False, _keys=None):
                          Wl / 2, 70, FS, 'info', Wl - 60)
             if msg and time.monotonic() - msg_t < 5:
                 UI.toast(view, msg, Wl / 2, H - bh_ - qh_ - 20, FS, 'err' if msg.startswith('[E') else 'ok', Wl - 60)
+            if prof.on:                                      # `: мс на кадр по этапам
+                UI.prof_panel(view, prof, Wl - 10, 60)
+            prof.mark('toasts')
             items = car_items()
             selk_ = len(m._regions) if m._pending else m._sel
             sel_ = car['order'].index(selk_) if selk_ in car['order'] else None
@@ -3039,7 +3053,10 @@ def _run(m, fullscreen=False, _keys=None):
             if pick.get('k') is not None:                  # список съёмок выделения
                 pick['rects'] = UI.pick_panel(view, pick['title'], PICK_HEAD, pick['rows'], pick['star'], pick.get('hover'),
                                               pick.get('scroll', 0), W=W, note=PICK_NOTE)
+            prof.mark('list')
             cv2.imshow(WIN, np.vstack([menu_img(W), view]))
+            prof.mark('show')
+            prof.end()
             if n == 1:                                    # окно уже на экране: значок программы (Windows)
                 set_icon(WIN)
         key = next(keys, EXIT) if keys is not None else cv2.waitKeyEx(8 if live is not None else 30)
@@ -3119,6 +3136,8 @@ def _run(m, fullscreen=False, _keys=None):
             if c_[0] in ('mapclick', 'maprect', 'mappan', 'mapwheel', 'mapdbl', 'mapscroll'):   # карта
                 if nv['mr'] is None or nav.c is None:
                     continue
+                if c_[0] in ('mapwheel', 'mapscroll', 'mappan'):     # карта едет: пока едет — грубее (быстро)
+                    nv['fast_t'] = time.monotonic()
                 if c_[0] == 'mapwheel':                             # c_[3]: множитель (или знак — из тестов)
                     k3_ = c_[3] if c_[3] > 0.05 and abs(c_[3] - 1) < 1 and c_[3] not in (1,) else (1.25 if c_[3] > 0 else 0.8)
                     nav.zoom(c_[1:3], k3_)
@@ -3340,6 +3359,9 @@ def _run(m, fullscreen=False, _keys=None):
                     m._keepalive()           # простой: запрос «на связи», чтобы Windows не усыпляла USB
             except MicroControlError as e:
                 msg, msg_t = str(e), time.monotonic()
+            continue
+        if key in PROF_KEYS:                               # ` / F12: сколько мс на что уходит (и в журнал)
+            msg, msg_t = prof.toggle(), time.monotonic()
             continue
         if key == 16 or (key > 0 and (key & 0xFF) in (ord('p'), ord('P')) and (key >> 16) & 0x04):   # Ctrl+P:
             m._panel_hidden = not getattr(m, '_panel_hidden', False)                                  # левая панель

@@ -164,4 +164,10 @@ class Fog:
                 lv.append((cv2.resize(a, (a.shape[1] // 2, a.shape[0] // 2), interpolation=cv2.INTER_AREA),
                            cv2.resize(m, (m.shape[1] // 2, m.shape[0] // 2), interpolation=cv2.INTER_NEAREST)))
             c = self._cache[k] = (t, self._tver.get(k, 0), lv)
+            while len(self._cache) > self.CACHE:            # память: давние плитки — из кэша (сама плитка — в tiles)
+                self._cache.pop(next(iter(self._cache)))
+        else:
+            self._cache[k] = self._cache.pop(k)             # недавно нужная — в конец
         return c[2]
+
+    CACHE = 200                                          # плиток с уровнями в памяти (~120 МБ сверх самих плиток)

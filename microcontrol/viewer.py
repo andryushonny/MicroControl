@@ -201,6 +201,7 @@ HELP_ALL = [
     ("", "T: level (tilt removed, from the crosses) / as shot   , / .: previous / next selection   H: this help   Esc: leave the mode"),
     ("Undo", "Ctrl+Z: undo any change (crosses, grid, squares, numbers, removed selection)   Ctrl+Y: redo"),
     ("Exit", "Esc (when nothing else is open: a mode, the help, a list), or close the window"),
+    ("Timing", "` (or F12): ms per frame for each part of the window (also in the log every 5 s): what is slow on this PC"),
     ("Stitch", "J: edit the stitch by hand - seam dots (green < 0.5 px, yellow < 1.5, red; grey = off): click to switch a seam; "
                "click a frame: its row (Shift: its column), arrows: 1 px (Shift: 10), Backspace: automatic, J: save"),
     ("", "Shift+J: exact (quality) stitch of this scan - into the queue of the microscope window (it re-shoots blurry frames)   G: straight edges (crop the steps)"),
@@ -567,6 +568,8 @@ def _view_one(folder, fullscreen, keys, car):
                  "C here: these crosses make the grid for all" if seeded_ else "")
               + st0_msg)
     st['seeded'] = seeded_
+    from .util import Prof, PROF_KEYS
+    st['timing'] = car.setdefault('timing', Prof('view'))     # `: замер по этапам (живёт, пока открыт просмотр)
 
     def car_click(x, y, ctrl=False):
         h_ = SM.hit(car.get('hits', []), x - st['Wv'], y)
@@ -1227,6 +1230,13 @@ def _view_one(folder, fullscreen, keys, car):
         st['msg'] = f"{'Selected' if on else 'Unselected'} {len(cells)} squares, total {len(g.selected)}" + \
             (f"; {out_} outside this scan's selection - not taken" if out_ else "")
 
+    FAST_OK = keys is None or bool(os.environ.get('MC_FAST'))   # проверки — всегда в полном качестве (кроме своей)
+
+    def fast_on():
+        """Вид едет (тянут, колесо): кадры — вдвое грубее, пока едет; через 0.2 с покоя — в полном качестве."""
+        if FAST_OK:
+            st['fast_until'] = _t.monotonic() + 0.2
+
     def mouse(ev, x, y, flags, _=None):
         if ev in (cv2.EVENT_LBUTTONDOWN, cv2.EVENT_LBUTTONUP, cv2.EVENT_RBUTTONDOWN, cv2.EVENT_RBUTTONUP,
                   cv2.EVENT_LBUTTONDBLCLK):
@@ -1313,12 +1323,12 @@ def _view_one(folder, fullscreen, keys, car):
                 st['prof_dirty'] = True
         if ev == cv2.EVENT_MOUSEMOVE and st['mode'] == 'poly' and st['down'] is None:
             if not st['dirty']:                            # следующая сторона тянется за мышью: картинка и слои —
-                st['ruler_only'] = True                    # готовые, заново только контур
+                st['_reuse'] = 'top'                       # готовые, заново только контур
             st['dirty'] = True
         if ev == cv2.EVENT_MOUSEMOVE and st['mode'] == 'ruler' and 0 < len(st['ruler']) < RK_N[st.get('rk', 'pp')]:
             st['mouse'] = (x + 0.5, y + 0.5)               # линейка тянется за мышью до следующей точки:
             if not st['dirty']:                            # картинку и слои не пересчитывать — только линейку
-                st['ruler_only'] = True
+                st['_reuse'] = 'top'
             st['dirty'] = True
         if ev in (cv2.EVENT_LBUTTONDOWN, cv2.EVENT_RBUTTONDOWN, cv2.EVENT_MBUTTONDOWN):
             st['down'] = (x, y, st['cx'], st['cy'], ev, shift, False)
@@ -1338,6 +1348,8 @@ def _view_one(folder, fullscreen, keys, car):
                     st['down'] = (x0, y0, cx, cy, ev0, sh0, True)
                     g.cr.marks[st['mdrag']] = from_view((x + 0.5, y + 0.5))
                     g.cr._fit()
+                    if not st['dirty']:                        # картинки те же — заново сетка и кресты
+                        st['_reuse'] = 'grid'
                     st['dirty'] = True
             elif st['mode'] == 'align' and ev0 == cv2.EVENT_LBUTTONDOWN:   # L: картинки едут за мышью
                 if abs(x - x0) + abs(y - y0) > 1 or moved:
@@ -1352,8 +1364,11 @@ def _view_one(folder, fullscreen, keys, car):
                 if pan:
                     c = np.array([cx, cy]) - R().T @ (np.array([x - x0, y - y0], float) / st['s'])
                     st['cx'], st['cy'] = c
+                    fast_on()
                 elif st['mode'] in ('select', 'paint'):        # рамка: всё, чего она касается
                     st['box'] = (x0, y0, x, y, sh0)
+                    if not st['dirty']:                        # рамка — поверх готового
+                        st['_reuse'] = 'top'
                 st['dirty'] = True
         elif ev in (cv2.EVENT_LBUTTONUP, cv2.EVENT_RBUTTONUP, cv2.EVENT_MBUTTONUP) and st['down']:
             x0, y0, cx, cy, ev0, sh0, moved = st['down']
@@ -1467,6 +1482,7 @@ def _view_one(folder, fullscreen, keys, car):
             else:                                           # два пальца: картинка едет за пальцами
                 c = np.array([st['cx'], st['cy']]) - R().T @ (np.array(gs_[1:], float) / st['s'])
                 st['cx'], st['cy'] = c
+            fast_on()
             st['dirty'] = True
 
     prof_cache = {}
@@ -2073,25 +2089,58 @@ def _view_one(folder, fullscreen, keys, car):
         st['restart'] = True
         return "Stitch saved (the automatic one: join/positions_auto.csv)"
 
-    def render():
+    def pictures(fast_):
+        """Нижний слой: мозаика, ровные края, контур, снимки других выделений (в текущих st: s, Wv, Hv)."""
         Wv, Hv = st['Wv'], st['Hv']
-        lk_ = (st['cx'], st['cy'], st['s'], st['rot'], Wv, Hv, tuple(np.ravel(VIEW_M())))
-        lc_ = st.get('_layers')
-        if st.pop('ruler_only', False) and lc_ is not None and lc_[0] == lk_:
-            img = lc_[1].copy()                             # тянется только линейка: картинка и слои — готовые
+        if abs(st['rot']) < 1e-6 and np.allclose(VIEW_M(), np.eye(2)):
+            img = sc.render(st['cx'], st['cy'], st['s'], Wv, Hv, fast=fast_)
+        else:                                               # повёрнутый (или по осям столика) вид: с запасом, потом поворот
+            D = int(math.hypot(Wv, Hv)) + 2
+            big = sc.render(st['cx'], st['cy'], st['s'], D, D, fast=fast_)
+            Rm = R()
+            t = mid() - Rm @ np.array([D / 2, D / 2])
+            img = cv2.warpAffine(big, np.float32(np.c_[Rm, t]), (Wv, Hv), flags=cv2.INTER_LINEAR)
+        img = crop_edges(img)                               # G: ровные края, без ступенек
+        img = cut_outline(img)
+        return draw_finer(img)                              # снимки всех выделений — слоями по списку
+
+    def render():
+        """Кадр окна слоями: картинки (дорого) -> сетка, контуры, подписи -> то, что за мышью (линейка, рамка,
+        U), полосы. Двигается только мышь — нижние слои берутся готовыми (st['_reuse']: 'top' | 'grid')."""
+        Wv, Hv = st['Wv'], st['Hv']
+        pf_ = st['timing']
+        pf_.start()
+        fast_ = _t.monotonic() < st.get('fast_until', 0)  # тянут / крутят колесо: вдвое грубее, потом — чисто
+        lk_ = (st['cx'], st['cy'], st['s'], st['rot'], Wv, Hv, tuple(np.ravel(VIEW_M())), fast_)
+        reuse_ = st.pop('_reuse', None)
+        lc_, tc_ = st.get('_layers'), st.get('_top')
+        top_ = reuse_ == 'top' and tc_ is not None and tc_[0] == lk_
+        if top_:
+            img = tc_[1].copy()                             # за мышью — только инструмент: всё под ним готово
+        elif reuse_ in ('top', 'grid') and lc_ is not None and lc_[0] == lk_:
+            img = lc_[1].copy()                             # картинки — готовые, сетку и контуры — заново
         else:
-            if abs(st['rot']) < 1e-6 and np.allclose(VIEW_M(), np.eye(2)):
-                img = sc.render(st['cx'], st['cy'], st['s'], Wv, Hv, fast=st['down'] is not None)
-            else:                                           # повёрнутый (или по осям столика) вид: с запасом, потом поворот
-                D = int(math.hypot(Wv, Hv)) + 2
-                big = sc.render(st['cx'], st['cy'], st['s'], D, D, fast=st['down'] is not None)
-                Rm = R()
-                t = mid() - Rm @ np.array([D / 2, D / 2])
-                img = cv2.warpAffine(big, np.float32(np.c_[Rm, t]), (Wv, Hv), flags=cv2.INTER_LINEAR)
-            img = crop_edges(img)                           # G: ровные края, без ступенек
-            img = cut_outline(img)
-            img = draw_finer(img)                           # снимки всех выделений — слоями по списку
+            if fast_ and Wv * Hv > 250000:                  # вдвое меньше по каждой оси — вчетверо быстрее
+                s0_ = st['s']
+                st['s'], st['Wv'], st['Hv'] = s0_ / 2, max(1, Wv // 2), max(1, Hv // 2)
+                try:
+                    img = pictures(True)
+                finally:
+                    st['s'], st['Wv'], st['Hv'] = s0_, Wv, Hv
+                img = cv2.resize(img, (Wv, Hv), interpolation=cv2.INTER_LINEAR)
+            else:
+                img = pictures(fast_)
             st['_layers'] = (lk_, img.copy())
+        pf_.mark('pictures')
+        if not top_:
+            img = overlays(img)
+            st['_top'] = (lk_, img.copy())
+        return tools(img, pf_)
+
+    def overlays(img):
+        """Средний слой: сетка, оттенки выделений, их контуры и подписи, кресты."""
+        Wv, Hv = st['Wv'], st['Hv']
+        pf_ = st['timing']
         red, green, yellow = (40, 40, 255), SM.sample_color(folder), (0, 220, 255)   # выбранные — цветом выделения
         base_, void_ = img.copy(), cv2.inRange(img, (0, 0, 0), (22, 22, 22))   # вне мозаики сетку не рисуем
         if g.ready():
@@ -2154,7 +2203,9 @@ def _view_one(folder, fullscreen, keys, car):
             elif g.selected:
                 st['msg'] = st['msg'] if 'zoom in' in st['msg'] else st['msg']
         img = cv2.copyTo(base_, void_, img)
+        pf_.mark('grid')
         pyramid_tint(img)                                     # внутри выделений — всё, кроме выбранного в них
+        pf_.mark('tint')
         H_img, W_img = img.shape[:2]
         mks_ = car.get('marks') or set()
         dqo_ = np.asarray(st['al']['dq'], float) if st.get('al') else np.zeros(2)   # совмещение: контуры других едут
@@ -2183,6 +2234,13 @@ def _view_one(folder, fullscreen, keys, car):
             tw_ = UI.size(lab_, 0.42)[0]
             UI.panel(img, x_l, y_l - 20, x_l + tw_ + 10, y_l - 2, 0.8, c_)
             UI.put(img, lab_, x_l + 5, y_l - 6, 0.42, c_)
+        pf_.mark('outlines')
+        return img
+
+    def tools(img, pf_):
+        """Верхний слой: то, что за мышью (рамка, U, линейка, швы), полосы, подсказки; и список справа."""
+        Wv, Hv = st['Wv'], st['Hv']
+        yellow = (0, 220, 255)
         if st['box']:
             bx0, by0, bx1, by1, shb = st['box']
             cv2.rectangle(img, (bx0, by0), (bx1, by1), (0, 140, 255) if shb else yellow, 1)
@@ -2314,9 +2372,14 @@ def _view_one(folder, fullscreen, keys, car):
             UI.toast(img, st['msg'], Wv / 2, Hv - hb - 18, 0.55, kind, Wv - 40)
         if st.get('help'):                                  # H: все клавиши (переносом, влезает в окно)
             UI.help_panel(img, HELP_ALL)
+        pf_.mark('tools, bars')
+        if pf_.on:                                          # `: мс на кадр по этапам
+            UI.prof_panel(img, pf_, Wv - 10, 40)
         st['scene'] = img
         st['prof_dirty'] = False
-        return np.hstack([with_prof(img), carousel_img()])
+        out_ = np.hstack([with_prof(img), carousel_img()])
+        pf_.mark('list')
+        return out_
 
     def carousel_img():
         """Меню справа — как в окне микроскопа: все выделения одним списком, в порядке слоёв (верх — верхний слой):
@@ -3352,6 +3415,11 @@ def _view_one(folder, fullscreen, keys, car):
         if sc.fresh:                                        # фоном подгрузились кадры, которые видно: перерисовать
             sc.fresh = False
             st['dirty'] = True
+            st.pop('_reuse', None)
+        if st.get('fast_until') and _t.monotonic() >= st['fast_until']:
+            st.pop('fast_until')                            # вид остановился: в полном качестве
+            st['dirty'] = True
+            st.pop('_reuse', None)
         if st['down'] is None and st.get('lab') is None:
             sg_ = g_sig()
             dm_ = d_mt()
@@ -3462,6 +3530,8 @@ def _view_one(folder, fullscreen, keys, car):
                     break
         if st['dirty']:
             show(render())
+            st['timing'].mark('show')
+            st['timing'].end()
             st['dirty'] = st['car_dirty'] = False
             if not st.get('icon'):                          # окно уже на экране: значок программы (Windows)
                 st['icon'] = True
@@ -3473,7 +3543,7 @@ def _view_one(folder, fullscreen, keys, car):
         if key != -1:
             st['acted'] = True
         if key != -1:
-            st.pop('ruler_only', None)                     # клавиша могла поменять картинку: слои — заново
+            st.pop('_reuse', None)                         # клавиша могла поменять картинку: слои — заново
         if keys is not None:
             cv2.waitKey(1)
             if isinstance(key, tuple):                      # тест: ('click'|'rclick', x, y[, shift]) или ('drag', ...)
@@ -3517,6 +3587,10 @@ def _view_one(folder, fullscreen, keys, car):
                     mouse(cv2.EVENT_MOUSEMOVE, a[2], a[3], fl | cv2.EVENT_FLAG_LBUTTON)
                     mouse(cv2.EVENT_LBUTTONUP, a[2], a[3], fl)
                 key = -1
+        if key in PROF_KEYS:                                # ` / F12: сколько мс на что уходит (и в журнал)
+            st['msg'] = st['timing'].toggle()
+            st['dirty'] = True
+            continue
         if st.get('pick') and key != -1:                  # список съёмок открыт: Esc — закрыть, прочее — мимо
             if key == 27:
                 st.pop('pick', None)

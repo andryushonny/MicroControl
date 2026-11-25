@@ -2,7 +2,7 @@
 
 **Python control of the Optosky ATR8300 Raman microscope: scan a substrate, stitch one picture of it, put the lithography grid on it, choose the squares you need and export them for AutoCAD.**
 
-**Authors:** A. Lyapeikov, S. Domenko · **Version:** 0.41.0 · Русский: [docs/README_ru.md](docs/README_ru.md) · 中文: [docs/README_zh.md](docs/README_zh.md) · PDF: [EN](docs/MicroControl_en.pdf), [RU](docs/MicroControl_ru.pdf), [中文](docs/MicroControl_zh.pdf) · Full technical reference: [EN](docs/reference_en.md), [RU](docs/reference_ru.md), [中文](docs/reference_zh.md)
+**Authors:** A. Lyapeikov, S. Domenko · **Version:** 0.42.0 · Русский: [docs/README_ru.md](docs/README_ru.md) · 中文: [docs/README_zh.md](docs/README_zh.md) · PDF: [EN](docs/MicroControl_en.pdf), [RU](docs/MicroControl_ru.pdf), [中文](docs/MicroControl_zh.pdf) · Full technical reference: [EN](docs/reference_en.md), [RU](docs/reference_ru.md), [中文](docs/reference_zh.md)
 
 ![Overview: the 10x scan with the grid of the sample, numbered squares, a draft, 50x and 100x inside](docs/img/view.jpg)
 
@@ -259,6 +259,7 @@ T = T_0 + t\,N,
 | `Tab` or click a field | steps, exposure, objective | ✓ | — |
 | `Ctrl+Z` · `Ctrl+Y` | undo · redo | ✓ (moves too) | ✓ |
 | `H` · `Esc` | all keys · leave the mode / unmark | ✓ | ✓; `Esc` with nothing open — **close the view** |
+| `` ` `` (or `F12`) | timing: ms per frame for each part of the window (also in the log every 5 s) — what is slow on this PC | ✓ | ✓ |
 | `Shift+Esc` | exit | the microscope window (only so) | ✓ |
 | `Ctrl+P` | Settings panel (left) | show / hide | — |
 

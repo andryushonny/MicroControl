@@ -26,6 +26,7 @@ class NavMap:
         self.size = (0, 0)
         self._base, self._key = None, None
         self._prev = {}                   # папка -> (mtime, пирамида превью [(k, img)], геометрия)
+        self._used, self._tick = {}, 0    # когда превью было на карте (номер подложки): старые — из памяти
         self.turn = 0                     # карта повёрнута на 0 / 90 / 180 / 270° против часовой (m.map_turn)
 
     # ------------------------------------------------------------ координаты
@@ -76,6 +77,7 @@ class NavMap:
         except OSError:
             return None
         if folder in self._prev and self._prev[folder][0] == mt:
+            self._used[folder] = self._tick
             return self._prev[folder][1:]
         from .snap import geometry
         g = geometry(folder)
@@ -91,7 +93,23 @@ class NavMap:
             pyr.append((pyr[-1][0] / 2, cv2.pyrDown(pyr[-1][1]), cv2.resize(pyr[-1][2], None, fx=0.5, fy=0.5,
                                                                                interpolation=cv2.INTER_NEAREST)))
         self._prev[folder] = (mt, pyr, g)
+        self._used[folder] = self._tick
         return pyr, g
+
+    MEM = 350e6                                          # превью сканов в памяти, байт (слабый ПК, десятки сканов)
+
+    def _trim(self):
+        """Превью, которых давно не было на карте, — из памяти (нужны — прочтутся снова); то, что видно
+        сейчас, не трогается."""
+        nb = lambda v: sum(a.nbytes + o.nbytes for _k, a, o in v[1])
+        tot = sum(nb(v) for v in self._prev.values())
+        for f in sorted(self._prev, key=lambda f_: self._used.get(f_, 0)):
+            if tot <= self.MEM:
+                break
+            if self._used.get(f, 0) >= self._tick:
+                continue
+            tot -= nb(self._prev.pop(f))
+            self._used.pop(f, None)
 
     def _warp(self, canvas, folder, clip=None, alpha=1.0):
         got = self._preview(folder)
@@ -125,9 +143,20 @@ class NavMap:
         elif alpha > 0.01:                                  # полупрозрачная: видно, что под ней
             np.copyto(roi, cv2.addWeighted(pic, alpha, roi, 1 - alpha, 0), where=msk[..., None])
 
-    def base(self, scans, w, h, clip=None, alpha=None, fog=None):
+    def base(self, scans, w, h, clip=None, alpha=None, fog=None, fast=False):
         """Подложка карты: мозаики scans (папки, сначала меньшее увеличение), каждая — по контуру своего
-        выделения (clip: папка -> кольца, мкм). Кэш, пока вид не менялся."""
+        выделения (clip: папка -> кольца, мкм). Кэш, пока вид не менялся. fast — карта едет (тянут, колесо):
+        вдвое меньше по каждой оси и растянуть (вчетверо быстрее); остановилась — в полном качестве."""
+        if fast and w * h > 250000:
+            s0, c0 = self.s, self.c
+            self.s = s0 * w / max(1, w // 2)
+            try:
+                small = self.base(scans, max(1, w // 2), max(1, h // 2), clip, alpha, fog)
+            finally:
+                self.s, self.c = s0, c0
+            self.size = (w, h)
+            self._key = None                                 # полная — не эта
+            return cv2.resize(small, (w, h), interpolation=cv2.INTER_LINEAR)
         self.size = (w, h)
         clip = clip or {}
         ck_ = tuple((f, tuple(round(float(v), 2) for r_ in clip.get(f, []) for p_ in r_ for v in p_)) for f in scans)
@@ -136,6 +165,7 @@ class NavMap:
                tuple((f, _mt(os.path.join(f, 'join', 'preview_all.jpg')), _mt(os.path.join(f, 'align.json')))
                      for f in scans), None if fog is None else (id(fog), fog.ver))
         if key != self._key:
+            self._tick += 1
             canvas = np.full((h, w, 3), 24, np.uint8)
             mn_ = max(1e-3, self.s * 30)                                     # сетка мкм — для ориентира:
             e_ = 10 ** np.floor(np.log10(mn_))                               # шаг 1-2-5, линии не чаще 30 px
@@ -158,6 +188,7 @@ class NavMap:
                     self._warp(canvas, f, clip.get(f), alpha.get(f, 1.0))
                 except Exception:
                     pass
+            self._trim()
             self._base, self._key = canvas, key
         return self._base.copy()
 

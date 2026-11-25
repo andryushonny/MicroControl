@@ -10,7 +10,7 @@ import logging, os, platform, sys
 from datetime import datetime
 
 EVENTS = {
-    'SYS-001': "Session start",    'SYS-002': "Session end",
+    'SYS-001': "Session start",    'SYS-002': "Session end",    'PRF-001': "Timing per frame",
     'CON-001': "Connect",          'CON-002': "Disconnect",        'CON-003': "Identify",
     'MOV-001': "Move",             'MOV-002': "Go to",             'MOV-003': "Offset",
     'MOV-004': "Homing",           'MOV-005': "Objective",         'MOV-006': "Motor step",

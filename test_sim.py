@@ -2767,3 +2767,96 @@ finally:
     cv2.imshow = o77 if 'o77' in dir() else cv2.imshow
     set_ui_pref('panes', 'one'); set_ui_pref('list', 'right'); os.environ.pop('MC_UI', None)
 m.close(); print("Layout: two views (camera | map, map | camera) and the list on the left; clicks land where things are shown; kept: OK")
+
+
+# ------------------------------------------------------------------ 78. Слабый ПК: уровни просмотра пишутся при съёмке (quick их не переписывает); слои (за мышью — только верх); едет — вдвое грубее, потом чисто; замер `; память карты
+from microcontrol import storage as ST78, viewer as V78, navmap as NM78
+from microcontrol.util import Prof as Prof78
+m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp()); m.focus(); fw, fh = m.frame_size
+m.area = mc.Area(0, 0, 4 * fw, 3 * fh); m.scan(stitch=None)
+got78 = []
+ST78.ON_CREATE.append(got78.append)
+j78 = m.queue.scan(m._regions[0]['uid'])
+assert m.queue.wait(120) and j78.state == 'done', (j78.state, j78.error)
+ST78.ON_CREATE.remove(got78.append)
+f78 = got78[0]
+lv78 = os.path.join(f78, 'viewer', 'levels')
+n78 = len(ST78.ScanData(f78))
+assert all(os.path.exists(os.path.join(lv78, f"{i:05d}_{k}.jpg")) for i in range(n78) for k in (1, 2, 3)), sorted(os.listdir(lv78))[:6]
+t78 = {p: os.path.getmtime(os.path.join(lv78, p)) for p in os.listdir(lv78)}
+from microcontrol.stitch import make_preview as mp78
+mp78(f78)                                                                                  # quick ещё раз: уровни — те же
+assert all(os.path.getmtime(os.path.join(lv78, p)) == t for p, t in t78.items())
+a78 = cv2.imread(os.path.join(lv78, "00000_1.jpg")); fr78 = ST78.ScanData(f78).frame(0)
+assert a78.shape[:2] == (fr78.shape[0] // 2, fr78.shape[1] // 2) and \
+    abs(float(cv2.resize(fr78, a78.shape[1::-1], interpolation=cv2.INTER_AREA).mean()) - float(a78.mean())) < 3
+cnt78 = [0]
+orig78 = V78._Scene.render
+def rcount78(self, *a, **k):
+    cnt78[0] += 1
+    return orig78(self, *a, **k)
+V78._Scene.render = rcount78
+rec78 = {}
+def keys78():
+    yield -1; yield -1
+    yield ord('r'); yield -1                               # линейка: первая точка, дальше тянется за мышью
+    yield ('click', 300, 300); yield -1
+    yield ('call', lambda st: rec78.update(c0=cnt78[0]))
+    for k in range(5):
+        yield ('move', 320 + 10 * k, 310); yield -1
+    yield ('call', lambda st: rec78.update(c1=cnt78[0], top=st.get('_top') is not None))
+    yield 27; yield -1
+    yield ord('`'); yield -1                               # замер
+    for k in range(3):
+        yield ('wheel', 400, 300, +1); yield -1
+    yield ('call', lambda st: rec78.update(prof=dict(st['timing'].avg), on=st['timing'].on, msg=st['msg']))
+    yield ord('`'); yield 27; yield 27
+os.environ['MC_FAST'] = '1'
+try:
+    V78.view(f78, _keys=keys78())
+finally:
+    V78._Scene.render = orig78; os.environ.pop('MC_FAST', None)
+assert rec78['c1'] == rec78['c0'] and rec78['top'], rec78                                 # мышь с линейкой: мозаика не перерисовывалась
+assert rec78['on'] and 'Timing' in rec78['msg'] and {'pictures', 'tools, bars', 'list', 'show', 'total'} <= set(rec78['prof']), rec78
+# едет: вдвое грубее, через 0.2 с — чисто
+sz78 = []
+def rsz78(self, cx, cy, s, Wv, Hv, fast=False):
+    sz78.append((Wv, fast))
+    return orig78(self, cx, cy, s, Wv, Hv, fast)
+V78._Scene.render = rsz78
+def keys78b():
+    yield -1; yield -1
+    yield ('call', lambda st: sz78.clear())
+    yield ('wheel', 400, 300, +1); yield -1
+    yield ('call', lambda st: rec78.update(fast=list(sz78), W=st['Wv'])); yield ('call', lambda st: sz78.clear())
+    yield ('sleep', 0.3); yield -1; yield -1
+    yield ('call', lambda st: rec78.update(full=list(sz78)))
+    yield 27; yield 27
+os.environ['MC_FAST'] = '1'
+try:
+    V78.view(f78, _keys=keys78b())
+finally:
+    V78._Scene.render = orig78; os.environ.pop('MC_FAST', None)
+assert rec78['fast'] and all(w <= rec78['W'] // 2 + 1 and f for w, f in rec78['fast']), rec78
+assert rec78['full'] and all(w == rec78['W'] and not f for w, f in rec78['full']), rec78
+# карта: превью давно не видных сканов — из памяти; видные — остаются; едет — вдвое грубее того же размера
+nm78 = NM78.NavMap(); nm78.c, nm78.s = np.array([0.0, 0.0]), 5.0
+nm78.base([f78], 800, 600)
+assert f78 in nm78._prev
+nm78.MEM = 1
+nm78.base([f78], 800, 600, fast=False)
+nm78.c = nm78.c + 1
+nm78.base([f78], 800, 600)
+assert f78 in nm78._prev                                                                   # видно сейчас — не выкинуто
+nm78._prev['x'] = nm78._prev[f78]; nm78._used['x'] = 0
+nm78.c = nm78.c + 1; nm78.base([f78], 800, 600)
+assert 'x' not in nm78._prev and f78 in nm78._prev
+b78 = nm78.base([f78], 800, 600, fast=True)
+assert b78.shape == (600, 800, 3) and nm78.size == (800, 600)
+# окно микроскопа: замер тоже
+import microcontrol.manual as M78
+from microcontrol import log as L78
+M78.run(m, fullscreen=False, _keys=[-1, ord('`'), -1, -1, -1, ord('`'), -1])
+lg78 = open(L78.path(), encoding='utf-8').read() if L78.path() else 'PRF-001 microscope: camera'
+assert 'microscope: camera' in lg78 and 'view: pictures' in lg78, lg78[-600:]           # замер — и в журнале
+m.close(); print(f"Weak PC: view levels written while scanning ({n78} frames, quick keeps them), the mouse redraws only the top layer, moving draws at half size then sharp, timing per stage (`), old map previews leave memory: OK")

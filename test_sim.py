@@ -2688,6 +2688,7 @@ assert fg75.ver - n0_ <= 1                                                      
 m.fog_refresh = True
 SM75.drive_to(m, X0, Y0); n0_ = fg75.ver; SM75.drive_to(m, X0 + 6 * fw, Y0 + 4 * fh, trace=M75.fog_trace(m))
 assert fg75.ver - n0_ >= 5                                                                # True: туман перезаписан новыми кадрами
+m.fog_refresh = False
 n75 = len(fg75.tiles); assert n75 >= 1 and fg75.covered(X0 + 3 * fw, Y0)
 M75.run(m, fullscreen=False, _keys=[M75.INT + ord('#'), -1, -1])                          # кнопка Clear fog (Settings)
 assert not M75.fog_of(m).covered(X0 + 3 * fw, Y0)

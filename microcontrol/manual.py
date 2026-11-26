@@ -349,6 +349,11 @@ def ar_lock(m, img):
         if not os.path.exists(jp):
             continue
         try:
+            if json.load(open(os.path.join(f, 'join', 'stitch.json'), encoding='utf-8')).get('note'):
+                continue                                    # сшивка не по образцу (кадры по столику): не опора
+        except (OSError, ValueError):
+            pass
+        try:
             meta = json.load(open(os.path.join(f, 'meta.json'), encoding='utf-8'))
             g = geometry(f)
         except Exception:
@@ -386,7 +391,11 @@ def ar_lock(m, img):
     if resp < 0.05 or np.hypot(*t) > 0.3 * min(iw, ih):
         return None, f"no clear match (match {resp:.2f})"
     dP = d * np.linalg.solve(K, t)                          # c + K (P' - S) / d = c + K (P - S) / d + t
-    m.__dict__['_ar_d'] = _ar_d(m) + dP
+    new_ = _ar_d(m) + dP
+    if np.hypot(*new_) > 0.25 * min(m.frame_size):          # столик так не ошибается: сверка ложная (мозаика
+        m.__dict__['_ar_d'] = None                          # сшита неверно, пустой образец) — не верим
+        return None, "the match is too far from the stage position"
+    m.__dict__['_ar_d'] = new_
     return dP, __import__("microcontrol.project", fromlist=["x"]).scan_label(f)
 
 
@@ -2682,9 +2691,11 @@ def _run(m, fullscreen=False, _keys=None):
                 fog_add(m, img)
             pos_ = (m._p['x'], m._p['y'], m.objective)          # дополненная реальность: сверка с мозаикой,
             if pos_ != arl['pos']:                              # когда столик постоял
-                if arl['pos'] is not None and (np.hypot(pos_[0] - arl['pos'][0], pos_[1] - arl['pos'][1]) *
-                                               m.motor_step > 2 * max(m.frame_size) or pos_[2] != arl['pos'][2]):
+                an_ = arl.get('anchor')                         # от места первой сверки (не от прошлой остановки:
+                if an_ is None or (np.hypot(pos_[0] - an_[0], pos_[1] - an_[1]) *   # стрелками по кадру поправка копилась
+                                   m.motor_step > 2 * max(m.frame_size) or pos_[2] != an_[2]):   # без конца)
                     m.__dict__['_ar_d'] = None                  # уехали далеко / другой объектив: заново
+                    arl['anchor'] = pos_
                 arl.update(pos=pos_, t=time.monotonic(), done=False)
             elif arl['on'] and not arl['done'] and time.monotonic() - arl['t'] > 0.4:
                 arl['done'] = True

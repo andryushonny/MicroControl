@@ -598,7 +598,7 @@ st.export()                                    # 用于 Fiji 的 PNG 文件和 T
 | `Shift+Esc` | 关闭 | 显微镜窗口（只能这样） | ✓ |
 | `Ctrl+P` | Settings 面板（左侧） | 显示 / 隐藏 | — |
 
-显微镜窗口的 **Settings 面板**（Settings 按钮、左侧箭头或 `Ctrl+P`）：Z 跟随对焦点、单向接近（回程间隙）、**Prepare**、**Distortion**（畸变）、**Zero here**（此处置零）、**Steps = frame**（步长 = 一帧）、**Check directions**（检查方向）、**Arrows X / Y**（方向键反向）、**Map 90 deg**（地图旋转）、**Clear fog**（清除地图上“战争迷雾”的实时帧；设置 `m.fog_refresh` 默认开启：在已到过的地方行驶时也会重新拍摄，迷雾被新帧覆盖）。顶部：Prepare、New area、Scan area、Stitch、Export、Settings；菜单：Open、New、Info、Scans（所选选区的历史：View、Make main）、Queue、View、Help。在地图上 Ctrl+拖动 —— 当前物镜的方框（晶体）；任务进行中按 `Esc` —— 停止。
+显微镜窗口的 **Settings 面板**（Settings 按钮、左侧箭头或 `Ctrl+P`）：Z 跟随对焦点、单向接近（回程间隙）、**Prepare**、**Distortion**（畸变）、**Zero here**（此处置零）、**Steps = frame**（步长 = 一帧）、**Check directions**（检查方向）、**Arrows X / Y**（方向键反向）、**Map 90 deg**（地图旋转）、**Clear fog**（清除地图上“战争迷雾”的实时帧；设置 `m.fog_refresh`（默认关闭：静止时实时帧本来就会覆盖迷雾）：在已到过的地方行驶时也会重新拍摄，迷雾被新帧覆盖）。顶部：Prepare、New area、Scan area、Stitch、Export、Settings；菜单：Open、New、Info、Scans（所选选区的历史：View、Make main）、Queue、View、Help。在地图上 Ctrl+拖动 —— 当前物镜的方框（晶体）；任务进行中按 `Esc` —— 停止。
 
 ![剖面（P）：横跨十字臂的两条线、沿线的 R、G、B，边缘以黄色显示在地图、预览和图上](img/profiles.jpg)
 

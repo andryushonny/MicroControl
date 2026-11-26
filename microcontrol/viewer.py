@@ -3447,7 +3447,12 @@ def _view_one(folder, fullscreen, keys, car):
                      _mt(os.path.join(folder, 'join', 'stitch.json')))   # кадры, живая сшивка, сшивка (не правка J)
             if st.get('_lsig') is None:
                 st['_lsig'] = lsig_
+            elif lsig_ != st['_lsig'] and st['mode'] in ('cross', 'align', 'stitch', 'label'):
+                if not st.get('_lsig_wait'):                # кресты ставят / правят: картинка под ними не меняется,
+                    st['_lsig_wait'] = True                 # новая сшивка — после выхода из режима
+                    st['msg'] = "New stitch ready: it is shown after you leave this mode (Esc)"
             elif lsig_ != st['_lsig'] and st['down'] is None and _t.monotonic() - st.get('_lsig_t', 0) > 2.0:
+                st['_lsig_wait'] = False
                 st['_lsig'], st['_lsig_t'] = lsig_, _t.monotonic()   # скан идёт (кадры шьются на ходу) или пересшили:
                                                            # не чаще раза в 2 с (слабый ПК, 1000 кадров)
                 try:                                       # картинка — заново на месте, вид и кресты — с ней
@@ -3474,8 +3479,8 @@ def _view_one(folder, fullscreen, keys, car):
                     sc = sc_n
                     st['cx'] += float(d_o[0])
                     st['cy'] += float(d_o[1])
-                    for k_ in ('_fl_key', '_so_key', '_sg_key', '_V', '_outline_px', 'inner', '_layers'):
-                        st[k_] = None
+                    for k_ in ('_fl_key', '_so_key', '_sg_key', '_outline_px', 'inner', '_layers'):
+                        st[k_] = None                      # вид (поворот, отражение) — тот же: не прыгает
                     st.pop('_lat', None)
                     st['dirty'] = st['car_dirty'] = True
                     if not st.get('msg'):

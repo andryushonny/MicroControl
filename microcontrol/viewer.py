@@ -2188,25 +2188,30 @@ def _view_one(folder, fullscreen, keys, car):
             if st.get('lab'):                               # вводимый номер — у квадрата
                 pts = np.array([to_view(q) for q in g.corners(*st['lab'][0])])
                 cv2.polylines(img, [np.int32(pts)], True, (0, 230, 255), 2, cv2.LINE_8)
-            if cells and step >= 7:                         # крупно: контур каждого квадрата над мозаикой
-                cv2.polylines(img, list(np.int32(np.round(quads))), True, red, 1, cv2.LINE_8)
-            elif cells:                                     # мелко: линии через кресты
-                # сплошные линии без сглаживания (сглаженная линия в 1 px на дробной позиции бледнеет),
-                # совсем мелко — каждая k-я, чтобы не слиться в сплошной красный
-                k_ = max(1, int(math.ceil(6 / step)))
-                I = sorted({c[0] for c in cells} | {cells[-1][0] + 1})
-                J = sorted({c[1] for c in cells} | {cells[-1][1] + 1})
-                for i in I:
-                    if i % k_ == 0:
-                        a_, b_ = to_view(g.cr.point(i, J[0])), to_view(g.cr.point(i, J[-1]))
-                        cv2.line(img, tuple(np.int32(np.round(a_))), tuple(np.int32(np.round(b_))), red, 1, cv2.LINE_8)
-                for j in J:
-                    if j % k_ == 0:
-                        a_, b_ = to_view(g.cr.point(I[0], j)), to_view(g.cr.point(I[-1], j))
-                        cv2.line(img, tuple(np.int32(np.round(a_))), tuple(np.int32(np.round(b_))), red, 1, cv2.LINE_8)
+            if False:
+                pass
             elif g.selected:
                 st['msg'] = st['msg'] if 'zoom in' in st['msg'] else st['msg']
         img = cv2.copyTo(base_, void_, img)
+        if g.ready():                                         # красная решётка — бесконечная: на всё окно,
+            v1, v2 = g.cr.vectors()                           # и над мозаикой, и вне её, сквозь выделения
+            step = min(np.hypot(*v1), np.hypot(*v2)) * st['s']
+            if step >= 1.5:
+                try:
+                    Mg_ = np.c_[v1, v2]
+                    ij_ = np.array([np.linalg.solve(Mg_, from_view(v) - g.cr.O)
+                                    for v in ((0, 0), (Wv, 0), (0, Hv), (Wv, Hv))])
+                    i0_, j0_ = np.floor(ij_.min(0)).astype(int) - 1
+                    i1_, j1_ = np.ceil(ij_.max(0)).astype(int) + 1
+                    k_ = max(1, int(math.ceil(6 / step)))     # совсем мелко — каждая k-я линия
+                    for i in range(i0_ - i0_ % k_, i1_ + 1, k_):
+                        a_, b_ = to_view(g.cr.O + i * v1 + j0_ * v2), to_view(g.cr.O + i * v1 + j1_ * v2)
+                        cv2.line(img, tuple(np.int32(np.round(a_))), tuple(np.int32(np.round(b_))), red, 1, cv2.LINE_8)
+                    for j in range(j0_ - j0_ % k_, j1_ + 1, k_):
+                        a_, b_ = to_view(g.cr.O + i0_ * v1 + j * v2), to_view(g.cr.O + i1_ * v1 + j * v2)
+                        cv2.line(img, tuple(np.int32(np.round(a_))), tuple(np.int32(np.round(b_))), red, 1, cv2.LINE_8)
+                except (np.linalg.LinAlgError, ValueError, TypeError):
+                    pass
         pf_.mark('grid')
         pyramid_tint(img)                                     # внутри выделений — всё, кроме выбранного в них
         pf_.mark('tint')

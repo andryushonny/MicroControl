@@ -155,11 +155,22 @@ def draw_lattice(img, cr, to, rect=None, solid=False):
     v1, v2 = cr.vectors()
     if v1 is not None:
         i0, i1, j0, j1 = cr.extent()
+        if rect is not None:                                # решётка — бесконечная: на всё видимое окно
+            try:
+                o_ = np.array(to(cr.live(0, 0)), float)
+                M_ = np.c_[np.array(to(cr.live(1, 0)), float) - o_, np.array(to(cr.live(0, 1)), float) - o_]
+                x_, y_, w_, h_ = rect
+                ij_ = np.array([np.linalg.solve(M_, np.array(c_, float) - o_) for c_ in
+                                ((x_, y_), (x_ + w_, y_), (x_, y_ + h_), (x_ + w_, y_ + h_))])
+                i0, j0 = np.floor(ij_.min(0)).astype(int) - 1
+                i1, j1 = np.ceil(ij_.max(0)).astype(int) + 1
+            except (np.linalg.LinAlgError, ValueError):
+                pass
         if (i1 - i0 + 1) * (j1 - j0 + 1) <= 40000:
             for i in range(i0, i1 + 1):
-                dashed(img, to(cr.live(i, j0)), to(cr.live(i, j1)), RED, rect, solid=solid or i in (i0, i1))
+                dashed(img, to(cr.live(i, j0)), to(cr.live(i, j1)), RED, rect, solid=True)
             for j in range(j0, j1 + 1):
-                dashed(img, to(cr.live(i0, j)), to(cr.live(i1, j)), RED, rect, solid=solid or j in (j0, j1))
+                dashed(img, to(cr.live(i0, j)), to(cr.live(i1, j)), RED, rect, solid=True)
     for q in cr.marks:
         u, v = to(q + cr.drift)
         if rect is None or (rect[0] <= u <= rect[0] + rect[2] and rect[1] <= v <= rect[1] + rect[3]):
@@ -1538,11 +1549,10 @@ def _run(m, fullscreen=False, _keys=None):
                 for h2_ in hs_:
                     cv2.fillPoly(mk_, [np.int32(np.round(h2_))], 0, cv2.LINE_8)
             cv2.copyTo(fine_, mk_, own_)
-            cv2.copyTo(np.zeros_like(mp), mk_, ov_)                  # внутри — своя сетка, не общая
         ow_ = own_.any(2)
         if ow_.any():
             mp[ow_] = cv2.addWeighted(mp, 0.35, own_, 0.65, 0)[ow_]
-        on_ = ov_.any(2)
+        on_ = ov_.any(2)                                             # общая сетка — сплошная, сквозь выделения
         if on_.any():
             mp[on_] = cv2.addWeighted(mp, 0.6, ov_, 0.4, 0)[on_]
 

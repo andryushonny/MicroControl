@@ -8,6 +8,9 @@
                                    (--port COM5|auto|sim, --listen 0.0.0.0:5150, --no-camera, --dead 10)
   python -m microcontrol stop net://адрес     аварийная остановка прибора за сервером
   python -m microcontrol status net://адрес   сервер: что включено, кто подключён
+  python -m microcontrol find      серверы MicroControl в локальной сети (адрес можно не знать: net://auto)
+  python -m microcontrol mcp [net://auto | COM3 | sim | (ничего: только сканы)] [--objective 10]
+                                   MCP-сервер (stdio) для ИИ-агента: Claude Desktop, DeepSeek через любой MCP-клиент
 """
 import sys
 from .control import emergency_stop, ControlLock, DIR
@@ -19,6 +22,22 @@ def main():
     if cmd == 'serve':
         from .remote import serve
         serve(sys.argv[2:])
+        return
+    if cmd == 'find':
+        from .remote import find_servers
+        got = find_servers(2.0)
+        if not got:
+            print("No MicroControl server answered in this network.\n  On the instrument PC: python -m microcontrol "
+                  "serve; both PCs on one network (Wi-Fi 'Private' in Windows); port 5150 open in its firewall.")
+        for g in got:
+            print(f"net://{g['host']}:{g['port']}   {g.get('name')}   controller {g.get('controller')}   camera "
+                  f"{g.get('camera') or 'none'}   v{g.get('version')}" + (f"   busy: {g['busy']}" if g.get('busy') else "   free"))
+        return
+    if cmd == 'mcp':
+        from .agent import main as _am
+        rest = sys.argv[2:]
+        dev = [a for a in rest if a.startswith(('net://', 'COM', '/dev/')) or a in ('sim', 'auto')][:1]
+        _am(['--mcp'] + (['--port', dev[0]] if dev else []) + [a for a in rest if a not in dev])
         return
     if cmd in ('stop', 'status') and len(sys.argv) > 2 and sys.argv[2].startswith('net://'):
         from . import remote as R

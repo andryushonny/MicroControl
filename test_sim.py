@@ -2887,3 +2887,43 @@ M78.run(m, fullscreen=False, _keys=[-1, ord('`'), -1, -1, -1, ord('`'), -1])
 lg78 = open(L78.path(), encoding='utf-8').read() if L78.path() else 'PRF-001 microscope: camera'
 assert 'microscope: camera' in lg78 and 'view: pictures' in lg78, lg78[-600:]           # замер — и в журнале
 m.close(); print(f"Weak PC: view levels written while scanning ({n78} frames, quick keeps them), the mouse redraws only the top layer, moving draws at half size then sharp, timing per stage (`), old map previews leave memory: OK")
+
+
+# ------------------------------------------------------------------ 79. Сеть: сервер находится сам (net://auto, find); цепочка прибор -> сервер -> другой ПК -> MCP (ИИ-агент) по сети
+import socket as _so79
+from microcontrol import remote as RM79
+_s = _so79.socket(); _s.bind(('0.0.0.0', 0)); P79 = _s.getsockname()[1]; _s.close()
+hs79 = tempfile.mkdtemp()
+root79 = os.path.dirname(os.path.dirname(os.path.abspath(mc.__file__)))
+srv79 = subprocess.Popen([sys.executable, '-m', 'microcontrol', 'serve', '--port', 'sim', '--listen', f'0.0.0.0:{P79}'],
+                         env=dict(os.environ, HOME=hs79, USERPROFILE=hs79, PYTHONPATH=root79),
+                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+try:
+    t_ = time.time()
+    while time.time() - t_ < 60:
+        try:
+            _so79.create_connection(('127.0.0.1', P79), timeout=1).close(); break
+        except OSError:
+            time.sleep(0.2)
+    TOK79 = open(os.path.join(hs79, '.microcontrol', 'server_token')).read().strip()
+    got79 = RM79.find_servers(1.5, P79)
+    assert len(got79) == 1 and got79[0]['controller'] == 'sim' and got79[0]['port'] == P79 and not got79[0]['busy'], got79
+    m = mc.Microscope(f'net://{TOK79}@auto:{P79}', objective=10, folder=tempfile.mkdtemp())   # адрес — сам
+    assert m.port.startswith('net://') and m.port.endswith(f':{P79}'), m.port
+    assert RM79.find_servers(1.5, P79)[0]['busy']                                          # занят — видно в поиске
+    m.close()
+    reqs79 = [dict(jsonrpc='2.0', id=1, method='initialize', params=dict(protocolVersion='2025-06-18')),
+              dict(jsonrpc='2.0', method='notifications/initialized'),
+              dict(jsonrpc='2.0', id=2, method='tools/list'),
+              dict(jsonrpc='2.0', id=3, method='tools/call', params=dict(name='get_status', arguments={}))]
+    mcp79 = subprocess.run([sys.executable, '-m', 'microcontrol', 'mcp', f'net://{TOK79}@auto:{P79}', '--objective', '10',
+                            '--approve', 'deny'], input="\n".join(json.dumps(r) for r in reqs79) + "\n",
+                           capture_output=True, text=True, timeout=120, env=dict(os.environ, PYTHONPATH=root79))
+    out79 = [json.loads(l) for l in mcp79.stdout.splitlines() if l.strip()]
+    assert [o.get('id') for o in out79] == [1, 2, 3], (mcp79.stdout[-500:], mcp79.stderr[-1500:])   # stdout — только протокол
+    assert any(t['name'] == 'move' or t['name'].startswith('go') for t in out79[1]['result']['tools'])
+    st79 = json.loads(out79[2]['result']['content'][0]['text'])
+    assert st79['ok'] and not out79[2]['result']['isError'], st79
+finally:
+    srv79.terminate(); srv79.wait(10)
+print(f"Network: the server is found by itself (net://auto, find), busy shown; an AI agent over MCP on another PC drives it through the server: OK")

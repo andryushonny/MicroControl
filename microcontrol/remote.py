@@ -73,6 +73,63 @@ def parse_url(url):
     return host, port, token or None
 
 
+DISCOVER = b"MICROCONTROL?"                                  # поиск серверов в сети: UDP на тот же порт
+
+
+def find_servers(timeout=1.0, port=DEFAULT_PORT):
+    """Серверы MicroControl в локальной сети (широковещательный UDP; Wi-Fi тоже). -> [dict(host, port, name,
+    controller, camera, busy, version)] — без ключа: ключ всё равно нужен для подключения."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+    s.settimeout(0.1)
+    targets = {"255.255.255.255", "127.0.0.1"}                # и этот же компьютер
+    for ip in _my_ips():                                   # и широковещательный адрес каждой сети (/24)
+        if not ip.startswith("127."):
+            targets.add(ip.rsplit(".", 1)[0] + ".255")
+    found, t_end, t_send = {}, time.monotonic() + timeout, 0.0
+    try:
+        while time.monotonic() < t_end:
+            if time.monotonic() - t_send > 0.3:             # UDP по Wi-Fi теряется: спросить ещё раз
+                t_send = time.monotonic()
+                for t in targets:
+                    try:
+                        s.sendto(DISCOVER, (t, port))
+                    except OSError:
+                        pass
+            try:
+                data, (ip, _p) = s.recvfrom(4096)
+            except (socket.timeout, OSError):
+                continue
+            try:
+                d = json.loads(data.decode("utf-8"))
+            except ValueError:
+                continue
+            if d.get("hello") == "microcontrol":                # один сервер — одна запись (ответил по двум
+                k = d.get("id") or (ip, d.get("port"))           # адресам: сеть важнее 127.0.0.1)
+                if k not in found or found[k]["host"].startswith("127."):
+                    found[k] = dict(host=ip, **{k2: v for k2, v in d.items() if k2 not in ("hello", "id")})
+    finally:
+        s.close()
+    return sorted(found.values(), key=lambda d: (d["host"], d["port"]))
+
+
+def resolve(url, timeout=1.5):
+    """net://[ключ@]auto[:порт] -> тот же адрес с найденным сервером (один в сети — он; несколько — какой)."""
+    host, port, token = parse_url(url)
+    if host not in ("auto", "*"):
+        return url
+    from .errors import CommError
+    got = find_servers(timeout, port)
+    if len(got) != 1:
+        lst = "; ".join(f"net://{g['host']}:{g['port']} ({g.get('name')}, {g.get('controller')})" for g in got)
+        raise CommError("E112", ("No MicroControl server answered in this network (is 'python -m microcontrol serve' "
+                                 "running on the instrument PC, both on one network, port "
+                                 f"{port} open in its firewall?)") if not got else
+                        f"Several servers in the network, give one: {lst}")
+    g = got[0]
+    return f"net://{token + '@' if token else ''}{g['host']}:{g['port']}"
+
+
 def server_token():
     """Ключ сервера (создаётся при первом запуске)."""
     p = os.path.join(DIR, "server_token")
@@ -155,6 +212,13 @@ class Server:
         self.cam_info = self._cam_info()
         self.sock = socket.create_server(listen, reuse_port=False)
         self.addr = self.sock.getsockname()
+        self.udp, self.uid = None, secrets.token_hex(6)
+        try:                                          # ответ на поиск (net://auto, python -m microcontrol find)
+            self.udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            self.udp.bind((listen[0], self.addr[1]))
+            self.udp.settimeout(0.5)
+        except OSError:
+            self.udp = None
         self._stop = threading.Event()
         self._last_tx = time.monotonic()
         L.event("NET-001", f"Server for {self.port} on {self.addr[0]}:{self.addr[1]}, camera "
@@ -436,12 +500,37 @@ class Server:
                 except Exception:
                     self._last_tx = time.monotonic()
 
+    def _discover(self):
+        """Отвечать на поиск серверов в сети: кто я (без ключа)."""
+        from . import __version__
+        while not self._stop.is_set() and self.udp is not None:
+            try:
+                data, peer = self.udp.recvfrom(256)
+            except socket.timeout:
+                continue
+            except OSError:
+                break
+            if data.strip() != DISCOVER:
+                continue
+            ow = self.owner
+            rep = dict(hello="microcontrol", id=self.uid, port=self.addr[1], name=socket.gethostname(), controller=self.port,
+                       camera=self.cam_info.get("model") if self.cam else None, version=__version__,
+                       busy=(ow or {}).get("who", {}).get("host") if ow else None)
+            try:
+                self.udp.sendto(json.dumps(rep).encode("utf-8"), peer)
+            except OSError:
+                pass
+
     def serve_forever(self):
         threading.Thread(target=self._watch, daemon=True).start()
+        threading.Thread(target=self._discover, daemon=True).start()
+        firewall(self.addr[1], self.say)
         self.say(f"MicroControl server: controller {self.port}, camera "
                  f"{(self.cam_info.get('model') or '?') if self.cam else 'none'}, listening on port {self.addr[1]}")
         for ip in _my_ips():
             self.say(f"  in Jupyter: mc.Microscope('net://{self.token}@{ip}:{self.addr[1]}', objective=...)")
+        self.say(f"  or simply: mc.Microscope('net://{self.token}@auto', objective=...)  (finds this server in the network)")
+        self.say(f"  AI agent (MCP client on that PC): python -m microcontrol mcp net://{self.token}@auto")
         self.say(f"  safe off after {self.dead_s:g} s without the program; Ctrl+C stops the server")
         try:
             self.sock.settimeout(0.5)                 # Windows: accept() иначе не прерывается Ctrl+C
@@ -453,6 +542,7 @@ class Server:
                 except OSError:
                     break
                 conn.settimeout(None)
+                _keepalive(conn)
                 threading.Thread(target=self._handle, args=(conn, peer), daemon=True).start()
         except KeyboardInterrupt:
             pass
@@ -461,10 +551,11 @@ class Server:
 
     def close(self):
         self._stop.set()
-        try:
-            self.sock.close()
-        except OSError:
-            pass
+        for s_ in (self.sock, self.udp):
+            try:
+                s_.close()
+            except (OSError, AttributeError):
+                pass
         with self.dev:
             if self.owner is not None:
                 self.safe_off("server stopped")
@@ -490,8 +581,51 @@ class Server:
         self.L.event("NET-001", "Server stopped.")
 
 
+def firewall(port, say=print):
+    """Windows: разрешить входящие на порт сервера (TCP — связь, UDP — поиск). Без прав администратора —
+    сказать, какой командой (один раз, в консоли администратора)."""
+    if os.name != "nt":
+        return
+    import subprocess
+    name = f"MicroControl server {port}"
+    try:
+        r = subprocess.run(["netsh", "advfirewall", "firewall", "show", "rule", f"name={name}"],
+                           capture_output=True, text=True, timeout=10)
+        if r.returncode == 0 and "MicroControl" in r.stdout:
+            return
+        ok = True
+        for proto in ("TCP", "UDP"):
+            r = subprocess.run(["netsh", "advfirewall", "firewall", "add", "rule", f"name={name}", "dir=in",
+                                "action=allow", f"protocol={proto}", f"localport={port}", "profile=private,domain"],
+                               capture_output=True, text=True, timeout=10)
+            ok = ok and r.returncode == 0
+        if ok:
+            say(f"  firewall: port {port} opened for the local network (rule '{name}')")
+            return
+    except (OSError, subprocess.SubprocessError):
+        pass
+    say(f"  firewall: could not open port {port} (not an administrator). Once, in an administrator console:\n"
+        f"    netsh advfirewall firewall add rule name=\"{name}\" dir=in action=allow protocol=TCP localport={port}\n"
+        f"    netsh advfirewall firewall add rule name=\"{name}\" dir=in action=allow protocol=UDP localport={port}\n"
+        "  and make the Wi-Fi / Ethernet network 'Private' in Windows settings")
+
+
 def _jsonable(d):
     return {k: (v.item() if hasattr(v, "item") else v) for k, v in dict(d or {}).items()}
+
+
+def _keepalive(s):
+    """TCP keepalive: мёртвое соединение (Wi-Fi ушёл, компьютер уснул) замечается за ~15 с, а не часы."""
+    try:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+        if hasattr(socket, "TCP_KEEPIDLE"):
+            s.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 5)
+            s.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 2)
+            s.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 5)
+        elif hasattr(socket, "SIO_KEEPALIVE_VALS"):        # Windows
+            s.ioctl(socket.SIO_KEEPALIVE_VALS, (1, 5000, 2000))
+    except OSError:
+        pass
 
 
 def _my_ips():
@@ -519,6 +653,7 @@ class Link:
     """Связь программы с сервером: транзакции с контроллером, камера, память прибора, «я жив»."""
 
     def __init__(self, url, token=None, heartbeat_s=1.0):
+        url = resolve(url)                             # net://auto — найти сервер в сети
         self.url = url
         self.host, self.port, t_url = parse_url(url)
         self.key = f"{self.host}:{self.port}"
@@ -544,6 +679,7 @@ class Link:
             raise CommError("E112", f"{self.host}:{self.port}: {e}. Is 'python -m microcontrol serve' running "
                                     "there, and the address right?") from None
         s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        _keepalive(s)
         hello, _ = _recv(s)
         if hello.get("hello") != "microcontrol":
             s.close()
@@ -560,8 +696,10 @@ class Link:
             s.close()
             cls = SafetyError if rep["err"] in ("E106", "E111") else CommError
             raise cls(rep["err"], f"{self.key}: {rep.get('msg', '')}")
-        s.settimeout(None)
+        s.settimeout(self.TIMEOUT)                     # Wi-Fi пропал молча: запрос не висит вечно — переподключение
         return s, rep
+
+    TIMEOUT = 30.0                                     # с: ответа нет — связь считается оборванной
 
     def _connect(self):
         self.ctl, self.info = self._open("ctl", dict(prev_sid=self.sid) if self.sid else None)
@@ -598,6 +736,8 @@ class Link:
                 raise ConnectionError("closed")
             s = self._cam() if _cam else self.ctl
             try:
+                tmo = hdr.get("timeout")                   # команда контроллеру может идти долго (дом, автофокус)
+                s.settimeout(self.TIMEOUT + (float(tmo) if isinstance(tmo, (int, float)) else 0.0))
                 _send(s, dict(op=op, **hdr), blob)
                 rep, out = _recv(s)
             except (OSError, struct.error, ValueError) as e:
@@ -817,7 +957,7 @@ def _paths(o, a, b):
 
 def emergency_stop(url):
     """Аварийная остановка по сети: сервер выключает прибор и отключает программу. -> строка."""
-    host, port, _ = parse_url(url)
+    host, port, _ = parse_url(resolve(url))
     try:
         s = socket.create_connection((host, port), timeout=5)
         hello, _ = _recv(s)
@@ -833,7 +973,7 @@ def emergency_stop(url):
 
 def status(url, token=None):
     """Состояние сервера: прибор, что включено, кто подключён, последнее выключение."""
-    host, port, t_url = parse_url(url)
+    host, port, t_url = parse_url(resolve(url))
     tok = token or t_url or os.environ.get("MC_TOKEN") or _saved_tokens().get(f"{host}:{port}")
     s = socket.create_connection((host, port), timeout=5)
     hello, _ = _recv(s)

@@ -196,8 +196,14 @@ class JobQueue:
             ST_.ON_CREATE.append(on_new)
             f = None
             try:
-                with no_stop():                         # скан останавливается сам, после кадра (снятое — цело)
-                    f = m.scan(only=[j.uid], stitch=None)
+                try:
+                    with no_stop():                     # скан останавливается сам, после кадра (снятое — цело)
+                        f = m.scan(only=[j.uid], stitch=None)
+                except (IndexError, KeyError):          # выделение удалили (другое окно) как раз при старте
+                    refresh_from_disk(m)
+                    if not any(r.get('uid') == j.uid for r in m._regions):
+                        raise RuntimeError("the selection is gone (deleted)") from None
+                    raise
             finally:
                 ST_.ON_CREATE.remove(on_new)
                 if 'r' in run_:

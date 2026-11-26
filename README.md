@@ -2,7 +2,7 @@
 
 **Python control of the Optosky ATR8300 Raman microscope: scan a substrate, stitch one picture of it, put the lithography grid on it, choose the squares you need and export them for AutoCAD.**
 
-**Authors:** A. Lyapeikov, S. Domenko · **Version:** 0.42.1 · Русский: [docs/README_ru.md](docs/README_ru.md) · 中文: [docs/README_zh.md](docs/README_zh.md) · PDF: [EN](docs/MicroControl_en.pdf), [RU](docs/MicroControl_ru.pdf), [中文](docs/MicroControl_zh.pdf) · Full technical reference: [EN](docs/reference_en.md), [RU](docs/reference_ru.md), [中文](docs/reference_zh.md)
+**Authors:** A. Lyapeikov, S. Domenko · **Version:** 0.43.0 · Русский: [docs/README_ru.md](docs/README_ru.md) · 中文: [docs/README_zh.md](docs/README_zh.md) · PDF: [EN](docs/MicroControl_en.pdf), [RU](docs/MicroControl_ru.pdf), [中文](docs/MicroControl_zh.pdf) · Full technical reference: [EN](docs/reference_en.md), [RU](docs/reference_ru.md), [中文](docs/reference_zh.md)
 
 ![Overview: the 10x scan with the grid of the sample, numbered squares, a draft, 50x and 100x inside](docs/img/view.jpg)
 
@@ -162,6 +162,16 @@ Settings are ordinary properties with checked ranges: `m.settings` lists all of 
 
 **Instrument on another computer.** On the PC the microscope and camera are plugged into: `python -m microcontrol serve` (it finds the controller, opens the camera and prints the address with the key). On the fast PC: `m = mc.Microscope('net://KEY@192.168.50.2', objective=10)` — the key is remembered, next time `net://192.168.50.2` is enough; everything else works as with the instrument next to you, the computing is done here. A direct Ethernet cable with fixed addresses or one router; Wi-Fi works too (frames then go as JPEG 95). Safety stays at the instrument: without a word from the program for 10 s, or when the connection breaks without `m.close()`, the server switches the laser, motors, light and cooling off; `python -m microcontrol stop net://192.168.50.2` stops it from anywhere. Over the internet — only through a VPN (Tailscale, WireGuard).
 
+**Local network and Wi-Fi, AI agent on another PC.** The chain: microscope → old PC (`python -m microcontrol serve`: a thin server) → new PC on the same network (cable or Wi-Fi) → an AI agent there through MCP.
+- The address need not be known: `net://KEY@auto` finds the server in the network by itself (a UDP broadcast on port 5150); `python -m microcontrol find` lists the servers (name, controller, camera, free / busy).
+- On Windows the server opens port 5150 (TCP and UDP) in the firewall for private networks by itself; without administrator rights it prints the two `netsh` commands to run once. Make the network "Private" in Windows on both PCs.
+- Wi-Fi: frames go as JPEG 95 (chosen by a measurement); a silent drop is noticed within ~15–30 s (TCP keepalive, timeouts), then the program reconnects; meanwhile the server has switched the instrument off after 10 s without word (`--dead`).
+- AI agent: `python -m microcontrol mcp net://KEY@auto --objective 10` is an MCP server on stdio; put it into the MCP client of the harness (DeepSeek or any model that the client drives):
+```json
+{"mcpServers": {"microcontrol": {"command": "python", "args": ["-m", "microcontrol", "mcp", "net://KEY@auto", "--objective", "10"]}}}
+```
+  Moves, scans and deletions ask the operator on the new PC (Allow / Deny); the laser is never available to the agent.
+
 ---
 
 ## How commands reach the instrument
@@ -288,7 +298,7 @@ A local model (for example through Ollama) can drive the microscope: look throug
 
 ```python
 mc.agent.chat(m, model='qwen3:8b')                 # chat with a local model
-python -m microcontrol.agent --mcp --port COM3     # or a server for any MCP client
+python -m microcontrol mcp COM3                    # or a server for any MCP client
 ```
 
 Every move, scan or deletion opens a window: **Allow**, **Allow for this session** or **Deny**. The laser is never available to the agent, the safety limits stay in force, and every call is logged. Details: [reference, section 25](docs/reference_en.md#25-ai-agents).

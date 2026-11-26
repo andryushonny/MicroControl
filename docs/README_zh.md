@@ -2,7 +2,7 @@
 
 **用 Python 控制 Optosky ATR8300 拉曼显微镜：扫描基底，把它拼接成一张图，叠加光刻网格，选出需要的方格并导出给 AutoCAD。**
 
-**作者：** A. Lyapeikov, S. Domenko · **版本：** 0.42.1 · English: [README.md](../README.md) · Русский: [README_ru.md](README_ru.md) · PDF: [中文](MicroControl_zh.pdf) · 完整技术参考：[中文](reference_zh.md)、[EN](reference_en.md)、[RU](reference_ru.md)
+**作者：** A. Lyapeikov, S. Domenko · **版本：** 0.43.0 · English: [README.md](../README.md) · Русский: [README_ru.md](README_ru.md) · PDF: [中文](MicroControl_zh.pdf) · 完整技术参考：[中文](reference_zh.md)、[EN](reference_en.md)、[RU](reference_ru.md)
 
 ![总览：带样品网格的 10x 拍摄、方格编号、草稿、其中的 50x 与 100x](img/view.jpg)
 
@@ -162,6 +162,16 @@ m.info()          # 时间花在哪里：每个操作都计时，耗时最长的
 
 **仪器在另一台电脑上。** 在连接显微镜和相机的电脑上运行：`python -m microcontrol serve`（自动找到控制器、打开相机，并打印带密钥的地址）。在高性能电脑上：`m = mc.Microscope('net://密钥@192.168.50.2', objective=10)` —— 密钥会被记住，下次只需 `net://192.168.50.2`；其余一切与仪器就在旁边时相同，计算在本机进行。用以太网线直连并设置固定地址，或接同一路由器；Wi-Fi 也可以（此时帧以 JPEG 95 传输）。安全保障留在仪器端：10 s 没有程序的消息，或连接未经 `m.close()` 就断开 —— 服务器关闭激光、电机、照明和制冷；`python -m microcontrol stop net://192.168.50.2` 可在任何地方停止。通过互联网 —— 只能经由 VPN（Tailscale、WireGuard）。
 
+**局域网和 Wi-Fi，另一台电脑上的 AI 智能体。** 链路：显微镜 → 旧电脑（`python -m microcontrol serve`：瘦服务器）→ 同一网络中的新电脑（网线或 Wi-Fi）→ 新电脑上通过 MCP 的 AI 智能体。
+- 无需知道地址：`net://密钥@auto` 会在网络中自动找到服务器（端口 5150 上的 UDP 广播）；`python -m microcontrol find` 列出服务器（名称、控制器、相机、空闲 / 占用）。
+- 在 Windows 上，服务器会自动为专用网络在防火墙中打开端口 5150（TCP 和 UDP）；没有管理员权限时会打印两条需执行一次的 `netsh` 命令。两台电脑上的 Windows 网络都设为"专用"。
+- Wi-Fi：帧以 JPEG 95 传输（按测速选择）；静默断线约 15–30 秒内被发现（TCP keepalive、超时），随后程序自动重连；在此期间服务器在 10 秒无消息后关闭仪器（`--dead`）。
+- AI 智能体：`python -m microcontrol mcp net://密钥@auto --objective 10` 是 stdio 上的 MCP 服务器；将其写入框架的 MCP 客户端（DeepSeek 或客户端驱动的任何模型）：
+```json
+{"mcpServers": {"microcontrol": {"command": "python", "args": ["-m", "microcontrol", "mcp", "net://密钥@auto", "--objective", "10"]}}}
+```
+  移动、拍摄和删除会在新电脑上询问操作员（Allow / Deny）；激光永远不对智能体开放。
+
 ---
 
 ## 命令如何到达仪器
@@ -288,7 +298,7 @@ logs/                                                 每次会话的日志
 
 ```python
 mc.agent.chat(m, model='qwen3:8b')                 # 与本地模型对话
-python -m microcontrol.agent --mcp --port COM3     # 或者为任何 MCP 客户端提供服务器
+python -m microcontrol mcp COM3                    # 或者为任何 MCP 客户端提供服务器
 ```
 
 每次移动、扫描或删除都会弹出窗口：**Allow**、**Allow for this session** 或 **Deny**。激光对智能体不可用，安全限制依然有效，每次调用都记录在日志中。详见：[参考，第 25 节](reference_zh.md#25-ai-智能体)。

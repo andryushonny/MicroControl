@@ -5,6 +5,7 @@
 Мозаика -> столик строго по геометрии съёмки (snap.geometry): S = ms · Mo⁻¹ (q − c − кадр/2).
 """
 import os
+import time
 import numpy as np
 from .text import cv2                                     # cv2 со шрифтом JetBrains Mono
 
@@ -68,10 +69,58 @@ class NavMap:
         self.c = S - self.R.T @ (np.asarray(p, float) - (self.size[0] / 2, self.size[1] / 2)) * self.s
 
     # ------------------------------------------------------------ мозаики
+    def _live_preview(self, folder):
+        """Съёмка идёт (живая сшивка): картинка из уменьшенных копий кадров (viewer/levels) по нынешним
+        положениям (join/positions_all.csv) — на карте видно, как оно сшивается. Не чаще раза в 1.5 с."""
+        pp = os.path.join(folder, 'join', 'positions_all.csv')
+        if not os.path.exists(os.path.join(folder, 'join', 'live.json')) or not os.path.exists(pp):
+            return None
+        ap = os.path.join(folder, 'align.json')
+        mt = ('live', _mt(pp), _mt(ap))
+        old = self._prev.get(folder)
+        if old is not None and (old[0] == mt or (old[0][0] == 'live' and time.monotonic() - old[3] < 1.5)):
+            self._used[folder] = self._tick
+            return old[1:3]
+        from .snap import geometry, _GEO
+        _GEO.pop(folder, None)
+        try:
+            g = geometry(folder)
+        except Exception:
+            return old[1:3] if old is not None else None
+        P = np.asarray(g['pos'], float)
+        W, H = float(g['W']), float(g['H'])
+        size = P.max(0) + (W, H)
+        k = min(1.0, 4000 / size.max(), 1500 / size.max())   # живое — грубее (быстро на слабом ПК)
+        img = np.zeros((int(np.ceil(size[1] * k)) + 1, int(np.ceil(size[0] * k)) + 1, 3), np.uint8)
+        lvd = os.path.join(folder, 'viewer', 'levels')
+        w_, h_ = max(1, int(round(W * k))), max(1, int(round(H * k)))
+        for i, (x, y) in enumerate(P):
+            pic = None
+            for lv in (3, 2):
+                f_ = os.path.join(lvd, f"{i:05d}_{lv}.jpg")
+                if os.path.exists(f_):
+                    pic = cv2.imread(f_)
+                    break
+            if pic is None:
+                continue
+            x0, y0 = int(round(x * k)), int(round(y * k))
+            pic = cv2.resize(pic, (w_, h_), interpolation=cv2.INTER_AREA)
+            hh, ww = min(h_, img.shape[0] - y0), min(w_, img.shape[1] - x0)
+            if hh > 0 and ww > 0 and x0 >= 0 and y0 >= 0:
+                img[y0:y0 + hh, x0:x0 + ww] = np.maximum(pic[:hh, :ww], 7)
+        ok = (img.max(2) > 6).astype(np.uint8) * 255
+        pyr = [(k, img, ok)]
+        while max(pyr[-1][1].shape[:2]) > 300:
+            pyr.append((pyr[-1][0] / 2, cv2.pyrDown(pyr[-1][1]), cv2.resize(pyr[-1][2], None, fx=0.5, fy=0.5,
+                                                                               interpolation=cv2.INTER_NEAREST)))
+        self._prev[folder] = (mt, pyr, g, time.monotonic())
+        self._used[folder] = self._tick
+        return pyr, g
+
     def _preview(self, folder):
         jp = os.path.join(folder, 'join', 'preview_all.jpg')
         if not os.path.exists(jp):
-            return None
+            return self._live_preview(folder)
         ap = os.path.join(folder, 'align.json')              # совмещение (A в просмотре) двигает картинку
         try:
             mt = (os.path.getmtime(jp), os.path.getmtime(ap) if os.path.exists(ap) else 0)
@@ -79,7 +128,7 @@ class NavMap:
             return None
         if folder in self._prev and self._prev[folder][0] == mt:
             self._used[folder] = self._tick
-            return self._prev[folder][1:]
+            return self._prev[folder][1:3]
         from .snap import geometry
         g = geometry(folder)
         img = cv2.imread(jp)
@@ -93,7 +142,7 @@ class NavMap:
         while max(pyr[-1][1].shape[:2]) > 300:
             pyr.append((pyr[-1][0] / 2, cv2.pyrDown(pyr[-1][1]), cv2.resize(pyr[-1][2], None, fx=0.5, fy=0.5,
                                                                                interpolation=cv2.INTER_NEAREST)))
-        self._prev[folder] = (mt, pyr, g)
+        self._prev[folder] = (mt, pyr, g, 0.0)
         self._used[folder] = self._tick
         return pyr, g
 
@@ -168,7 +217,8 @@ class NavMap:
         ck_ = tuple((f, tuple(round(float(v), 2) for r_ in clip.get(f, []) for p_ in r_ for v in p_)) for f in scans)
         alpha = alpha or {}
         key = (w, h, tuple(np.round(self.c, 3)), round(self.s, 6), tuple(np.ravel(self.R)), ck_, tuple(sorted(alpha.items())),
-               tuple((f, _mt(os.path.join(f, 'join', 'preview_all.jpg')), _mt(os.path.join(f, 'align.json')))
+               tuple((f, _mt(os.path.join(f, 'join', 'preview_all.jpg')), _mt(os.path.join(f, 'align.json')),
+                      (self._prev.get(f) or (0,))[0])     # живая: её картинка обновилась
                      for f in scans), None if fog is None else (id(fog), fog.ver), grid)
         if key != self._key:
             self._tick += 1

@@ -1435,7 +1435,8 @@ def _run(m, fullscreen=False, _keys=None):
             if rg_.get('kind') == 'group' or SM.hidden(m, k_):
                 continue
             sc_ = Selection(m.sample, rg_).latest
-            if sc_ and os.path.exists(os.path.join(sc_.folder, 'join', 'preview_all.jpg')):
+            if sc_ and (os.path.exists(os.path.join(sc_.folder, 'join', 'preview_all.jpg')) or
+                        os.path.exists(os.path.join(sc_.folder, 'join', 'live.json'))):   # снимается: живая сшивка
                 out.append((sc_.folder, k_))
             elif sc_:                                      # последняя ещё не сшита — показать прежнюю сшитую
                 ok_ = [x_.folder for x_ in reversed(Selection(m.sample, rg_).scans)

@@ -13,7 +13,7 @@ Authors: Andrey Lyapeikov, Savely Domenko.
 
 Help: mc.help()
 """
-__version__ = "0.43.16"
+__version__ = "0.43.17"
 AUTHORS = ["Ляпейков Андрей", "Доменко Савелий"]
 
 from .errors import (MicroControlError, SafetyError, LimitError, CommError, CameraError,

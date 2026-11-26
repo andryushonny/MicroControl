@@ -374,12 +374,13 @@ def queue_panel(img, x0, y1, x1, q, scale=0.45):
         put(img, t_, x, y + th // 2, scale, TEXT if j.active else DIM, 1)
         x += 270
         if j.paused:
-            s_ = "paused: > resumes" + (f"  ({j.step_title} {100 * (j.frac or 0):.0f}%)" if j.state == 'running' else "")
+            s_ = "paused: > resumes" + (f"  ({j.step_title}, {100 * j.overall():.0f}% of the task)" if j.state == 'running' else "")
         elif j.state == 'running':
-            _bar(img, x, y - 6, x + 120, 12, j.frac, now)
+            of_ = j.overall()
+            _bar(img, x, y - 6, x + 120, 12, of_, now)
             x += 130
             lft = j.remaining()
-            s_ = f"{j.step_title}  {100 * (j.frac or 0):.0f}%  {_tm(j.elapsed())}" + (f", ~{_tm(lft)} left" if lft else "")
+            s_ = f"{j.step_title}  {100 * of_:.0f}%  {_tm(j.elapsed())}" + (f", ~{_tm(lft)} left" if lft else "")
         elif j.active and q.held(j):
             s_ = f"waits for {j.obj}x: set the objective to {j.obj}x (O) - it starts by itself"
         elif j.active:
@@ -542,8 +543,21 @@ def run_busy(win, title, fn, frame, plan=None, expect=None, wait_ms=60, on_stop=
             st['left'] = (_t.monotonic() - st['t0']) * (1 - st['ov']) / st['ov'] if st['ov'] > 0.02 else None
         elif plan:
             st['target'] = st['ov']
-        else:
-            st['target'], st['left'] = f, eta
+        else:                                               # без плана: каждый новый этап — по остатку полосы
+            if st.get('_st') != t:                          # (полоса не начинается заново)
+                st['_st'], st['_b'] = t, st['ov']
+            st['ov'] = max(st['ov'], st['_b'] + (1.0 - st['_b']) * 0.9 * min(1.0, max(0.0, f)))
+            st['target'] = st['ov']
+            el_ = _t.monotonic() - st['t0']
+            by_rate = el_ * (1 - st['ov']) / st['ov'] if st['ov'] > 0.02 else None
+            by_exp = max(0.0, exp_ - el_) if exp_ else None
+            if by_rate is None:
+                st['left'] = by_exp
+            elif by_exp is None:
+                st['left'] = by_rate
+            else:
+                w_ = st['ov'] / (st['ov'] + 0.15)
+                st['left'] = w_ * by_rate + (1 - w_) * by_exp
     res = {}
 
     def work():
@@ -580,8 +594,8 @@ def run_busy(win, title, fn, frame, plan=None, expect=None, wait_ms=60, on_stop=
             else:                                           # доля догоняет пришедшую плавно (без рывков)
                 tg_ = st['target']
                 fr_ = st['frac'] if st['frac'] is not None else 0.0
-                if abs(tg_ - fr_) < 0.002 or (not plan and tg_ < fr_):   # новый этап без плана — с его доли
-                    st['frac'] = tg_
+                if abs(tg_ - fr_) < 0.002:
+                    st['frac'] = max(fr_, tg_)
                 elif tg_ > fr_:
                     st['frac'] = fr_ + (tg_ - fr_) * 0.35
             img, r = frame(st)
@@ -607,8 +621,8 @@ def run_busy(win, title, fn, frame, plan=None, expect=None, wait_ms=60, on_stop=
         th.join()
         Progress.hook = None
         Progress._open = None
-    if 'e' not in res and st['n'] == 0:
-        _busy_times(title, _t.monotonic() - st['t0'])       # в следующий раз — полоса по времени
+    if 'e' not in res:
+        _busy_times(title, _t.monotonic() - st['t0'])       # в следующий раз — оценка «осталось» по времени
     res['seconds'] = _t.monotonic() - st['t0']
     if isinstance(res.get('e'), Stopped):
         res['stopped'] = True

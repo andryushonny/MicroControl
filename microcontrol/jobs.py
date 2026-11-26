@@ -71,6 +71,7 @@ class Job:
         self._proc = None
         self.paused = False                             # пауза: ждёт, пока не возобновят (сканер — после кадра)
         self.step_t0, self.step_est = None, 0.0
+        self.sfrac, self._done_s, self._of = 0.0, 0.0, 0.0   # доля шага; оценка сделанных шагов, с; доля всей задачи
 
     @property
     def active(self):
@@ -88,12 +89,44 @@ class Job:
             return self.est
         after = nx[5] if len(nx) > 5 else 0.0
         if self.state == 'running':
-            el = time.monotonic() - (self.step_t0 or time.monotonic())
-            return (self.left if self.left is not None else max(0.0, self.step_est - el)) + after
-        return (nx[4] or 0.0) + after
+            r = self.step_left() + after
+        else:
+            r = (nx[4] or 0.0) + after
+        now = time.monotonic()                          # без скачков: оценка убывает с часами; вверх — только
+        pl = getattr(self, '_pl', None)                 # если новая заметно больше (работы и правда прибавилось)
+        if pl is not None:
+            down = max(0.0, pl[0] - (now - pl[1]))
+            if down < r <= 1.3 * down + 5:              # чуть больше прежней — шум оценки: идёт по часам
+                r = down
+        self._pl = (r, now)
+        return r
+
+    def step_left(self):
+        """Сколько ещё текущему шагу: по доле шага и прошедшему времени, в начале — по оценке шага."""
+        el = time.monotonic() - (self.step_t0 or time.monotonic())
+        f = float(self.sfrac or 0.0)
+        by_est = max(0.0, self.step_est - el)
+        if f <= 0.02:
+            return by_est if self.step_est else (self.left or 0.0)
+        by_rate = el * (1.0 - f) / f
+        w = f / (f + 0.15) if self.step_est else 1.0
+        return w * by_rate + (1 - w) * by_est
+
+    def overall(self):
+        """Доля всей задачи 0..1 (все шаги: съёмка, сшивка ...), не убывает."""
+        nx = getattr(self, '_next', None)
+        if not self.active:
+            return 1.0 if self.state == 'done' else float(self._of or 0.0)
+        after = (nx[5] if nx is not None and len(nx) > 5 else 0.0) or 0.0
+        cur = (nx[4] if nx is not None else 0.0) or 0.0
+        done_ = self._done_s + (cur * float(self.sfrac or 0.0) if self.state == 'running' else 0.0)
+        tot = self._done_s + cur + after
+        f = done_ / tot if tot > 0 else float(self.sfrac or 0.0)
+        self._of = max(float(self._of or 0.0), min(0.999, f))
+        return self._of
 
     def line(self):
-        s = {'queued': 'waiting', 'waiting': 'waiting', 'running': f"{100 * (self.frac or 0):.0f}%"}.get(self.state, self.state)
+        s = {'queued': 'waiting', 'waiting': 'waiting', 'running': f"{100 * self.overall():.0f}%"}.get(self.state, self.state)
         return f"{self.title}  {s}"
 
 
@@ -108,7 +141,7 @@ def summary_all():
 def _mono(j, t, f):
     """Доля задачи не откатывается назад: новый этап шага (своя полоса с нуля: чтение, швы, запись) идёт по
     остатку полосы (каждый этап — до 90 % остатка, 100 % — когда шаг сделан)."""
-    cur = float(j.frac or 0.0)
+    cur = float(j.sfrac or 0.0)
     key = (j.step_title, t)
     if getattr(j, '_pt', None) != key:
         j._pb = cur if getattr(j, '_pt', None) is not None and j._pt[0] == j.step_title else 0.0
@@ -453,6 +486,9 @@ class JobQueue:
         except Exception as e:
             self._finish(j, 'failed', error=e)
             return None
+        if j._send and getattr(j, '_next', None) is not None:     # прошлый шаг сделан: его оценка — в сделанное
+            j._done_s += float(j._next[4] or 0.0)
+            j.sfrac = 0.0
         j._send = True
         j._next = st
         j.state = 'waiting'
@@ -500,7 +536,9 @@ class JobQueue:
 
     def _start_inst(self, j):
         lane, title, fn, halt, est = j._next[:5]
-        j.state, j.step_title, j.frac, j.text, j.left = 'running', title, 0.0, '', None
+        j.state, j.step_title, j.sfrac, j.text, j.left = 'running', title, 0.0, '', None
+        j._pt = None
+        j.frac = j.overall()
         j.step_t0, j.step_est, j._halt = time.monotonic(), est or 0.0, halt
         if j._stop:
             self._inst = None
@@ -553,11 +591,14 @@ class JobQueue:
         th.start()
 
     def _hook(self, j, t, f, txt, eta):
-        j.frac, j.text, j.left = _mono(j, t, f), (txt or t), eta
+        j.sfrac, j.text, j.left = _mono(j, t, f), (txt or t), eta
+        j.frac = j.overall()
 
     def _start_cpu(self, j):
         lane, title, spec, _h, est = j._next[:5]
-        j.state, j.step_title, j.frac, j.text, j.left = 'running', title, 0.0, '', None
+        j.state, j.step_title, j.sfrac, j.text, j.left = 'running', title, 0.0, '', None
+        j._pt = None
+        j.frac = j.overall()
         j.step_t0, j.step_est = time.monotonic(), est or 0.0
         if j._stop:
             self._finish(j, 'stopped')

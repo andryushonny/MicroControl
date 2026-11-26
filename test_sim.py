@@ -948,8 +948,10 @@ except ValueError as e:
 dx = mc.export_sample(m, ks=[0, kd, k50], drawing=True)              # 10x и 50x и черновик: каждый на своём слое
 doc = ezdxf.readfile(dx if dx.endswith('.dxf') else dx[:-4] + '.dxf')
 ms = doc.modelspace()
-ims = ms.query('IMAGE')
+ims = [i_ for i_ in ms.query('IMAGE') if not i_.dxf.layer.endswith('_SQUARES')]
 assert len(ims) == 2, len(ims)
+sqi = [i_ for i_ in ms.query('IMAGE') if i_.dxf.layer.endswith('_SQUARES')]
+assert sqi and all(os.path.exists(os.path.join(os.path.dirname(dx), i_.image_def.dxf.filename)) for i_ in sqi)   # квадраты — файлами
 nums = {t.dxf.text: np.array(t.dxf.insert)[:2] for t in ms.query('TEXT[layer=="NUMBERS"]')}
 assert "6,7" in nums and np.allclose(nums["6,7"] - (500, -600), (4, 4), atol=0.5), nums.get("6,7")  # крест 6,7: (5P, -6P)
 assert not any(k.startswith('0,') or k.endswith(',0') for k in nums)

@@ -84,6 +84,64 @@ def local_picture(folder, g, uv0, uv1, pitch, max_px=8000, nodes=None):
     return np.dstack([img, cov.astype(np.uint8) * 255]), res, rep
 
 
+def square_tiles(folder, L, poly_S, out_dir, res_um=None, max_side=6000):
+    """Участок poly_S (shapely, мкм столика) — на квадраты решётки L, каждый строго по решётке: пиксель квадрата ->
+    (u, v) решётки -> столик -> мозаика этой съёмки (с совмещением) -> полные кадры (без пересжатия превью).
+    Квадрат на краю участка — его часть (за краем прозрачно). Файлы out_dir/<X>,<Y>.png (BGRA, ровно: кресты по
+    углам квадрата). -> [dict(X, Y, file, uv=кольцо части в (u, v), full, um_per_px)]."""
+    from shapely.geometry import box as _bx, Polygon as _Pg
+    from .mask import Frames
+    from .snap import stage_to_mosaic
+    from . import lattice as LT
+    gs = [poly_S] if poly_S.geom_type == 'Polygon' else list(getattr(poly_S, 'geoms', []))
+    uvp = None
+    for g_ in gs:
+        q_ = _Pg(LT.to_uv(L, np.array(g_.exterior.coords)), [LT.to_uv(L, np.array(h_.coords)) for h_ in g_.interiors])
+        uvp = q_ if uvp is None else uvp.union(q_)
+    if uvp is None or uvp.is_empty:
+        return []
+    uvp = uvp.buffer(0)
+    os.makedirs(out_dir, exist_ok=True)
+    P = float(np.hypot(*L['e1']))
+    fr = Frames(folder)
+    out = []
+    try:
+        px = float(fr.st.meta.get('pixel_size_um') or 1.0)
+        res = max(float(res_um or px), P / max_side)
+        n = int(np.ceil(P / res))
+        a0, b0, a1, b1 = uvp.bounds
+        for a in range(int(np.floor(a0)), int(np.ceil(a1))):
+            for b in range(int(np.floor(b0)), int(np.ceil(b1))):
+                pc = _bx(a, b, a + 1, b + 1).intersection(uvp)
+                if pc.is_empty or pc.area < 1e-4:
+                    continue
+                img = np.full((n, n, 3), 255, np.uint8)
+                cov = np.zeros((n, n), bool)
+                u = a + (np.arange(n) + 0.5) / n
+                for r0 in range(0, n, 512):
+                    v = b + (np.arange(r0, min(n, r0 + 512)) + 0.5) / n
+                    UU, VV = np.meshgrid(u, v)
+                    Q = stage_to_mosaic(folder, LT.to_stage(L, np.c_[UU.ravel(), VV.ravel()])).reshape(len(v), n, 2)
+                    im_, cv_ = fr.remap(np.ascontiguousarray(Q[..., 0], np.float32),
+                                        np.ascontiguousarray(Q[..., 1], np.float32), 255)
+                    img[r0:r0 + len(v)], cov[r0:r0 + len(v)] = im_, cv_
+                mk = np.zeros((n, n), np.uint8)
+                for p_ in ([pc] if pc.geom_type == 'Polygon' else [x for x in getattr(pc, 'geoms', []) if x.geom_type == 'Polygon']):
+                    cv2.fillPoly(mk, [np.int32(np.round((np.array(p_.exterior.coords) - (a, b)) * n))], 255)
+                    for h_ in p_.interiors:
+                        cv2.fillPoly(mk, [np.int32(np.round((np.array(h_.coords) - (a, b)) * n))], 0)
+                al = np.where(cov & (mk > 0), 255, 0).astype(np.uint8)
+                X, Y = a + 1, b + 1
+                fn = f"{X},{Y}.png"
+                cv2.imencode('.png', np.dstack([img, al]))[1].tofile(os.path.join(out_dir, fn))
+                ring = np.array((pc if pc.geom_type == 'Polygon' else max(pc.geoms, key=lambda x: x.area)).exterior.coords)[:-1]
+                out.append(dict(X=X, Y=Y, file=fn, n=n, uv=ring.tolist(), full=bool(pc.area > 0.999),
+                                um_per_px=round(P / n, 5), covered=round(float((al > 0).mean() / max(mk.mean() / 255, 1e-9)), 4)))
+    finally:
+        fr.close()
+    return out
+
+
 def _overview_png(path, pics, outlines, max_side=12000, res=None, max_px=200e6):
     """Картинки (pics: объектив, BGR, 2x3 пиксель -> мкм чертежа, маска) — в одну PNG по порядку pics (первая —
     снизу, последняя — сверху: как слои списка); res — мкм на пиксель (None — как у самой точной картинки); не
@@ -300,6 +358,33 @@ def export_sample(m, ks=None, out=None, dwg=True, verbose=True, nested=False, pn
                 if qi['pixel_source'] != 'crosses':
                     skipped_.append(f"{title(m, k)}: pixel size not calibrated by the crosses (distances by the "
                                     "table value of the objective)")
+                if not stage_frame:                             # литография: участок — на квадраты решётки, каждый
+                    try:                                        # снимок строго по ней (из полных кадров)
+                        from .layers import geom as _gm, covered as _cov
+                        pol_ = _gm(m, r)
+                        cv_ = _cov(sc.folder)
+                        pol_ = pol_.intersection(cv_) if cv_ is not None else pol_
+                        tl_ = square_tiles(sc.folder, L, pol_, os.path.join(out, 'squares', lay))
+                    except Exception as e_:
+                        tl_ = []
+                        skipped_.append(f"{title(m, k)}: squares not cut ({type(e_).__name__}: {e_})")
+                    if tl_:
+                        doc.layers.add(lay + "_SQUARES", color=(i % 6) + 1)
+                        doc.layers.get(lay).off()               # целиком — в слое (выключен); квадраты — поверх
+                        for t_ in tl_:
+                            a_, b_ = t_['X'] - 1, t_['Y'] - 1
+                            fn_ = f"squares/{lay}/{t_['file']}"
+                            nn_ = t_['n']
+                            idf_ = doc.add_image_def(filename=fn_, size_in_pixel=(nn_, nn_))
+                            ims_ = msp.add_image(idf_, insert=(a_ * P, -(b_ + 1) * P), size_in_units=(P, P),
+                                                 dxfattribs={'layer': lay + "_SQUARES"})
+                            ims_.dxf.flags = 1 | 2 | 8
+                            ring_ = np.array(t_['uv']) * (P, -P)
+                            msp.add_lwpolyline([tuple(p_) for p_ in ring_], close=True, dxfattribs={'layer': lay + "_SQUARES"})
+                        local_rep[lay]['squares'] = dict(folder=f"squares/{lay}", n=len(tl_),
+                                                         full=sum(1 for t_ in tl_ if t_['full']),
+                                                         um_per_px=tl_[0]['um_per_px'])
+                        json.dump(tl_, open(os.path.join(out, 'squares', lay, 'squares.json'), 'w', encoding='utf-8'), indent=1)
             sc, jp = None, None
         gs_ = None
         if sc and not stage_frame:

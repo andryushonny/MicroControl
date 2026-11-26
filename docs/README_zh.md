@@ -2,7 +2,7 @@
 
 **用 Python 控制 Optosky ATR8300 拉曼显微镜：扫描基底，把它拼接成一张图，叠加光刻网格，选出需要的方格并导出给 AutoCAD。**
 
-**作者：** A. Lyapeikov, S. Domenko · **版本：** 0.43.18 · English: [README.md](../README.md) · Русский: [README_ru.md](README_ru.md) · PDF: [中文](MicroControl_zh.pdf) · 完整技术参考：[中文](reference_zh.md)、[EN](reference_en.md)、[RU](reference_ru.md)
+**作者：** A. Lyapeikov, S. Domenko · **版本：** 0.44.0 · English: [README.md](../README.md) · Русский: [README_ru.md](README_ru.md) · PDF: [中文](MicroControl_zh.pdf) · 完整技术参考：[中文](reference_zh.md)、[EN](reference_en.md)、[RU](reference_ru.md)
 
 ![总览：带样品网格的 10x 拍摄、方格编号、草稿、其中的 50x 与 100x](img/view.jpg)
 
@@ -75,7 +75,7 @@ m.close()
 
 `X`（任一窗口）或 **Export** 按钮把卡片上勾选的全部内容（默认不勾选）写入 `<样品>/export/`（每次覆盖）。**所有勾选的选区都必须做过 quality 拼接**，否则拒绝导出并列出其余选区。
 
-结果是一张图纸 `export/drawing.dwg`（原点在十字 1,1，按晶格摆正）：各选区的图片按微米放在真实位置，每个单元是闭合方格，十字带编号，每个选区在自己的图层，另有空的 `BONDS` 图层用于画键合线。**只有在十字已标记时才生成图纸**（十字是信标，保证光刻拼合无误）；没有十字时只有图片和 `mixed.png`。旁边是图片（`S03_50x.png` …）和 `mixed.png` —— 所有勾选的拍摄按列表顺序叠加，像素取最精细的那个。若安装了免费的 ODA File Converter，会写出 DWG；否则有 `drawing.dxf`（AutoCAD：另存为 → DWG）。请保持 `export/` 文件夹完整：DWG 中的图片始终是单独的文件。对单个拍摄，`mc.export(folder)` 把其选中的方格校正后（PNG、DXF、编号列表）写入该拍摄的 `export/`。
+每个经过 quality 拼接的选区还会按晶格切成方格：`export/squares/<图层>/<X>,<Y>.png`（每个方格或边缘处的部分一个文件，摆正，十字正好在角上，取自完整帧而非预览），位于图纸自己的图层 `<图层>_SQUARES`；清单为 `squares.json`。结果是一张图纸 `export/drawing.dwg`（原点在十字 1,1，按晶格摆正）：各选区的图片按微米放在真实位置，每个单元是闭合方格，十字带编号，每个选区在自己的图层，另有空的 `BONDS` 图层用于画键合线。**只有在十字已标记时才生成图纸**（十字是信标，保证光刻拼合无误）；没有十字时只有图片和 `mixed.png`。旁边是图片（`S03_50x.png` …）和 `mixed.png` —— 所有勾选的拍摄按列表顺序叠加，像素取最精细的那个。若安装了免费的 ODA File Converter，会写出 DWG；否则有 `drawing.dxf`（AutoCAD：另存为 → DWG）。请保持 `export/` 文件夹完整：DWG 中的图片始终是单独的文件。对单个拍摄，`mc.export(folder)` 把其选中的方格校正后（PNG、DXF、编号列表）写入该拍摄的 `export/`。
 
 `mc.projects()` 和 `mc.all_samples()` 打印表格：id、名称、样品、选区、拍摄、创建、修改、描述（Open 对话框中相同）。在查看器中 Open → **New window** 在单独窗口中显示另一个项目（`mc.view_window(folder)`），当前窗口保持打开。
 

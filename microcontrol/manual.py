@@ -2918,6 +2918,19 @@ def _run(m, fullscreen=False, _keys=None):
             rects['oneside'] = (x_l - 6, cb[1] - 4, cb[2] + 40 + UI.size(t_, FS)[0], cb[3] + 4)
             right = max(right, rects['oneside'][2])
             y += LH
+            sm_ = float(m.sharp_min or 0)                   # порог резкости: ниже — кадр плохой (переснимается)
+            t_ = (f"Bad frame below sharpness {sm_:.0f}" if sm_ > 0 else "Bad frame: sharpness limit off") + f"  (now {sharp:.0f})"
+            ops.append(('t', t_, x_l, y, FS, UI.TEXT if sm_ > 0 else UI.DIM, 1))
+            xb_ = x_l + UI.size(t_, FS)[0] + 12
+            for nm_, kc_ in (("-", '('), ("+", ')'), ("70% of now", '='), ("Off", '{')):
+                bw_ = UI.size(nm_, FS * 0.9)[0] + 14
+                bx_ = (xb_, y - th0 - 4, xb_ + bw_, y + 5)
+                ops.append(('b', bx_, False))
+                ops.append(('t', nm_, xb_ + 7, y, FS * 0.9, UI.TEXT, 1))
+                rects['act:' + kc_] = bx_
+                xb_ += bw_ + 6
+            right = max(right, xb_)
+            y += LH + 2
             xb_ = x_l                                      # редкие дела прибора — кнопками (их буквы — у просмотра)
             for nm_, kc_ in (("Prepare", 'a'), ("Distortion", 'd'), ("Zero here", '0'), ("Steps = frame", 'g'),
                              ("Check directions", 'o'), ("Arrows X", '['), ("Arrows Y", ']'), ("Map 90 deg", '\\'),
@@ -3577,6 +3590,24 @@ def _run(m, fullscreen=False, _keys=None):
                 m._map_win = None
                 msg = (f"Arrows {'left / right' if raw == '[' else 'up / down'} turned the other way, the mini map "
                        f"follows them (remembered; {raw} again: back)")
+            elif raw in ('(', ')', '=', '{'):                # порог резкости (Settings): -, +, 70 % нынешней, выкл
+                sm_ = float(m.sharp_min or 0)
+                if raw == '=':
+                    sm_ = round(0.7 * float(sharp or 0), 1)
+                elif raw == '{':
+                    sm_ = 0.0
+                else:
+                    st_ = max(1.0, round(0.1 * (sm_ or float(sharp or 10)), 0))
+                    sm_ = max(0.0, (sm_ or round(0.7 * float(sharp or 0))) + (st_ if raw == ')' else -st_))
+                m.sharp_min = sm_
+                try:
+                    m._mem.data.setdefault('orientation', {})['sharp_min'] = sm_
+                    m._mem.save()
+                except Exception:
+                    pass
+                msg = (f"Frames less sharp than {sm_:.0f} are bad: re-taken right there during the scan (a little "
+                       f"further along the path), then marked bad. Sharpness now {sharp:.0f}" if sm_ > 0 else
+                       "Sharpness limit off (only frames much blurrier than their neighbours are re-taken)")
             elif raw == '#':                               # кнопка Clear fog: «туман войны» карты — заново
                 fog_of(m).clear()
                 m._map_win = None

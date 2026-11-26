@@ -287,6 +287,9 @@ def _targets(folder, rep):
         key = (t[0] == 'blurry', t[1], t[2])
         if key not in seen:
             seen.add(key); uniq.append(t)
+    # по той же траектории, что и съёмка: в порядке кадров (каждая цель — у ближайшего снятого кадра)
+    near_i = lambda t: t[4] if t[4] is not None else int(np.argmin(np.hypot(p[:, 0] - t[1], p[:, 1] - t[2])))
+    uniq.sort(key=lambda t: (near_i(t), t[0] != 'blurry'))
     return uniq
 
 

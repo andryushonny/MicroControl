@@ -15,7 +15,7 @@ from . import project as P_
 
 AXES = ('x', 'y', 'z')
 ORIENTATION = ('map_flip_x', 'map_flip_y', 'arrows_flip_x', 'arrows_flip_y', 'turn_180', 'swap_xy', 'mirror_x', 'mirror_y', 'reverse_x', 'reverse_y', 'reverse_z',
-               'one_side', 'overshoot', 'map_turn', 'mask_pitch')   # помнится для прибора (подъезд с одной стороны — тоже)
+               'one_side', 'overshoot', 'map_turn', 'mask_pitch', 'sharp_min')   # помнится для прибора (подъезд с одной стороны — тоже)
 WEAK_FOCUS = 1.3      # пик резкости ниже 1.3 × типичной — фокус ненадёжен (мало деталей)
 
 # старые имена (до 0.7.0) -> новые: старое имя даёт ошибку с подсказкой, а не молчит
@@ -282,6 +282,7 @@ class Microscope:
     focus_step = Setting('float', 1, 500, 'um', "Autofocus step")
     focus_every = Setting('int', 1, 100, 'frames', "Scan: focus points every N frames (focus plane)")
     refocus = Setting('bool', doc="Scan: focus again and re-take a blurry frame")
+    sharp_min = Setting('float', 0, 1e9, '', "Scan: a frame less sharp than this is bad - re-taken right there (a little further along the path), then marked bad; 0 - off")
     scan_check = Setting('bool', doc="Scan: first check with the camera which way the picture moves (m.check_orientation())")
     still_check = Setting('bool', doc="Scan: before each picture check that the stage stopped shaking (2 frames compared)")
     frame_format = Setting('choice', None, ('jpg', 'png', 'h5'), '', "Scan: frames as JPG files (small), PNG files (lossless, for lithography) or HDF5 batches (lossless)")
@@ -328,7 +329,7 @@ class Microscope:
         sim = port == 'sim'
         self._fast = sim
         self._cfg.update(objective=objective, light=0, laser=0, laser_max=10.0, exposure=20.0,
-                         fog_refresh=False, map_flip_x=False, map_flip_y=False, map_turn=0, mask_pitch=100.0, arrows_flip_x=False, arrows_flip_y=False, turn_180=False, swap_xy=False, mirror_x=False, mirror_y=False, reverse_x=False, reverse_y=False, reverse_z=False,
+                         fog_refresh=False, sharp_min=0.0, map_flip_x=False, map_flip_y=False, map_turn=0, mask_pitch=100.0, arrows_flip_x=False, arrows_flip_y=False, turn_180=False, swap_xy=False, mirror_x=False, mirror_y=False, reverse_x=False, reverse_y=False, reverse_z=False,
                          motor_step=UM_PER_STEP, max_move=2000.0, max_move_down=2000.0, xy_limit=25000.0, max_jump=3000.0,
                          motor_speed=3000.0,
                          move_pause=0.0 if sim else 0.1, photo_pause=0.0 if sim else 0.1, light_pause=0.0 if sim else 2.0,

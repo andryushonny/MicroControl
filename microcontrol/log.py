@@ -19,7 +19,7 @@ EVENTS = {
     'AF-001':  "Autofocus",        'AF-002':  "Focus plane",     'AF-003': "Focus at limit", 'AF-004': "Focus window moved",
     'MAN-001': "Manual start",     'MAN-002': "Manual end",        'MAN-004': "Manual step", 'MAN-005': "Cross marked", 'MAN-006': "Focus point", 'CEL-001': "Cells scan", 'STI-001': "Stitched", 'STI-002': "Stitch engine", 'MSK-001': "Export", 'MSK-002': "Clean", 'CEL-002': "Cells join", 'MAN-007': "Cross label", 'ORI-001': "Orientation", 'MAN-003': "Area corner",
     'GC-001':  "G-code start",     'GC-002':  "G-code line",       'GC-003':  "G-code end",
-    'SCN-001': "Scan frame",       'SCN-002': "Refocus", 'SCN-003': "Stage still moving",
+    'SCN-001': "Scan frame",       'SCN-002': "Refocus", 'SCN-003': "Stage still moving", 'SCN-004': "Re-take failed",
     'JOI-001': "Join",             'STO-001': "Batch closed", 'STO-005': "JPG not saved",      'SET-001': "Setting changed",
     'MOV-007': "Speed measured",   'MOV-008': "Position confirmed",
     'MOV-012': "Limit code while leaving", 'MOV-013': "Resend, still moving", 'MOV-011': "Motors on",        'CON-005': "Cooling",           'CON-006': "Reconnect",

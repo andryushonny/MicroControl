@@ -294,16 +294,34 @@ class _Recorder:
         with timed("Scan: sharpness check"):
             s = F.sharpness(img, m.focus_method)
         ref = np.median(self.sharp[-20:]) if len(self.sharp) >= 5 else None
+        smin = float(getattr(m, 'sharp_min', 0) or 0)
+        bad = lambda s_: (smin > 0 and s_ < smin) or (ref is not None and s_ < 0.5 * ref)
         refocused = blurry = 0
-        if ref is not None and s < 0.5 * ref:
-            if m.refocus:                                       # мутный кадр: фокус и переснять
-                L.event('SCN-002', f"Frame {self.n + 1} is blurry ({s:.0f} vs {ref:.0f}). Refocusing.")
-                m.focus()
+        tries = 0
+        while bad(s) and tries < 2:                             # плохой кадр — переснять сразу здесь же, чуть дальше
+            tries += 1                                          # по пути (по той же траектории, не потом и не вразброс)
+            L.event('SCN-002', f"Frame {self.n + 1} is blurry (sharpness {s:.0f}"
+                    + (f", needs {smin:.0f}" if smin > 0 else "") + (f", typical {ref:.0f}" if ref is not None else "")
+                    + f"). Re-taking it (try {tries}).")
+            try:
+                if m.refocus:
+                    m.focus()
+                    refocused = 1
+                ms_ = float(m.motor_step or 1.0)
+                dx_ = getattr(m, '_dir', {}).get('x', 0) or 1   # вперёд по ходу съёмки, ~2 % кадра
+                step_ = max(1, int(round(0.02 * m.frame_size[0] / ms_)))
+                t_ = {'x': m._p['x'] + int(np.sign(dx_)) * step_}
+                m._check(t_)
+                m._go(t_)
                 time.sleep(m.photo_pause)
-                img = m.image()
-                s = F.sharpness(img, m.focus_method)
-                refocused = 1
-            blurry = int(s < 0.5 * ref)
+                img2 = m.image()
+                s2 = F.sharpness(img2, m.focus_method)
+                if s2 > s:
+                    img, s = img2, s2
+            except Exception as e:
+                L.event('SCN-004', f"Frame {self.n + 1}: re-take failed: {e}", 30)
+                break
+        blurry = int(bad(s))
         self.sharp.append(s)
         with timed("Scan: saving frame"):
             self._save(img, row, col, s, refocused, blurry)

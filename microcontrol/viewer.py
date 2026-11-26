@@ -131,7 +131,13 @@ class _Scene:
                 u0, v0 = max(0, -ox), max(0, -oy)
                 u1, v1 = min(dw, Wv - ox), min(dh, Hv - oy)
                 if u1 > u0 and v1 > v0:
-                    out[oy + v0:oy + v1, ox + u0:ox + u1] = part[v0:v1, u0:u1]
+                    pc_ = part[v0:v1, u0:u1]
+                    if pc_.ndim == 2:
+                        pc_ = cv2.cvtColor(pc_, cv2.COLOR_GRAY2BGR)
+                    roi_ = out[oy + v0:oy + v1, ox + u0:ox + u1]
+                    # в обзоре «не снято» — чёрное: остаётся фоном (как при крупном масштабе), иначе оно
+                    # закрывало слои других выделений, и при зуме они то появлялись, то пропадали
+                    np.copyto(roi_, pc_, where=(pc_.max(2) > 6)[..., None])
             return out
         P, W, H = self.P, self.W, self.H
         idx = np.flatnonzero((P[:, 0] < x1) & (P[:, 0] + W > x0) & (P[:, 1] < y1) & (P[:, 1] + H > y0))

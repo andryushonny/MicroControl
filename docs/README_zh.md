@@ -2,7 +2,7 @@
 
 **用 Python 控制 Optosky ATR8300 拉曼显微镜：扫描基底，把它拼接成一张图，叠加光刻网格，选出需要的方格并导出给 AutoCAD。**
 
-**作者：** A. Lyapeikov, S. Domenko · **版本：** 0.43.11 · English: [README.md](../README.md) · Русский: [README_ru.md](README_ru.md) · PDF: [中文](MicroControl_zh.pdf) · 完整技术参考：[中文](reference_zh.md)、[EN](reference_en.md)、[RU](reference_ru.md)
+**作者：** A. Lyapeikov, S. Domenko · **版本：** 0.43.12 · English: [README.md](../README.md) · Русский: [README_ru.md](README_ru.md) · PDF: [中文](MicroControl_zh.pdf) · 完整技术参考：[中文](reference_zh.md)、[EN](reference_en.md)、[RU](reference_ru.md)
 
 ![总览：带样品网格的 10x 拍摄、方格编号、草稿、其中的 50x 与 100x](img/view.jpg)
 

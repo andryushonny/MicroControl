@@ -1094,11 +1094,14 @@ def _view_one(folder, fullscreen, keys, car):
         unseed()
         Mc = from_view((v[0] + 0.5, v[1] + 0.5))
         d = np.zeros(2)
-        if snap:
-            r = int(min(150, max(8, 15.0 / px_um)))
-            reg = sc.render(Mc[0], Mc[1], 1.0, 4 * r + 1, 4 * r + 1)
+        if snap:                                            # окно поиска — ±30 мкм при любом объективе: на 50x-100x
+            k_ = min(1.0, px_um / 0.25)                     # крест в сотни пикселей — окно в уменьшенной копии
+            r = int(min(150, max(8, 15.0 * k_ / px_um)))    # (~0.25 мкм/px), иначе шаблон «+» его не накрывает
+            reg = sc.render(Mc[0], Mc[1], k_, 4 * r + 1, 4 * r + 1)
             from .mask import meas_gray
-            d, resp = snap_cross(meas_gray(reg), r, arm=g.arm, angle=g.angle_deg())
+            d, resp = snap_cross(meas_gray(reg), r, arm=(g.arm * k_ if g.arm else None), angle=g.angle_deg())
+            d = np.asarray(d, float) / k_
+            # (в уменьшенной копии пиксель ~0.1 мкм; центр по краям плеч — доли пикселя)
         try:
             was_ = g.ready()
             if was_:

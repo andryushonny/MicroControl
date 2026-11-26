@@ -2812,6 +2812,22 @@ def _run(m, fullscreen=False, _keys=None):
             cm_ = np.zeros((H, Wcam), np.uint8)              # дополненная реальность — только на кадре камеры
             cv2.fillPoly(cm_, [np.int32(np.round(cam_poly_))], 255, cv2.LINE_8)
             view[:, :Wcam] = np.where(cm_[..., None] > 0, view[:, :Wcam], base)
+            try:                                           # прицел: центр кадра — куда встанет центр при смене объектива
+                c_ = np.asarray(i2v(np.array([img.shape[1] / 2.0, img.shape[0] / 2.0])), float)
+                cx_, cy_ = int(round(c_[0])), int(round(c_[1]))
+                a_ = max(8, int(H / 60))
+                if a_ + 2 <= cx_ < Wcam - a_ - 2 and a_ + 2 <= cy_ < H - a_ - 2:
+                    roi_ = view[cy_ - a_ - 2:cy_ + a_ + 3, cx_ - a_ - 2:cx_ + a_ + 3]
+                    ov_ = roi_.copy()
+                    o_ = a_ + 2
+                    for col_, th_ in (((20, 20, 20), 3), ((255, 255, 255), 1)):
+                        cv2.line(ov_, (o_ - a_, o_), (o_ - 3, o_), col_, th_, cv2.LINE_AA)
+                        cv2.line(ov_, (o_ + 3, o_), (o_ + a_, o_), col_, th_, cv2.LINE_AA)
+                        cv2.line(ov_, (o_, o_ - a_), (o_, o_ - 3), col_, th_, cv2.LINE_AA)
+                        cv2.line(ov_, (o_, o_ + 3), (o_, o_ + a_), col_, th_, cv2.LINE_AA)
+                    cv2.addWeighted(ov_, 0.55, roi_, 0.45, 0, dst=roi_)
+            except Exception:
+                pass
             if m.laser:                                    # лазер включён — видно всегда
                 t_ = f"LASER ON  {m.laser:g} mW   (I: off)"
                 tw_ = UI.size(t_, 0.7, 2)[0]

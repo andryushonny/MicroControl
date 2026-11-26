@@ -334,7 +334,7 @@ class Microscope:
                          move_pause=0.0 if sim else 0.1, photo_pause=0.0 if sim else 0.1, light_pause=0.0 if sim else 2.0,
                          focus_method='vollath', af_step=0.0, af_range=0.0, focus_every=5, refocus=False, batch_size=100, save_jpg=True, jpg_scale=0.5,
                          frame_format='jpg', frame_scale=1.0, jpg_quality=95, scan_check=True, still_check=True,
-                         one_side=False, overshoot=10,
+                         one_side=True, overshoot=10,
                          log_bytes=True)
         self._open_port(port, force)
         if self._link is not None and self._link.info.get('sim'):    # сервер на симуляторе: паузы как у симулятора
@@ -363,6 +363,14 @@ class Microscope:
                 orient.setdefault('map_flip_y', True)  # (по словам пользователя); [ и ] в ручном режиме — поменять
                 orient.setdefault('turn_180', True)    # ATR8300: кадр камеры перевёрнут (отражён по X и Y) — проверено
                 orient.setdefault('map_turn', 90)      # ATR8300: карта образца — на 90° против часовой (по словам пользователя)
+            if not self._mem.data.get('one_side_default'):   # 0.43.6: подъезд с одной стороны — по умолчанию (раз)
+                orient['one_side'] = True
+                self._mem.data['one_side_default'] = True
+                self._mem.data.setdefault('orientation', {})['one_side'] = True
+                try:
+                    self._mem.save()
+                except Exception:
+                    pass
             self._cfg.update(orient)
             self.references.update({k_: v_ for k_, v_ in (self._mem.data.get('references') or {}).items()
                                     if v_ and os.path.exists(v_)})   # плоское поле и тёмный кадр — с прошлых сеансов

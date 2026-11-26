@@ -1127,11 +1127,13 @@ def _run(m, fullscreen=False, _keys=None):
         nav.turn = int(getattr(m, 'map_turn', 0) or 0) % 360   # поворот карты (\\: ещё на 90°, помнится)
         from .util import orient_of
         Q_ = orient_of(m._pixels_per_step())                # образец на карте — как в камере (T, зеркала)
-        if not np.array_equal(Q_, nav.Q):
-            nav.Q = Q_
-            try:                                           # просмотр (свой процесс) — так же
+        nav.Q = Q_
+        R_ = [int(round(v)) for v in np.ravel(nav.R)]       # просмотр (свой процесс) — так же, как карта:
+        if R_ != nv.get('_orient_w'):                       # камера (T, зеркала) и поворот карты (\)
+            nv['_orient_w'] = R_
+            try:
                 if not os.environ.get('MC_TEST') or os.environ.get('MC_UI'):
-                    set_ui_pref('orient', [int(v) for v in np.ravel(Q_)])
+                    set_ui_pref('orient', R_)
             except OSError:
                 pass
         if nav.c is None:                                  # первый раз: всё, что есть, и камера

@@ -802,6 +802,7 @@ def _view_one(folder, fullscreen, keys, car):
                 from .snap import geometry
                 from .util import ui_pref as _uq
                 q_ = _uq('orient')
+                st['_Vq'] = q_
                 Q_ = np.array(q_, float).reshape(2, 2) if q_ else np.eye(2)
                 Mo_ = np.asarray(geometry(folder)['Mo'], float)        # px мозаики на шаг: столбцы — оси столика
                 best_ = None
@@ -3448,6 +3449,14 @@ def _view_one(folder, fullscreen, keys, car):
             st['acted'] = False
         if _t.monotonic() - st.get('_sync_t', 0) > 0.5:  # окно микроскопа поменяло образец или кисть —
             st['_sync_t'] = _t.monotonic()                 # показать то же, что и там
+            try:                                           # карту там повернули (\, T, зеркала): вид — так же
+                from .util import ui_pref as _uq2
+                if '_Vq' in st and _uq2('orient') != st['_Vq']:
+                    st['_V'] = None
+                    st['_layers'] = st['_top'] = None
+                    st['dirty'] = True
+            except Exception:
+                pass
             lsig_ = (_mt(os.path.join(folder, 'index.csv')), _mt(os.path.join(folder, 'join', 'live.json')),
                      _mt(os.path.join(folder, 'join', 'stitch.json')))   # кадры, живая сшивка, сшивка (не правка J)
             if st.get('_lsig') is None:

@@ -105,6 +105,17 @@ def summary_all():
     return "; ".join(q.summary() for q in _ALL if q.active())
 
 
+def _mono(j, t, f):
+    """Доля задачи не откатывается назад: новый этап шага (своя полоса с нуля: чтение, швы, запись) идёт по
+    остатку полосы (каждый этап — до 90 % остатка, 100 % — когда шаг сделан)."""
+    cur = float(j.frac or 0.0)
+    key = (j.step_title, t)
+    if getattr(j, '_pt', None) != key:
+        j._pb = cur if getattr(j, '_pt', None) is not None and j._pt[0] == j.step_title else 0.0
+        j._pt = key
+    return max(cur, j._pb + (1.0 - j._pb) * 0.9 * min(1.0, max(0.0, float(f or 0.0))))
+
+
 class JobQueue:
     def __init__(self, m=None, workers=None):
         self.m = m
@@ -542,7 +553,7 @@ class JobQueue:
         th.start()
 
     def _hook(self, j, t, f, txt, eta):
-        j.frac, j.text, j.left = f, (txt or t), eta
+        j.frac, j.text, j.left = _mono(j, t, f), (txt or t), eta
 
     def _start_cpu(self, j):
         lane, title, spec, _h, est = j._next[:5]

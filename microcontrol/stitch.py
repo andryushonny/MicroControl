@@ -283,6 +283,8 @@ def _pair_full(st, ia, ib, d, W, H, sigma, min_ov=0.15, peaks=8):
         if o is None:
             continue
         dt = -o
+        if np.hypot(*d) > 0.25 * min(W, H) and np.hypot(*dt) < 0.05 * min(W, H):
+            continue                                            # ~0 при большом шаге столика: пыль / узор на матрице
         e_ = _ncc_err(a, b, o[0], o[1])
         if e_ < best[1] - 0.02 or (e_ < best[1] + 0.02 and best[0] is not None
                                    and np.hypot(*(dt - d)) < np.hypot(*(best[0] - d))):
@@ -490,6 +492,21 @@ def stitch(folder, engine='builtin', max_shift_um=40.0, sigma=None, alpha=0.01, 
 
 
 @timed_fn('Stitch: seams')
+def _model_sane(M, Ast, tol=0.15):
+    """Модель столик -> пиксели по швам близка к заданной (масштаб и поворот в пределах tol)?"""
+    try:
+        D = np.asarray(M, float) @ np.linalg.pinv(np.asarray(Ast, float))
+        return bool(np.isfinite(D).all() and np.abs(D - np.eye(2)).max() < tol)
+    except np.linalg.LinAlgError:
+        return False
+
+
+def _collapsed(pos, pred, W, H):
+    """Кадры съехали в кучу (охват мозаики сильно меньше, чем по столику)?"""
+    sp, sq = np.ptp(pos, 0), np.ptp(pred, 0)
+    return bool(np.any((sq > 0.5 * np.array([W, H])) & (sp < 0.6 * sq)))
+
+
 def _builtin(st, pred, p, W, H, max_shift, sigma, alpha, verbose, A=None, cache=None):
     n = len(pred)
     pad = int(max_shift)
@@ -627,6 +644,8 @@ def _builtin(st, pred, p, W, H, max_shift, sigma, alpha, verbose, A=None, cache=
                     break
                 inl = new
             model = sol[:2].T
+            if not _model_sane(model, Ast):                     # швы «нашли» другой масштаб или поворот: это не
+                model, axes = Ast, []                           # образец, а пыль / узор на матрице, общие у кадров
             for i_, j_ in enumerate(axes):                          # шов: β·Δs (Δs = ±2), кадр: β·s (s = ±1)
                 Bl[:, j_] = sol[2 + i_]
             ok = ok_
@@ -729,6 +748,12 @@ def _builtin(st, pred, p, W, H, max_shift, sigma, alpha, verbose, A=None, cache=
         if redone:
             pos, res, w, w0, dropped, model, Bl, base, ok, Ast, lam = solve_all(meas, err)
     keep = (w0 > 0) & (res < 3.0)
+    note_ = None
+    if _collapsed(pos, pred, W, H):                             # кадры съехали в кучу: швы — по пыли / узору матрицы
+        pos, keep = pred.copy(), np.zeros(len(pairs), bool)     # (одинаковому на всех кадрах), а не по образцу
+        res = np.hypot(*((pos[J] - pos[I]) - meas).T)
+        note_ = "seams follow dust or a pattern on the camera, not the sample: frames placed by the stage"
+        L.event('STI-006', f"{getattr(st, 'folder', '')}: {note_}", 30)
     if pr:
         pr.stage(f"{int(keep.sum())} of {len(pairs)} seams accepted")
         pr.close()
@@ -743,7 +768,8 @@ def _builtin(st, pred, p, W, H, max_shift, sigma, alpha, verbose, A=None, cache=
                      model_window_px=round(thr_m, 1), far_from_model=int(len(far)), refound_near_model=refound,
                      backlash_um=[round(float(v), 2) for v in bl_um],
                      residual_px=f"{np.nanmedian(res_k):.2f} median, {np.nanmax(res_k):.2f} max", stage_sigma_px=round(1.0 / lam, 2),
-                     camera=f"turn {ang:+.2f} deg, {sc:.4f} px/step", model=model.tolist())
+                     camera=f"turn {ang:+.2f} deg, {sc:.4f} px/step", model=model.tolist(),
+                     **({'note': note_} if note_ else {}))
 
 
 def _ashlar(st, pred, px, max_shift_um, sigma, verbose):

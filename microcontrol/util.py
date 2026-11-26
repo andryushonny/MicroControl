@@ -197,6 +197,8 @@ class Progress(metaclass=_ProgressMeta):
 
     def extend(self, n):
         """Работы стало больше на n (ещё один раунд): доля не прыгает к 100 %, пока она идёт."""
+        if n > 0:                                           # доля не откатывается: остаток работы — на остаток полосы
+            self._f0, self._d0 = self._frac(), self.done
         self.total += max(0, int(n))
         self.update(0, force=True)
 
@@ -224,7 +226,8 @@ class Progress(metaclass=_ProgressMeta):
         return lead + t if t else ""
 
     def _frac(self):
-        return min(1.0, (self.done + self.sub_frac * self.step) / self.total)
+        f0, d0 = getattr(self, '_f0', 0.0), getattr(self, '_d0', 0)
+        return min(1.0, f0 + (1.0 - f0) * (self.done + self.sub_frac * self.step - d0) / max(1e-9, self.total - d0))
 
     def _set_sub(self, sub, frac=0.0):
         """Подпись от вложенной полосы (фокус внутри скана) идёт после своей; доля текущего шага (вес step)

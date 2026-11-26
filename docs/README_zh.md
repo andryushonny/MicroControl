@@ -2,7 +2,7 @@
 
 **用 Python 控制 Optosky ATR8300 拉曼显微镜：扫描基底，把它拼接成一张图，叠加光刻网格，选出需要的方格并导出给 AutoCAD。**
 
-**作者：** A. Lyapeikov, S. Domenko · **版本：** 0.43.1 · English: [README.md](../README.md) · Русский: [README_ru.md](README_ru.md) · PDF: [中文](MicroControl_zh.pdf) · 完整技术参考：[中文](reference_zh.md)、[EN](reference_en.md)、[RU](reference_ru.md)
+**作者：** A. Lyapeikov, S. Domenko · **版本：** 0.43.2 · English: [README.md](../README.md) · Русский: [README_ru.md](README_ru.md) · PDF: [中文](MicroControl_zh.pdf) · 完整技术参考：[中文](reference_zh.md)、[EN](reference_en.md)、[RU](reference_ru.md)
 
 ![总览：带样品网格的 10x 拍摄、方格编号、草稿、其中的 50x 与 100x](img/view.jpg)
 
@@ -273,7 +273,7 @@ T = T_0 + t\,N,
 | `Shift+Esc` | 关闭 | 显微镜窗口（只能这样） | ✓ |
 | `Ctrl+P` | Settings 面板（左侧） | 显示 / 隐藏 | — |
 
-显微镜窗口的 **Settings 面板**（Settings 按钮、左侧箭头或 `Ctrl+P`）：Z 跟随对焦点、单向接近（回程间隙）、**Prepare**、**Distortion**（畸变）、**Zero here**（此处置零）、**Steps = frame**（步长 = 一帧）、**Check directions**（检查方向）、**Arrows X / Y**（方向键反向）、**Map 90 deg**（地图旋转）。顶部：Prepare、New area、Scan area、Stitch、Export、Settings；菜单：Open、New、Info、Scans（所选选区的历史；与其卡片上的 `...` 相同）、Queue、View、Help。在地图上 Ctrl+拖动 —— 当前物镜的方框（晶体）；任务进行中按 `Esc` —— 停止。
+显微镜窗口的 **Settings 面板**（Settings 按钮、左侧箭头或 `Ctrl+P`）：Z 跟随对焦点、单向接近（回程间隙）、**Prepare**、**Distortion**（畸变）、**Zero here**（此处置零）、**Steps = frame**（步长 = 一帧）、**Check directions**（检查方向）、**Arrows X / Y**（方向键反向）、**Map 90 deg**（地图旋转）、**Clear fog**（清除地图上“战争迷雾”的实时帧；设置 `m.fog_refresh` 默认开启：在已到过的地方行驶时也会重新拍摄，迷雾被新帧覆盖）。顶部：Prepare、New area、Scan area、Stitch、Export、Settings；菜单：Open、New、Info、Scans（所选选区的历史；与其卡片上的 `...` 相同）、Queue、View、Help。在地图上 Ctrl+拖动 —— 当前物镜的方框（晶体）；任务进行中按 `Esc` —— 停止。
 
 ---
 

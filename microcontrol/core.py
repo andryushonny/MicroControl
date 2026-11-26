@@ -245,6 +245,7 @@ class Microscope:
     laser_max = Setting('float', 0, 100, 'mW', "Highest allowed laser power")
     exposure = Setting('float', 0.05, 1000, 'ms', "Camera exposure time")
     pixel_size = Setting('float', 0.001, 10, 'um', "Size of one camera pixel on the sample")
+    fog_refresh = Setting('bool', doc="Manual map: live frames of the fog of war overwrite the old ones also where the camera has already been (the sample may have changed); False: shoot only where it has not been")
     map_flip_x = Setting('bool', doc="Manual: mini map turned over left-right (only the picture of the map)")
     map_flip_y = Setting('bool', doc="Manual: mini map turned over up-down (only the picture of the map)")
     mask_pitch = Setting('float', 1, 10000, 'um', "Pitch of the lithography crosses on the mask (its design value): every size in the drawings and the pixel calibration come from it (remembered)")
@@ -327,7 +328,7 @@ class Microscope:
         sim = port == 'sim'
         self._fast = sim
         self._cfg.update(objective=objective, light=0, laser=0, laser_max=10.0, exposure=20.0,
-                         map_flip_x=False, map_flip_y=False, map_turn=0, mask_pitch=100.0, arrows_flip_x=False, arrows_flip_y=False, turn_180=False, swap_xy=False, mirror_x=False, mirror_y=False, reverse_x=False, reverse_y=False, reverse_z=False,
+                         fog_refresh=True, map_flip_x=False, map_flip_y=False, map_turn=0, mask_pitch=100.0, arrows_flip_x=False, arrows_flip_y=False, turn_180=False, swap_xy=False, mirror_x=False, mirror_y=False, reverse_x=False, reverse_y=False, reverse_z=False,
                          motor_step=UM_PER_STEP, max_move=2000.0, max_move_down=2000.0, xy_limit=25000.0, max_jump=3000.0,
                          motor_speed=3000.0,
                          move_pause=0.0 if sim else 0.1, photo_pause=0.0 if sim else 0.1, light_pause=0.0 if sim else 2.0,

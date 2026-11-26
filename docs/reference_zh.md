@@ -598,7 +598,7 @@ st.export()                                    # 用于 Fiji 的 PNG 文件和 T
 | `Shift+Esc` | 关闭 | 显微镜窗口（只能这样） | ✓ |
 | `Ctrl+P` | Settings 面板（左侧） | 显示 / 隐藏 | — |
 
-显微镜窗口的 **Settings 面板**（Settings 按钮、左侧箭头或 `Ctrl+P`）：Z 跟随对焦点、单向接近（回程间隙）、**Prepare**、**Distortion**（畸变）、**Zero here**（此处置零）、**Steps = frame**（步长 = 一帧）、**Check directions**（检查方向）、**Arrows X / Y**（方向键反向）、**Map 90 deg**（地图旋转）。顶部：Prepare、New area、Scan area、Stitch、Export、Settings；菜单：Open、New、Info、Scans（所选选区的历史：View、Make main）、Queue、View、Help。在地图上 Ctrl+拖动 —— 当前物镜的方框（晶体）；任务进行中按 `Esc` —— 停止。
+显微镜窗口的 **Settings 面板**（Settings 按钮、左侧箭头或 `Ctrl+P`）：Z 跟随对焦点、单向接近（回程间隙）、**Prepare**、**Distortion**（畸变）、**Zero here**（此处置零）、**Steps = frame**（步长 = 一帧）、**Check directions**（检查方向）、**Arrows X / Y**（方向键反向）、**Map 90 deg**（地图旋转）、**Clear fog**（清除地图上“战争迷雾”的实时帧；设置 `m.fog_refresh` 默认开启：在已到过的地方行驶时也会重新拍摄，迷雾被新帧覆盖）。顶部：Prepare、New area、Scan area、Stitch、Export、Settings；菜单：Open、New、Info、Scans（所选选区的历史：View、Make main）、Queue、View、Help。在地图上 Ctrl+拖动 —— 当前物镜的方框（晶体）；任务进行中按 `Esc` —— 停止。
 
 ![剖面（P）：横跨十字臂的两条线、沿线的 R、G、B，边缘以黄色显示在地图、预览和图上](img/profiles.jpg)
 
@@ -968,6 +968,7 @@ jupyter notebook
 | 停在 `Port … opening`，然后 `E108` | 串口驱动无响应（通常在之前的故障之后） | 重新插拔控制器 USB，重启内核 |
 | `E102`，Optosky 软件提示「对端口 … 的访问被拒绝」 | 串口被其他程序占用 | `python -m microcontrol status`；`python -m microcontrol stop`（必要时在管理员命令行中） |
 | 连接时 `E301` | 控制器无应答或失去同步 | 关闭 Optosky，重新插拔 USB，`python -m microcontrol probe` |
+| 拼接后所有帧都在同一位置（只看到一帧） | 接缝匹配到了相机传感器上的灰尘或条纹（每帧都相同），样品本身几乎是空的 | 已在 0.43.2 修复：此类接缝被丢弃，帧保持在载物台放置的位置（`join/stitch.json` 中的 `note`）；重新拼接（Shift+J 或 `mc.stitch(folder)`） |
 | 停在 `Camera opening`，然后 `E505` | 相机被其他程序占用或 USB 卡住 | 关闭 Optosky 和 MindVision 软件，重新插拔相机 USB；不带相机工作：`camera=False` |
 | `E307`；Windows 错误 `ClearCommError … does not recognize the command` | 串口丢失：USB 重新连接或被 Windows 置于休眠 | 连接会自动恢复；若反复出现 —— 关闭 USB 节能（第 5.6 节） |
 | `E306`「仍在运动」 | 移动在 5 s 内未结束 | 降低 `m.motor_speed`，检查载物台，`m.confirm_position()` |

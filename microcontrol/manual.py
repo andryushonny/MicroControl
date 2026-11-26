@@ -311,7 +311,9 @@ def fog_trace(m):
     def trace(x, y, shot):
         f = fog_of(m)
         if not shot:
-            return not f.covered(x + m._off['x'], y + m._off['y'])
+            # туман перезаписывается новыми кадрами: вдруг на образце что-то изменилось. Снимать только в ещё
+            # не виденных местах: m.fog_refresh = False
+            return bool(m.fog_refresh) or not f.covered(x + m._off['x'], y + m._off['y'])
         img = m.image(0)
         f.add(img, camera_box(m, img.shape), min_move=0.0)
         return True
@@ -2878,7 +2880,8 @@ def _run(m, fullscreen=False, _keys=None):
             y += LH
             xb_ = x_l                                      # редкие дела прибора — кнопками (их буквы — у просмотра)
             for nm_, kc_ in (("Prepare", 'a'), ("Distortion", 'd'), ("Zero here", '0'), ("Steps = frame", 'g'),
-                             ("Check directions", 'o'), ("Arrows X", '['), ("Arrows Y", ']'), ("Map 90 deg", '\\')):
+                             ("Check directions", 'o'), ("Arrows X", '['), ("Arrows Y", ']'), ("Map 90 deg", '\\'),
+                             ("Clear fog", '#')):
                 bw_ = UI.size(nm_, FS * 0.9)[0] + 14
                 if xb_ + bw_ > max(right, x_l + 330) and xb_ > x_l:
                     xb_ = x_l
@@ -3534,6 +3537,10 @@ def _run(m, fullscreen=False, _keys=None):
                 m._map_win = None
                 msg = (f"Arrows {'left / right' if raw == '[' else 'up / down'} turned the other way, the mini map "
                        f"follows them (remembered; {raw} again: back)")
+            elif raw == '#':                               # кнопка Clear fog: «туман войны» карты — заново
+                fog_of(m).clear()
+                m._map_win = None
+                msg = "Fog of war cleared (the live frames on the map; the scans are not touched)"
             elif raw == '\\':                              # \: карта образца — ещё на 90° против часовой (помнится)
                 m.map_turn = (int(m.map_turn) + 90) % 360
                 nav.c = None                               # вид — заново, чтобы всё поместилось

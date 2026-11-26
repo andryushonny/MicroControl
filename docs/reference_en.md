@@ -597,7 +597,7 @@ Result: `join/positions_all.csv`, `join/stitch.json`, `join/seams.npz` (seams), 
 | `Shift+Esc` | exit | the microscope window (only so) | ✓ |
 | `Ctrl+P` | Settings panel (left) | show / hide | — |
 
-**Settings panel** of the microscope window (button Settings, the arrow on the left or `Ctrl+P`): Z follows the focus points, One-side approach (backlash), **Prepare**, **Distortion**, **Zero here**, **Steps = frame**, **Check directions**, **Arrows X / Y** the other way, **Map 90 deg**. On top: Prepare, New area, Scan area, Stitch, Export, Settings; the menu: Open, New, Info, Scans (history of the chosen selection: View, Make main), Queue, View, Help. Ctrl+drag on the map — a box on the objective in place (a crystal); `Esc` during a job — stop it.
+**Settings panel** of the microscope window (button Settings, the arrow on the left or `Ctrl+P`): Z follows the focus points, One-side approach (backlash), **Prepare**, **Distortion**, **Zero here**, **Steps = frame**, **Check directions**, **Arrows X / Y** the other way, **Map 90 deg**, **Clear fog** (forget the live frames of the fog of war on the map; the setting `m.fog_refresh`, on by default, makes drives over already seen places shoot again, so the fog is overwritten with new frames). On top: Prepare, New area, Scan area, Stitch, Export, Settings; the menu: Open, New, Info, Scans (history of the chosen selection: View, Make main), Queue, View, Help. Ctrl+drag on the map — a box on the objective in place (a crystal); `Esc` during a job — stop it.
 
 ![Profiles (P): two lines across the arms of a cross, R, G, B along them, the edges in yellow on the map, in the preview and on the plots](img/profiles.jpg)
 
@@ -967,6 +967,7 @@ On connection each stage is printed: `Port … opening`, `Controller …`, `Came
 | Stops at `Port … opening`, then `E108` | the port driver does not respond (often after a previous failure) | reconnect the controller USB, restart the kernel |
 | `E102`, the Optosky program says "Access to the port … is denied" | the port is held by another program | `python -m microcontrol status`; `python -m microcontrol stop` (in an administrator console if needed) |
 | `E301` on connection | the controller does not respond or is out of sync | close Optosky, reconnect USB, `python -m microcontrol probe` |
+| After stitching all frames lie in one place (one frame seen) | the seams followed dust or stripes on the camera (the same on every frame), the sample itself is almost empty | fixed in 0.43.2: such seams are rejected, the frames stay where the stage put them (`note` in `join/stitch.json`); stitch again (Shift+J or `mc.stitch(folder)`) |
 | Stops at `Camera opening`, then `E505` | the camera is held by another program or USB hung | close Optosky and the MindVision program, reconnect the camera USB; work without the camera: `camera=False` |
 | `E307`; Windows error `ClearCommError … does not recognize the command` | the port was lost: USB reconnected or was put to sleep by Windows | the link is restored automatically; if it repeats — turn off USB power saving (section 5.6) |
 | `E306` "still moving" | the move did not end within 5 s | lower `m.motor_speed`, check the stage, `m.confirm_position()` |

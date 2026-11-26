@@ -2682,8 +2682,15 @@ SM75.drive_to(m, X0 + 6 * fw, Y0 + 4 * fh, trace=M75.fog_trace(m))              
 for k in range(1, 6):                                                                    # след — на всём пути
     assert fg75.covered(X0 + k * fw, Y0) and fg75.covered(X0 + 6 * fw, Y0 + k * fh * 0.8), k
 assert not fg75.covered(X0 + 3 * fw, Y0 + 3 * fh)                                        # в стороне — туман
+m.fog_refresh = False
 SM75.drive_to(m, X0, Y0); n0_ = fg75.ver; SM75.drive_to(m, X0 + 6 * fw, Y0 + 4 * fh, trace=M75.fog_trace(m))
-assert fg75.ver - n0_ <= 1                                                                # там, где уже был, не стоит
+assert fg75.ver - n0_ <= 1                                                                # False: где уже был, не снимает
+m.fog_refresh = True
+SM75.drive_to(m, X0, Y0); n0_ = fg75.ver; SM75.drive_to(m, X0 + 6 * fw, Y0 + 4 * fh, trace=M75.fog_trace(m))
+assert fg75.ver - n0_ >= 5                                                                # True: туман перезаписан новыми кадрами
+n75 = len(fg75.tiles); assert n75 >= 1 and fg75.covered(X0 + 3 * fw, Y0)
+M75.run(m, fullscreen=False, _keys=[M75.INT + ord('#'), -1, -1])                          # кнопка Clear fog (Settings)
+assert not M75.fog_of(m).covered(X0 + 3 * fw, Y0)
 m.objective = 10; m.area = mc.Area(0, 0, fw, fh); SM75.persist(m)
 r50 = dict(m._regions[0]); r50['obj'] = 50
 m.objective = 10
@@ -2927,3 +2934,39 @@ try:
 finally:
     srv79.terminate(); srv79.wait(10)
 print(f"Network: the server is found by itself (net://auto, find), busy shown; an AI agent over MCP on another PC drives it through the server: OK")
+
+
+# ------------------------------------------------------------------ 80. Пустой образец, пыль на матрице: швы не сводят кадры в кучу
+import csv
+from microcontrol.storage import ScanData, meta_A
+m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp()); w = m._world
+rng80 = np.random.default_rng(80)
+dust80 = None
+_f80 = w._frame
+def _fr80(*a, **k):                                          # светлое пустое поле + пыль и полосы матрицы (одни на всех кадрах)
+    global dust80
+    im_ = _f80(*a, **k)
+    if dust80 is None:
+        h_, w_ = im_.shape[:2]
+        d_ = np.zeros((h_, w_), np.float32)
+        d_[:, ::7] -= 6.0
+        for _ in range(60):
+            cv2.circle(d_, (int(rng80.integers(w_)), int(rng80.integers(h_))), int(rng80.integers(2, 9)), -60.0, -1)
+        dust80 = cv2.GaussianBlur(d_, (0, 0), 1.0)
+    base_ = 215.0 + rng80.normal(0, 1.5, im_.shape[:2]).astype(np.float32) + dust80
+    return np.repeat(np.clip(base_, 0, 255).astype(np.uint8)[..., None], 3, axis=2)
+w._frame = _fr80
+fw, fh = m.frame_size
+m.area = mc.Area(0, 0, 4 * fw * 0.9, 3 * fh * 0.9); f80 = m.scan()
+fo80 = f80 if os.path.exists(os.path.join(f80, 'frames')) else next(os.path.join(f80, d_) for d_ in sorted(os.listdir(f80)) if os.path.exists(os.path.join(f80, d_, 'frames')))
+for mode80 in ('quick', 'quality'):
+    mc.stitch(fo80, mode=mode80, verbose=False)
+    st80 = ScanData(fo80); H80, W80 = st80.shape[:2]
+    p80 = np.array([[r['x_p'], r['y_p']] for r in st80.index], float)
+    pred80 = -(p80 @ meta_A(st80.meta, W80, H80).T)
+    pos80 = np.array([[float(r['x_px']), float(r['y_px'])] for r in csv.DictReader(open(os.path.join(fo80, 'join', 'positions_all.csv'), encoding='utf-8'))])
+    st80.close()
+    sp80, sq80 = np.ptp(pos80, 0), np.ptp(pred80, 0)
+    assert np.all(sp80 > 0.8 * sq80), (mode80, sp80, sq80)            # мозаика — во весь размер, не один кадр
+m.close()
+print("Empty sample with dust on the camera: frames are not pulled into one pile (quick and quality): OK")

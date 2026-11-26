@@ -26,7 +26,7 @@ EVENTS = {
     'MOV-009': "Home set",         'MOV-010': "Go home",           'CON-004': "Position restored",
     'STP-001': "Emergency stop",   'LCK-001': "Control lock",
     'SAF-001': "Guard: switched off after a crash",
-    'QLT-001': "Quality picture",  'QLT-002': "Quality: re-shot",  'STI-005': "Quick stitch",
+    'QLT-001': "Quality picture",  'QLT-002': "Quality: re-shot",  'STI-005': "Quick stitch", 'STI-006': "Stitch: frames by the stage",
     'NET-001': "Server",           'NET-002': "Server: program",   'NET-003': "Server: safe off",
     'HW-TX':   "Bytes sent",       'HW-RX':   "Bytes received",
 }

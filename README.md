@@ -2,7 +2,7 @@
 
 **Python control of the Optosky ATR8300 Raman microscope: scan a substrate, stitch one picture of it, put the lithography grid on it, choose the squares you need and export them for AutoCAD.**
 
-**Authors:** A. Lyapeikov, S. Domenko · **Version:** 0.43.1 · Русский: [docs/README_ru.md](docs/README_ru.md) · 中文: [docs/README_zh.md](docs/README_zh.md) · PDF: [EN](docs/MicroControl_en.pdf), [RU](docs/MicroControl_ru.pdf), [中文](docs/MicroControl_zh.pdf) · Full technical reference: [EN](docs/reference_en.md), [RU](docs/reference_ru.md), [中文](docs/reference_zh.md)
+**Authors:** A. Lyapeikov, S. Domenko · **Version:** 0.43.2 · Русский: [docs/README_ru.md](docs/README_ru.md) · 中文: [docs/README_zh.md](docs/README_zh.md) · PDF: [EN](docs/MicroControl_en.pdf), [RU](docs/MicroControl_ru.pdf), [中文](docs/MicroControl_zh.pdf) · Full technical reference: [EN](docs/reference_en.md), [RU](docs/reference_ru.md), [中文](docs/reference_zh.md)
 
 ![Overview: the 10x scan with the grid of the sample, numbered squares, a draft, 50x and 100x inside](docs/img/view.jpg)
 
@@ -273,7 +273,7 @@ T = T_0 + t\,N,
 | `Shift+Esc` | exit | the microscope window (only so) | ✓ |
 | `Ctrl+P` | Settings panel (left) | show / hide | — |
 
-**Settings panel** of the microscope window (button Settings, the arrow on the left or `Ctrl+P`): Z follows the focus points, One-side approach (backlash), **Prepare**, **Distortion**, **Zero here**, **Steps = frame**, **Check directions**, **Arrows X / Y** the other way, **Map 90 deg**. On top: Prepare, New area, Scan area, Stitch, Export, Settings; the menu: Open, New, Info, Scans (history of the chosen selection; the same as `...` on its card), Queue, View, Help. Ctrl+drag on the map — a box on the objective in place (a crystal); `Esc` during a job — stop it.
+**Settings panel** of the microscope window (button Settings, the arrow on the left or `Ctrl+P`): Z follows the focus points, One-side approach (backlash), **Prepare**, **Distortion**, **Zero here**, **Steps = frame**, **Check directions**, **Arrows X / Y** the other way, **Map 90 deg**, **Clear fog** (forget the live frames of the fog of war on the map; the setting `m.fog_refresh`, on by default, makes drives over already seen places shoot again, so the fog is overwritten with new frames). On top: Prepare, New area, Scan area, Stitch, Export, Settings; the menu: Open, New, Info, Scans (history of the chosen selection; the same as `...` on its card), Queue, View, Help. Ctrl+drag on the map — a box on the objective in place (a crystal); `Esc` during a job — stop it.
 
 ---
 

@@ -793,19 +793,23 @@ def _view_one(folder, fullscreen, keys, car):
                     seam_pt=lambda k_: seam_pt(k_))   # для тестов
 
     def VIEW_M():
-        """Мозаика -> вид по осям столика (одинаково для всех съёмок): знаковая перестановка осей, при которой
-        +X столика — вправо, +Y — вниз (у съёмок разных объективов мозаика может идти по X / Y навстречу столику)."""
+        """Мозаика -> вид, одинаковый для всех съёмок и такой же, как в камере и на карте: знаковая перестановка
+        осей, при которой сдвиг столика идёт по экрану как в камере сейчас (Q = util.orient_of(K); окно микроскопа
+        пишет её в настройки). Без неё — +X столика вправо, +Y вниз."""
         if st.get('_V') is None:
             V_ = np.eye(2)
             try:
                 from .snap import geometry
+                from .util import ui_pref as _uq
+                q_ = _uq('orient')
+                Q_ = np.array(q_, float).reshape(2, 2) if q_ else np.eye(2)
                 Mo_ = np.asarray(geometry(folder)['Mo'], float)        # px мозаики на шаг: столбцы — оси столика
                 best_ = None
                 for P_ in (np.eye(2), np.array([[0, 1], [1, 0]])):
                     for sx_ in (1, -1):
                         for sy_ in (1, -1):
                             Vc_ = np.diag([sx_, sy_]) @ P_
-                            sc_ = np.trace(Vc_ @ Mo_)              # после V: ось X столика -> +x, Y -> +y
+                            sc_ = np.trace(Q_.T @ Vc_ @ Mo_)       # после V: столик идёт по экрану как Q
                             if best_ is None or sc_ > best_[0]:
                                 best_ = (sc_, Vc_)
                 V_ = best_[1].astype(float)

@@ -2770,7 +2770,7 @@ m.close(); print("Layout: two views (camera | map, map | camera) and the list on
 
 
 # ------------------------------------------------------------------ 78. Слабый ПК: уровни просмотра пишутся при съёмке (quick их не переписывает); слои (за мышью — только верх); едет — вдвое грубее, потом чисто; замер `; память карты
-from microcontrol import storage as ST78, viewer as V78, navmap as NM78
+from microcontrol import storage as ST78, viewer as V78, navmap as NM78, manual as M78q
 from microcontrol.util import Prof as Prof78
 m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp()); m.focus(); fw, fh = m.frame_size
 m.area = mc.Area(0, 0, 4 * fw, 3 * fh); m.scan(stitch=None)
@@ -2853,6 +2853,33 @@ nm78.c = nm78.c + 1; nm78.base([f78], 800, 600)
 assert 'x' not in nm78._prev and f78 in nm78._prev
 b78 = nm78.base([f78], 800, 600, fast=True)
 assert b78.shape == (600, 800, 3) and nm78.size == (800, 600)
+for s78 in (0.7, 1.3, 2.9, 6.0):                                                           # сетка мкм: едет — та же, что в покое
+    ne78 = NM78.NavMap(); ne78.c, ne78.s = np.array([123.0, -45.0]), s78
+    gf78, gq78 = ne78.base([], 900, 700), ne78.base([], 900, 700, fast=True)
+    assert np.array_equal(gf78, gq78), s78
+# карта — как камера: точка образца справа-снизу на камере — справа-снизу и на карте (и при T: кадр перевёрнут)
+from microcontrol.util import orient_of as or78
+for t180 in (False, True):
+    m.turn_180 = t180
+    sh78 = (480, 640, 3)
+    to78 = M78q.live_map(m, sh78, 640, 480)[0]
+    P78 = M78q.camera_box(m, sh78).mean(0)
+    nq78 = NM78.NavMap(); nq78.c, nq78.s, nq78.size, nq78.Q = P78.copy(), 2.0, (800, 600), or78(m._pixels_per_step())
+    for dS in ((30.0, 0.0), (0.0, 30.0), (-20.0, 25.0)):
+        S78 = P78 + dS
+        vc = np.array(to78(S78)) - np.array(to78(P78)); vm = nq78.to_px(S78) - nq78.to_px(P78)
+        assert np.dot(vc, vm) / np.linalg.norm(vc) / np.linalg.norm(vm) > 0.99, (t180, dS, vc, vm)
+m.turn_180 = False
+from microcontrol.util import set_ui_pref as sp78
+vv78 = []
+os.environ['MC_UI'] = '1'
+try:                                                                                       # просмотр — так же, как карта
+    for q78 in ([1, 0, 0, 1], [-1, 0, 0, -1]):
+        sp78('orient', q78)
+        V78.view(f78, _keys=[-1, -1, ('call', lambda st: vv78.append(np.array(st['_V']))), 27, 27])
+finally:
+    sp78('orient', None); os.environ.pop('MC_UI', None)
+assert np.array_equal(vv78[1], -vv78[0]), vv78
 # окно микроскопа: замер тоже
 import microcontrol.manual as M78
 from microcontrol import log as L78

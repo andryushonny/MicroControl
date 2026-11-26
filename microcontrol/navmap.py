@@ -28,13 +28,14 @@ class NavMap:
         self._prev = {}                   # папка -> (mtime, пирамида превью [(k, img)], геометрия)
         self._used, self._tick = {}, 0    # когда превью было на карте (номер подложки): старые — из памяти
         self.turn = 0                     # карта повёрнута на 0 / 90 / 180 / 270° против часовой (m.map_turn)
+        self.Q = np.eye(2)                # столик -> экран, как в камере (util.orient_of): образец — как его видно
 
     # ------------------------------------------------------------ координаты
     @property
     def R(self):
-        """Поворот карты: вектор столика -> вектор на экране (y вниз; +90° — против часовой)."""
+        """Вектор столика -> вектор на экране (y вниз): как в камере (Q), затем поворот \\ (+90° — против часовой)."""
         t = np.radians(self.turn)
-        return np.round(np.array([[np.cos(t), np.sin(t)], [-np.sin(t), np.cos(t)]]), 12)
+        return np.round(np.array([[np.cos(t), np.sin(t)], [-np.sin(t), np.cos(t)]]), 12) @ np.asarray(self.Q, float)
 
     def to_px(self, S):
         w, h = self.size
@@ -56,7 +57,7 @@ class NavMap:
         x0, y0 = b[:, 0].min(), b[:, 1].min()
         x1, y1 = b[:, 2].max(), b[:, 3].max()
         self.c = np.array([(x0 + x1) / 2, (y0 + y1) / 2])
-        if self.turn % 180:                                 # повёрнута на 90°: X столика — по вертикали
+        if abs(self.R[0, 0]) < 0.5:                         # X столика — по вертикали экрана
             w, h = h, w
         self.s = max((x1 - x0) / max(1, w), (y1 - y0) / max(1, h), 1e-3) * (1 + 2 * pad)
 
@@ -143,41 +144,37 @@ class NavMap:
         elif alpha > 0.01:                                  # полупрозрачная: видно, что под ней
             np.copyto(roi, cv2.addWeighted(pic, alpha, roi, 1 - alpha, 0), where=msk[..., None])
 
-    def base(self, scans, w, h, clip=None, alpha=None, fog=None, fast=False):
+    def base(self, scans, w, h, clip=None, alpha=None, fog=None, fast=False, grid=True):
         """Подложка карты: мозаики scans (папки, сначала меньшее увеличение), каждая — по контуру своего
         выделения (clip: папка -> кольца, мкм). Кэш, пока вид не менялся. fast — карта едет (тянут, колесо):
         вдвое меньше по каждой оси и растянуть (вчетверо быстрее); остановилась — в полном качестве."""
-        if fast and w * h > 250000:
-            s0, c0 = self.s, self.c
+        if fast and w * h > 250000:                          # снимки — вдвое меньше; сетка — в полном размере,
+            s0, c0 = self.s, self.c                          # иначе её шаг (1-2-5) скачет при каждом движении
             self.s = s0 * w / max(1, w // 2)
             try:
-                small = self.base(scans, max(1, w // 2), max(1, h // 2), clip, alpha, fog)
+                small = self.base(scans, max(1, w // 2), max(1, h // 2), clip, alpha, fog, grid=False)
             finally:
                 self.s, self.c = s0, c0
             self.size = (w, h)
             self._key = None                                 # полная — не эта
-            return cv2.resize(small, (w, h), interpolation=cv2.INTER_LINEAR)
+            up = cv2.resize(small, (w, h), interpolation=cv2.INTER_LINEAR)
+            gr = np.full((h, w, 3), 24, np.uint8)
+            self._grid(gr)
+            bg = (up[..., 0] == 24) & (up[..., 1] == 24) & (up[..., 2] == 24)   # пусто — там сетка
+            up[bg] = gr[bg]
+            return up
         self.size = (w, h)
         clip = clip or {}
         ck_ = tuple((f, tuple(round(float(v), 2) for r_ in clip.get(f, []) for p_ in r_ for v in p_)) for f in scans)
         alpha = alpha or {}
-        key = (w, h, tuple(np.round(self.c, 3)), round(self.s, 6), self.turn, ck_, tuple(sorted(alpha.items())),
+        key = (w, h, tuple(np.round(self.c, 3)), round(self.s, 6), tuple(np.ravel(self.R)), ck_, tuple(sorted(alpha.items())),
                tuple((f, _mt(os.path.join(f, 'join', 'preview_all.jpg')), _mt(os.path.join(f, 'align.json')))
-                     for f in scans), None if fog is None else (id(fog), fog.ver))
+                     for f in scans), None if fog is None else (id(fog), fog.ver), grid)
         if key != self._key:
             self._tick += 1
             canvas = np.full((h, w, 3), 24, np.uint8)
-            mn_ = max(1e-3, self.s * 30)                                     # сетка мкм — для ориентира:
-            e_ = 10 ** np.floor(np.log10(mn_))                               # шаг 1-2-5, линии не чаще 30 px
-            step = next(k_ * e_ for k_ in (1, 2, 5, 10) if k_ * e_ >= mn_)
-            cs_ = self.to_um(np.array([(0, 0), (w, 0), (0, h), (w, h)], float))
-            S0, S1 = cs_.min(0), cs_.max(0)
-            for x in np.arange(np.floor(S0[0] / step) * step, S1[0], step):
-                a_, b_ = self.to_px(np.array([(x, S0[1]), (x, S1[1])]))
-                cv2.line(canvas, tuple(np.int32(a_)), tuple(np.int32(b_)), (34, 34, 38), 1)
-            for y in np.arange(np.floor(S0[1] / step) * step, S1[1], step):
-                a_, b_ = self.to_px(np.array([(S0[0], y), (S1[0], y)]))
-                cv2.line(canvas, tuple(np.int32(a_)), tuple(np.int32(b_)), (34, 34, 38), 1)
+            if grid:
+                self._grid(canvas)
             if fog is not None:                                 # где камера уже была — под снятым
                 try:
                     fog.draw(canvas, self)
@@ -191,6 +188,21 @@ class NavMap:
             self._trim()
             self._base, self._key = canvas, key
         return self._base.copy()
+
+    def _grid(self, canvas):
+        """Сетка мкм — для ориентира: шаг 1-2-5, линии не чаще 30 px (по текущему масштабу и размеру canvas)."""
+        h, w = canvas.shape[:2]
+        mn_ = max(1e-3, self.s * 30)
+        e_ = 10 ** np.floor(np.log10(mn_))
+        step = next(k_ * e_ for k_ in (1, 2, 5, 10) if k_ * e_ >= mn_)
+        cs_ = self.to_um(np.array([(0, 0), (w, 0), (0, h), (w, h)], float))
+        S0, S1 = cs_.min(0), cs_.max(0)
+        for x in np.arange(np.floor(S0[0] / step) * step, S1[0], step):
+            a_, b_ = self.to_px(np.array([(x, S0[1]), (x, S1[1])]))
+            cv2.line(canvas, tuple(np.int32(a_)), tuple(np.int32(b_)), (34, 34, 38), 1)
+        for y in np.arange(np.floor(S0[1] / step) * step, S1[1], step):
+            a_, b_ = self.to_px(np.array([(S0[0], y), (S1[0], y)]))
+            cv2.line(canvas, tuple(np.int32(a_)), tuple(np.int32(b_)), (34, 34, 38), 1)
 
     # ------------------------------------------------------------ поверх
     def poly(self, img, ring, color, thick=1, fill=None, dashed=False):

@@ -1102,6 +1102,15 @@ def _run(m, fullscreen=False, _keys=None):
         w_, h_ = mr[2] - mr[0], mr[3] - mr[1]
         cam = camera_box(m, shape)
         nav.turn = int(getattr(m, 'map_turn', 0) or 0) % 360   # поворот карты (\\: ещё на 90°, помнится)
+        from .util import orient_of
+        Q_ = orient_of(m._pixels_per_step())                # образец на карте — как в камере (T, зеркала)
+        if not np.array_equal(Q_, nav.Q):
+            nav.Q = Q_
+            try:                                           # просмотр (свой процесс) — так же
+                if not os.environ.get('MC_TEST') or os.environ.get('MC_UI'):
+                    set_ui_pref('orient', [int(v) for v in np.ravel(Q_)])
+            except OSError:
+                pass
         if nav.c is None:                                  # первый раз: всё, что есть, и камера
             bx = [SM._rect(m, r_) for r_ in m._regions if r_.get('kind') != 'group']
             bx.append((*cam.min(0), *cam.max(0)))

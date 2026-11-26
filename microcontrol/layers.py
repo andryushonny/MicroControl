@@ -212,9 +212,82 @@ def set_geom(m, reg, g):
     reg['A'], reg['B'] = (ax, ay), (bx, by)
 
 
+_COV, _SCN = {}, {}
+
+
+def _mt(p):
+    try:
+        return os.path.getmtime(p)
+    except OSError:
+        return 0.0
+
+
+def covered(folder):
+    """Что на самом деле снято и сшито в съёмке folder: объединение кадров на столике (мкм, с совмещением
+    align.json и по нынешней сшивке) — shapely или None. Кэш, пока сшивка и совмещение те же."""
+    key = tuple(_mt(os.path.join(folder, *p_)) for p_ in (('join', 'positions_all.csv'), ('align.json',),
+                                                           ('join', 'stitch.json')))
+    hit = _COV.get(folder)
+    if hit is not None and hit[0] == key:
+        return hit[1]
+    out = None
+    if key[0]:
+        try:
+            from .snap import geometry, mosaic_to_stage
+            g = geometry(folder)
+            P, W, H = np.asarray(g['pos'], float), float(g['W']), float(g['H'])
+            C = np.array([[0, 0], [W, 0], [W, H], [0, H]], float)
+            S = mosaic_to_stage(folder, (P[:, None, :] + C[None]).reshape(-1, 2)).reshape(-1, 4, 2)
+            u = unary_union([Polygon(q) for q in S])
+            px = float(np.hypot(*(S[0, 1] - S[0, 0]))) / max(W, 1.0)          # мкм на пиксель
+            out = u.buffer(2 * px).buffer(-2 * px).simplify(px)               # швы между кадрами — не дыры
+            out = out if not out.is_empty else None
+        except Exception:
+            out = None
+    _COV[folder] = (key, out)
+    return out
+
+
+def scan_of(sample_folder, uid):
+    """Показываемая съёмка выделения uid (основная или самая новая сшитая) или None."""
+    sj = os.path.join(sample_folder, 'sample.json')
+    key = (_mt(sj), _mt(os.path.join(sample_folder, 'scans')))
+    hit = _SCN.get(sample_folder)
+    if hit is None or hit[0] != key:
+        from . import project as P_
+        mp = {}
+        try:
+            for f in P_.latest_scans(sample_folder, stitched=True):
+                mp[P_.scan_uid(f)] = f
+        except Exception:
+            pass
+        hit = (key, mp)
+        _SCN[sample_folder] = hit
+    return hit[1].get(uid)
+
+
+def shown_geom(sample_folder, reg, fallback):
+    """Контур выделения так, как его надо показывать: снятое и сшитое — по самой сшитой картинке (её размер и все
+    сдвиги: совмещение, пересшивка); не снятое, черновик, из клеток (квадраты литографии) — как задано."""
+    if not sample_folder or reg.get('kind') in ('group', 'draft') or reg.get('cells'):
+        return fallback
+    f = scan_of(sample_folder, reg.get('uid'))
+    cv = covered(f) if f else None
+    if cv is None:
+        return fallback
+    try:                                                   # выделение после съёмки передвинули / перерисовали:
+        if fallback is not None and not fallback.is_empty and \
+                cv.intersection(fallback).area < 0.8 * fallback.area:     # показывать заданное (снять заново)
+            return fallback
+    except Exception:
+        return fallback
+    return cv
+
+
 def rings(m, reg):
-    """Контур для рисования: [кольцо Nx2] (наружные и дыры)."""
-    g = geom(m, reg)
+    """Контур для рисования: [кольцо Nx2] (наружные и дыры). Снятое — по сшитой картинке (shown_geom)."""
+    smp_ = getattr(m, '_sample', None)
+    g = shown_geom(getattr(smp_, 'folder', None), reg, geom(m, reg))
     ps = [g] if isinstance(g, Polygon) else list(getattr(g, 'geoms', []))
     out = []
     for p in ps:

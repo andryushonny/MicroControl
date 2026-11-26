@@ -1184,6 +1184,9 @@ def _view_one(folder, fullscreen, keys, car):
             pm_ = False
             try:
                 pg_ = scan_outline()
+                if pg_ is not None:                         # контур — по сшитой картинке: она не обрезается
+                    from .layers import covered as _cov
+                    pg_ = _cov(folder) or pg_
                 if pg_ is not None and not pg_.is_empty:
                     from .snap import stage_to_mosaic
                     ps_ = [pg_] if pg_.geom_type == 'Polygon' else list(getattr(pg_, 'geoms', []))
@@ -3382,8 +3385,11 @@ def _view_one(folder, fullscreen, keys, car):
         if smp is None:
             return []
         sp_ = smp.file
+        import glob as _g2
         key_ = (_mt(sp_),
-                _mt(os.path.join(folder, 'grid.json')))
+                _mt(os.path.join(folder, 'grid.json')),
+                tuple(_mt(p_) for p_ in sorted(_g2.glob(os.path.join(smp.folder, 'scans', '*', 'align.json')) +
+                                              _g2.glob(os.path.join(smp.folder, 'scans', '*', 'join', 'positions_all.csv')))))
         if st.get('_so_key') == key_:
             return st['_so']
         out_ = []
@@ -3403,6 +3409,8 @@ def _view_one(folder, fullscreen, keys, car):
                     (ax, ay), (bx, by) = r_['A'], r_['B']
                     fw_, fh_ = r_.get('fw', 0), r_.get('fh', 0)
                     gm_ = _box(min(ax, bx) - fw_ / 2, min(ay, by) - fh_ / 2, max(ax, bx) + fw_ / 2, max(ay, by) + fh_ / 2)
+                from .layers import shown_geom as _sg
+                gm_ = _sg(smp.folder, r_, gm_)              # снятое — по сшитой картинке (размер, сдвиги)
                 ps_ = [gm_] if gm_.geom_type == 'Polygon' else list(getattr(gm_, 'geoms', []))
                 kind_ = 'Sel.'
                 for p_ in ps_:

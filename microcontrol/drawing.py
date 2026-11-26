@@ -232,6 +232,11 @@ def export_sample(m, ks=None, out=None, dwg=True, verbose=True, nested=False, pn
     make_dxf = (not no_draw_) if drawing is None else bool(drawing)
     D = (lambda S: np.asarray(S, float) * (1.0, -1.0)) if stage_frame else \
         (lambda S: LT.to_uv(L, S) * (P, -P))                    # столик -> чертёж: крест 1,1 в (0, 0), Y вверх
+    if stage_frame and L is not None and L.get('e1') is not None:   # кресты есть, номеров нет: всё равно ровно
+        e1_ = np.asarray(L['e1'], float)                        # (straight) — наклон решётки снят, мкм столика
+        a_ = -np.arctan2(e1_[1], e1_[0])
+        Rs_ = np.array([[np.cos(a_), -np.sin(a_)], [np.sin(a_), np.cos(a_)]])
+        D = lambda S: (np.atleast_2d(np.asarray(S, float)) @ Rs_.T) * (1.0, -1.0)
 
     doc = ezdxf.new('R2010', setup=True)
     doc.units = 13

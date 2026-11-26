@@ -3461,12 +3461,9 @@ def _view_one(folder, fullscreen, keys, car):
                      _mt(os.path.join(folder, 'join', 'stitch.json')))   # кадры, живая сшивка, сшивка (не правка J)
             if st.get('_lsig') is None:
                 st['_lsig'] = lsig_
-            elif lsig_ != st['_lsig'] and st['mode'] in ('cross', 'align', 'stitch', 'label'):
-                if not st.get('_lsig_wait'):                # кресты ставят / правят: картинка под ними не меняется,
-                    st['_lsig_wait'] = True                 # новая сшивка — после выхода из режима
-                    st['msg'] = "New stitch ready: it is shown after you leave this mode (Esc)"
-            elif lsig_ != st['_lsig'] and st['down'] is None and _t.monotonic() - st.get('_lsig_t', 0) > 2.0:
-                st['_lsig_wait'] = False
+            elif lsig_ != st['_lsig'] and st['down'] is None and \
+                    (_t.monotonic() - st.get('_lsig_t', 0) > 2.0 or st['mode'] == 'cross'):
+                # новая сшивка — сразу (и в режиме крестов: размечать надо по актуальной); кресты едут с кадрами
                 st['_lsig'], st['_lsig_t'] = lsig_, _t.monotonic()   # скан идёт (кадры шьются на ходу) или пересшили:
                                                            # не чаще раза в 2 с (слабый ПК, 1000 кадров)
                 try:                                       # картинка — заново на месте, вид и кресты — с ней

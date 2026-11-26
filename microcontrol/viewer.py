@@ -2269,7 +2269,8 @@ def _view_one(folder, fullscreen, keys, car):
         if st['mode'] == 'poly' and st.get('poly'):          # U: многоугольник, следующая сторона, направляющие
             P_ = st['poly']
             V_ = [to_view(P_['R'].T @ np.asarray(v, float)) for v in P_['v']]
-            q_, gd_ = poly_next(st['hov']) if st.get('hov') is not None else (None, [])
+            closing_ = poly_near_first(st.get('hov'))        # мышь у первой точки: щелчок замкнёт (так и показать)
+            q_, gd_ = (None, []) if closing_ or st.get('hov') is None else poly_next(st['hov'])
             if q_ is not None:
                 qv_ = to_view(P_['R'].T @ q_)
                 for ax_, val_ in gd_:                          # направляющая: через всё окно
@@ -2281,19 +2282,27 @@ def _view_one(folder, fullscreen, keys, car):
                     cv2.line(img, tuple(np.round(a_).astype(int)), tuple(np.round(b_).astype(int)), (120, 120, 120), 1,
                              cv2.LINE_AA)
             from . import rectpoly as RP_
-            if len(P_['v']) >= 2 and q_ is not None:           # как замкнётся (угол — сам)
-                ring_, _w = RP_.close(P_['v'] + [list(q_)])
+            if len(P_['v']) >= 2 and (q_ is not None or closing_):   # как замкнётся (угол — сам)
+                ring_, _w = RP_.close(P_['v'] + ([] if closing_ else [list(q_)]))
                 if ring_ is not None:
-                    Rv_ = np.array([to_view(P_['R'].T @ np.asarray(v, float)) for v in ring_])
-                    ov_ = img.copy()
-                    cv2.fillPoly(ov_, [np.round(Rv_).astype(np.int32)], (0, 200, 255))
-                    cv2.addWeighted(ov_, 0.18, img, 0.82, 0, img)
+                    Rv_ = np.round(np.array([to_view(P_['R'].T @ np.asarray(v, float)) for v in ring_])).astype(np.int32)
+                    x0_, y0_ = np.maximum(Rv_.min(0), 0)          # заливка — только в своей рамке: без лишней
+                    x1_, y1_ = np.minimum(Rv_.max(0) + 1, (img.shape[1], img.shape[0]))   # работы на каждое движение
+                    if x1_ > x0_ and y1_ > y0_:
+                        roi_ = img[y0_:y1_, x0_:x1_]
+                        ov_ = roi_.copy()
+                        cv2.fillPoly(ov_, [Rv_ - (x0_, y0_)], (0, 200, 255))
+                        cv2.addWeighted(ov_, 0.18 if not closing_ else 0.3, roi_, 0.82 if not closing_ else 0.7, 0, dst=roi_)
+                    if closing_:
+                        cv2.polylines(img, [Rv_], True, (0, 200, 255), 2, cv2.LINE_AA)
             for a_, b_ in zip(V_, V_[1:] + ([qv_] if q_ is not None else [])):
                 cv2.line(img, tuple(np.round(a_).astype(int)), tuple(np.round(b_).astype(int)), (0, 200, 255), 2,
                          cv2.LINE_AA)
             for i_, v_ in enumerate(V_):
                 cv2.circle(img, tuple(np.round(v_).astype(int)), 6 if i_ == 0 else 4, (0, 200, 255), 2 if i_ == 0 else -1,
                            cv2.LINE_AA)
+            if closing_ and V_:
+                cv2.circle(img, tuple(np.round(V_[0]).astype(int)), POLY_CLOSE_PX, (255, 255, 255), 1, cv2.LINE_AA)
             if q_ is not None:
                 cv2.circle(img, tuple(np.round(qv_).astype(int)), 4, (255, 255, 255), 1, cv2.LINE_AA)
         if st['mode'] == 'ruler' and st['ruler']:            # линейка: точки, отрезки, перпендикуляры, подпись
@@ -2554,10 +2563,18 @@ def _view_one(folder, fullscreen, keys, car):
         xs_, ys_, nd_ = poly_cands(f_)
         return RP.next_point(P_['v'], f_, xs_, ys_, 10.0 / st['s'], nd_)
 
+    POLY_CLOSE_PX = 24                                     # «не довёл»: ближе стольких пикселей к первой — замыкаем
+
+    def poly_near_first(xy):
+        P_ = st.get('poly') or {}
+        if xy is None or len(P_.get('v', [])) < 3:
+            return False
+        return float(np.hypot(*(to_view(P_['R'].T @ np.asarray(P_['v'][0], float)) - np.asarray(xy, float)))) <= POLY_CLOSE_PX
+
     def poly_click(xy):
         from . import rectpoly as RP
         P_ = st['poly']
-        if len(P_['v']) >= 3 and np.hypot(*(to_view(P_['R'].T @ np.asarray(P_['v'][0])) - xy)) <= 10:
+        if poly_near_first(xy):                             # рядом с первой точкой (не довели) — замкнуть
             st['msg'] = poly_finish()
             return
         q_, _gd = poly_next(xy)

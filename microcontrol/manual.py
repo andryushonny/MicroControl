@@ -2612,7 +2612,7 @@ def _run(m, fullscreen=False, _keys=None):
 
     refresh_gs()
     h_last = (h_sig(), h_snap())
-    arl = dict(on=True, pos=None, t=0.0, done=False, note='')   # сверка дополненной реальности с мозаикой (J)
+    arl = dict(on=False, pos=None, t=0.0, done=False, note='')   # сверка дополненной реальности с мозаикой (J)
     while True:
         if m._sel is not None and not 0 <= m._sel < len(m._regions):   # выбранное исчезло (удалили, отменили)
             m._sel = len(m._regions) - 1 if m._regions else None

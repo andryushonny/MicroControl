@@ -2,7 +2,7 @@
 
 **用 Python 控制 Optosky ATR8300 拉曼显微镜：扫描基底，把它拼接成一张图，叠加光刻网格，选出需要的方格并导出给 AutoCAD。**
 
-**作者：** A. Lyapeikov, S. Domenko · **版本：** 0.43.0 · English: [README.md](../README.md) · Русский: [README_ru.md](README_ru.md) · PDF: [中文](MicroControl_zh.pdf) · 完整技术参考：[中文](reference_zh.md)、[EN](reference_en.md)、[RU](reference_ru.md)
+**作者：** A. Lyapeikov, S. Domenko · **版本：** 0.43.1 · English: [README.md](../README.md) · Русский: [README_ru.md](README_ru.md) · PDF: [中文](MicroControl_zh.pdf) · 完整技术参考：[中文](reference_zh.md)、[EN](reference_en.md)、[RU](reference_ru.md)
 
 ![总览：带样品网格的 10x 拍摄、方格编号、草稿、其中的 50x 与 100x](img/view.jpg)
 
@@ -317,7 +317,7 @@ python -m pip install -r requirements.txt jupyter
 jupyter notebook
 ```
 
-相机需要仪器驱动包中的 MindVision SDK。连接前请关闭 Optosky 原厂软件：端口和相机只能被一个程序占用。示例：`example.ipynb` 和 `demo/` 文件夹。
+**相机需要 MindVision 相机 SDK（Windows x64）：请从相机厂商网站 mindvision.com.cn（下载 → SDK）下载，以管理员身份运行安装程序并重启电脑。** 仅需安装在连接相机的电脑上（通过 `net://` 工作的电脑不需要）。未安装时程序会以 `E502` 停止。连接前请关闭 Optosky 原厂软件：端口和相机只能被一个程序占用。示例：`example.ipynb` 和 `demo/` 文件夹。
 
 **首次运行：** 用 `python -m microcontrol probe` 检查连接，然后在 `m.manual()` 中检查方向 —— `Q` 应使载物台**下降**，方向键 → 应使图像向左移动。否则见[参考，第 20 节](reference_zh.md#20-在仪器上首次运行)。
 

@@ -939,7 +939,7 @@ jupyter notebook
 
 Then on every start: `cd /d D:\MicroControl`, `.venv\Scripts\activate`, `jupyter notebook`.
 
-Dependencies: `pyserial`, `numpy`, `opencv-python`, `h5py`, `psutil`. The MindVision camera SDK (MindVision Camera Platform Setup 2.1.10.161) is installed from the instrument driver kit.
+Dependencies: `pyserial`, `numpy`, `opencv-python`, `h5py`, `psutil`. The MindVision camera SDK (Windows x64, e.g. MindVision Camera Platform Setup 2.1.10.161) must be installed on the PC the camera is plugged into: download it from the camera maker, mindvision.com.cn (Downloads → SDK), run the installer as administrator, restart the PC. A PC that works through `net://` does not need it.
 
 ---
 
@@ -1102,7 +1102,7 @@ Error texts are in English, with a code. List: `mc.ERRORS`.
 | E306 | move not executed (failure or "still moving") |
 | E307 | link to the controller lost (port reopened; the move is not repeated) |
 | E401, E402 | laser locked; power above the limit |
-| E501–E505 | camera: not found, no SDK, not connected, does not respond |
+| E501–E505 | camera: not found, no SDK (E502: download and install the MindVision SDK), not connected, used by another program (E504, SDK code −45), does not respond |
 | E601–E603 | autofocus: no room to search, unknown measure, no clear maximum at any point |
 | E701–E704 | scanning: area not set, low disk space, invalid parameters, sample areas overlap |
 | E705–E707 | scanning: corner 1 with another objective, no selection for this objective, the instrument is busy with the queue |

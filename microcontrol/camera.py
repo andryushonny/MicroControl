@@ -10,6 +10,10 @@ SDK_DIRS = [   # где искать DLL, если SDK не прописан в 
     os.path.join(os.path.dirname(__file__), "SDK", "X64"),
 ]
 
+SDK_HINT = ("Download and install the MindVision camera SDK (Windows x64) from the camera maker, mindvision.com.cn "
+            "(Downloads -> SDK), run the installer as administrator, restart the PC. It is needed only on the PC "
+            "the camera is plugged into; from another PC use Microscope('net://KEY@auto').")
+
 
 def _load_sdk(sdk_folder=None):
     for d in ([sdk_folder] if sdk_folder else []) + SDK_DIRS:
@@ -27,10 +31,28 @@ class MVCamera:
         try:
             self.sdk = mv = _load_sdk(sdk_folder)
         except OSError as e:
-            raise CameraError('E502', "install MindVision SDK or pass sdk_folder=<SDK\\X64 folder>") from e
+            raise CameraError('E502', SDK_HINT + " Or pass sdk_folder=<SDK\\X64 folder>.") from e
+        try:
+            self._open(mv)
+        except CameraError:
+            raise
+        except OSError as e:       # SDK есть, но не установлен драйвер/регистрация: падает внутри DLL
+            raise CameraError('E502', "the SDK crashed while opening the camera (" + str(e) + "). " + SDK_HINT) from e
+        except Exception as e:
+            code = getattr(e, 'error_code', None)
+            if code == -45:
+                raise CameraError('E504', "close the Optosky software, other MindVision programs and other Python "
+                                          "windows that hold it (Task Manager), or run the program through "
+                                          "net://... if the camera is on another PC.") from e
+            if code in (-44, -5, -2):
+                raise CameraError('E502', "the SDK is not installed correctly (code %s). " % code + SDK_HINT) from e
+            raise
+
+    def _open(self, mv):
         devs = mv.CameraEnumerateDevice()
         if not devs:
-            raise CameraError('E501', "close Optosky software and check USB")
+            raise CameraError('E501', "check the USB cable, close the Optosky software; if the camera was never "
+                                      "used on this PC, install the MindVision SDK (see E502)")
         self.name = devs[0].GetFriendlyName()
         self.h = mv.CameraInit(devs[0], -1, -1)
         cap = mv.CameraGetCapability(self.h)

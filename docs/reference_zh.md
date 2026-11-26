@@ -940,7 +940,7 @@ jupyter notebook
 
 之后每次启动：`cd /d D:\MicroControl`，`.venv\Scripts\activate`，`jupyter notebook`。
 
-依赖：`pyserial`、`numpy`、`opencv-python`、`h5py`、`psutil`。MindVision 相机 SDK（MindVision Camera Platform Setup 2.1.10.161）从仪器驱动包中安装。
+依赖：`pyserial`、`numpy`、`opencv-python`、`h5py`、`psutil`。MindVision 相机 SDK（Windows x64，例如 MindVision Camera Platform Setup 2.1.10.161）必须安装在连接相机的电脑上：请从相机厂商网站 mindvision.com.cn（下载 → SDK）下载，以管理员身份运行安装程序并重启电脑。通过 `net://` 工作的电脑不需要。
 
 ---
 
@@ -1103,7 +1103,7 @@ m = mc.Microscope(port='auto', objective=10, camera=True, allow_laser=False,
 | E306 | 移动未执行（故障或「仍在运动」） |
 | E307 | 与控制器的连接丢失（串口已重新打开；移动不重发） |
 | E401, E402 | 激光被锁定；功率超过上限 |
-| E501–E505 | 相机：未找到、没有 SDK、未连接、无响应 |
+| E501–E505 | 相机：未找到、没有 SDK（E502：下载并安装 MindVision SDK）、未连接、被其他程序占用（E504，SDK 代码 −45）、无响应 |
 | E601–E603 | 自动对焦：没有搜索空间、未知度量、所有点都没有明显的最大值 |
 | E701–E704 | 扫描：未设置区域、磁盘空间不足、参数无效、样品区域重叠 |
 | E705–E707 | 扫描：角点 1 使用了其他物镜、没有该物镜的选区、仪器正被队列占用 |

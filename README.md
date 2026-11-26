@@ -2,7 +2,7 @@
 
 **Python control of the Optosky ATR8300 Raman microscope: scan a substrate, stitch one picture of it, put the lithography grid on it, choose the squares you need and export them for AutoCAD.**
 
-**Authors:** A. Lyapeikov, S. Domenko · **Version:** 0.43.0 · Русский: [docs/README_ru.md](docs/README_ru.md) · 中文: [docs/README_zh.md](docs/README_zh.md) · PDF: [EN](docs/MicroControl_en.pdf), [RU](docs/MicroControl_ru.pdf), [中文](docs/MicroControl_zh.pdf) · Full technical reference: [EN](docs/reference_en.md), [RU](docs/reference_ru.md), [中文](docs/reference_zh.md)
+**Authors:** A. Lyapeikov, S. Domenko · **Version:** 0.43.1 · Русский: [docs/README_ru.md](docs/README_ru.md) · 中文: [docs/README_zh.md](docs/README_zh.md) · PDF: [EN](docs/MicroControl_en.pdf), [RU](docs/MicroControl_ru.pdf), [中文](docs/MicroControl_zh.pdf) · Full technical reference: [EN](docs/reference_en.md), [RU](docs/reference_ru.md), [中文](docs/reference_zh.md)
 
 ![Overview: the 10x scan with the grid of the sample, numbered squares, a draft, 50x and 100x inside](docs/img/view.jpg)
 
@@ -317,7 +317,7 @@ python -m pip install -r requirements.txt jupyter
 jupyter notebook
 ```
 
-The camera needs the MindVision SDK from the instrument's driver kit. Close the original Optosky program before connecting: only one program can use the port and the camera. Examples: `example.ipynb` and the `demo/` folder.
+**The camera needs the MindVision camera SDK (Windows x64): download it from the camera maker, mindvision.com.cn (Downloads → SDK), run the installer as administrator and restart the PC.** It is needed only on the PC the camera is plugged into (a PC that works through `net://` does not need it). Without it the program stops with `E502`. Close the original Optosky program before connecting: only one program can use the port and the camera. Examples: `example.ipynb` and the `demo/` folder.
 
 **First start:** check the link with `python -m microcontrol probe`, then in `m.manual()` check the directions — `Q` must move the stage **down**, the arrow → must move the picture to the left. If not, see the [reference, section 20](docs/reference_en.md#20-first-start-on-the-instrument).
 

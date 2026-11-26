@@ -764,6 +764,7 @@ m.close(); print("Shift+drag moves a selection, C deletes a brush selection at o
 from microcontrol import snap
 m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp()); m.focus()
 m._world.backlash = {'x': 2, 'y': 2}                                # шаги, теряемые при смене направления
+m.one_side = False                                                   # змейкой: люфт виден и меряется
 fw, fh = m.frame_size
 m.area = mc.Area(0, 0, 4 * fw, 3 * fh)
 f = m.scan(); mc.stitch(f, verbose=False)
@@ -1537,7 +1538,7 @@ e_ = (P_ - P_.mean(0)) - (X_ - X_.mean(0))
 assert np.percentile(np.hypot(*e_.T), 95) < 1.0 and t_cg < 5, (np.percentile(np.hypot(*e_.T), 95), t_cg)
 # скан с люфтом 3 шага: истина — положения столика в момент снимка
 m = mc.Microscope('sim', objective=10, folder=tempfile.mkdtemp()); w = m._world
-w.backlash = {'x': 3, 'y': 3}
+w.backlash = {'x': 3, 'y': 3}; m.one_side = False                  # змейкой: люфт меряется
 rec_, th_ = [], []
 _f0 = w._frame
 def _fr(*a, **k):

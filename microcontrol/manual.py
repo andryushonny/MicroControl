@@ -271,15 +271,16 @@ def live_map(m, shape, W, H, zoom=1.0, zc=None, rot=0.0):
     return to, back, i2v, v2i, c, k, zc
 
 
-def camera_box(m, shape):
-    """Углы живого кадра на столике (настоящие мкм, с учётом люфта) — рамка «камера здесь» на карте."""
+def camera_box(m, shape, ar=True):
+    """Углы живого кадра на столике (настоящие мкм, с учётом люфта) — рамка «камера здесь» на карте.
+    ar=False — без поправки по картинке (туман войны: кадры просто по координатам столика, без сверки)."""
     ih, iw = shape[:2]
     K, d = m._pixels_per_step(), m.motor_step
     P = np.array([m._p['x'], m._p['y']], float)
     B = getattr(m, '_bl', None)
     if B is not None:
         P = P + np.asarray(B, float) @ np.array([m._dir.get('x', 0), m._dir.get('y', 0)], float)
-    P = P * d + _ar_d(m)
+    P = P * d + (_ar_d(m) if ar else 0.0)
     c = np.array([iw / 2, ih / 2])
     return np.array([P - d * np.linalg.solve(K, np.array(u, float) - c) for u in ((0, 0), (iw, 0), (iw, ih), (0, ih))])
 
@@ -300,7 +301,7 @@ def fog_of(m):
 def fog_add(m, img):
     """Живой кадр — в туман карты (если столик сдвинулся с прошлого заметно)."""
     try:
-        fog_of(m).add(img, camera_box(m, img.shape))
+        fog_of(m).add(img, camera_box(m, img.shape, ar=False))
     except Exception:
         pass
 
@@ -315,7 +316,7 @@ def fog_trace(m):
             # не виденных местах: m.fog_refresh = False
             return bool(m.fog_refresh) or not f.covered(x + m._off['x'], y + m._off['y'])
         img = m.image(0)
-        f.add(img, camera_box(m, img.shape), min_move=0.0)
+        f.add(img, camera_box(m, img.shape, ar=False), min_move=0.0)
         return True
     return trace
 
